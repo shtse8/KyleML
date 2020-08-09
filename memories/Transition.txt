@@ -1,0 +1,1 @@
+Transition = namedtuple('Transition', ['state', 'action', 'reward', 'next_state'])

@@ -36,6 +36,9 @@ import collections
 # print(a)
 # print(np.zeros((12,)+(3,4)))
 
-a = np.array([[1, 2, 7], [3, 4, 8], [5, 6, 9]])
+# a = np.array([[1, 2, 7], [3, 4, 8], [5, 6, 9]])
 
-print(a[a[:,0] == 1])
+# print(a[a[:,0] == 1])
+
+a = (22, 22) + (1,)
+print(a)

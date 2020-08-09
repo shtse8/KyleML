@@ -126,22 +126,23 @@ class Agent(object):
 
         with strategy.scope():
             
-            # obseration_input = Input((22, 22, 1), name="obseration_input")
-            # # normalized = Lambda(lambda x: x / 4.0)(obseration_input)
-            # conv1_layer = Conv2D(filters=8, kernel_size=3, strides=1, activation='relu')(obseration_input)
-            # pooling1_layer = MaxPooling2D(pool_size=(2, 2))(conv1_layer)
-            # conv2_layer = Conv2D(filters=16, kernel_size=3, strides=1, activation='relu')(pooling1_layer)
-            # pooling2_layer = MaxPooling2D(pool_size=(2, 2))(conv2_layer)
-            # conv3_layer = Conv2D(filters=32, kernel_size=3, strides=1, activation='relu')(pooling2_layer)
-            # pooling3_layer = MaxPooling2D(pool_size=(2, 2))(conv3_layer)
-            # # dropout1 = Dropout(0.25)(conv3_layer)
-            # flat_layer = Flatten()(pooling3_layer)
-            # state_input = Input((4), name="state_input")
-            # concatenated = Concatenate()([flat_layer, state_input])
-
             state_input = Input(self.env.observationSpace, name="state_input")
             x = state_input
-            x = Flatten()(state_input)
+            if len(self.env.observationSpace) == 3:
+                # normalized = Lambda(lambda x: x / 4.0)(obseration_input)
+                x = Conv2D(filters=32, kernel_size=3, strides=1, activation='relu')(x)
+                x = MaxPooling2D(pool_size=(2, 2))(x)
+                x = Conv2D(filters=32, kernel_size=1, strides=1, activation='relu')(x)
+                x = MaxPooling2D(pool_size=(2, 2))(x)
+                x = Conv2D(filters=64, kernel_size=3, strides=1, activation='relu')(x)
+                x = MaxPooling2D(pool_size=(2, 2))(x)
+                # x = Dropout(0.25)(x)
+                # x = Flatten()(x)
+                # state_input = Input((4), name="state_input")
+                # concatenated = Concatenate()([flat_layer, state_input])
+            # else 
+
+            x = Flatten()(x)
             x = Dense(128, activation='relu')(x)
             # x = Dense(64, activation='relu')(x)
             # x = Dense(32, activation='relu')(x)

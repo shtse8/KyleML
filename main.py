@@ -5,9 +5,10 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import sys
 import signal
-from games.Snake import Snake
-# from games.puzzle2048 import Puzzle2048
-from agents.DQN.agent import Agent
+# from games.Snake import Snake
+from games.puzzle2048 import Puzzle2048
+from agents.DQNAgent import DQNAgent
+from agents.A2CAgent import A2CAgent
 
 def signal_handler(sig, frame):
     print('You pressed Ctrl+C!')
@@ -15,10 +16,10 @@ def signal_handler(sig, frame):
 
 def main():
     signal.signal(signal.SIGINT, signal_handler)
-    env = Snake()
-    agent = Agent(env)
+    env = Puzzle2048()
+    agent = A2CAgent(env)
     # agent.load()
-    agent.printSummary()
+    # agent.printSummary()
     agent.train()
     # agent.play(render=True)
     

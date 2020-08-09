@@ -2,8 +2,6 @@ import random
 import numpy as np
 import collections
 
-Transition = collections.namedtuple('Transition', ['state', 'action', 'reward', 'nextState'])
-
 def unpack(traces):
     """Returns states, actions, rewards, end_states, and a mask for episode boundaries given traces."""
     states = [t[0].state for t in traces]

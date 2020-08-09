@@ -6,6 +6,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import sys
 import signal
 from games.Snake import Snake
+from games.puzzle2048 import Puzzle2048
 from agents.DQN.agent import Agent
 
 def signal_handler(sig, frame):
@@ -14,7 +15,7 @@ def signal_handler(sig, frame):
 
 def main():
     signal.signal(signal.SIGINT, signal_handler)
-    env = Snake()
+    env = Puzzle2048()
     agent = Agent(env)
     # agent.load()
     agent.printSummary()

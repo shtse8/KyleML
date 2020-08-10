@@ -13,24 +13,25 @@ class SimpleMemory(object):
         self.memory.append(transition)
 
     def get(self, size = 0):
-        states = []
-        actions = []
-        rewards = []
-        nextStates = []
-        dones = []
-        for t in self.memory:
-            states.append(t.state)
-            actions.append(t.action)
-            rewards.append(t.reward)
-            nextStates.append(t.nextState)
-            dones.append(t.done)
-        return (
-            np.array(states), 
-            np.array(actions).astype(float), 
-            np.array(rewards).astype(float), 
-            np.array(nextStates), 
-            np.array(dones)
-        )
+        return self.memory
+        # states = []
+        # actions = []
+        # rewards = []
+        # nextStates = []
+        # dones = []
+        # for t in self.memory:
+            # states.append(t.state)
+            # actions.append(t.action)
+            # rewards.append(t.reward)
+            # nextStates.append(t.nextState)
+            # dones.append(t.done)
+        # return (
+            # np.array(states), 
+            # np.array(actions).astype(float), 
+            # np.array(rewards).astype(float), 
+            # np.array(nextStates), 
+            # np.array(dones)
+        # )
     
     def clear(self) -> None:
         self.memory.clear()

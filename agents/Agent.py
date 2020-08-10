@@ -17,7 +17,6 @@ import sys
 import collections
 import math
 import time
-from memories.Memory import Memory
 from memories.Transition import Transition
 tf.compat.v1.disable_eager_execution()
 
@@ -31,7 +30,7 @@ class Agent(object):
         self.target_epochs = kwargs.get('target_epochs', 1000)
         self.epochs = 0
         self.episodes = 0
-        self.target_episodes = kwargs.get('episodes', 200)
+        self.target_episodes = kwargs.get('episodes', 500)
         self.episode_start_time = 0
         self.steps = 0
         self.total_rewards = 0

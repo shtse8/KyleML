@@ -17,7 +17,7 @@ import sys
 import collections
 import math
 import time
-from memories.Memory import Memory
+from memories.PrioritizedMemory import PrioritizedMemory
 from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
 from .Agent import Agent
@@ -64,7 +64,7 @@ class DQNAgent(Agent):
         self.minibatch_size = kwargs.get('minibatch_size', 64)
         
         # self.ltmemory = collections.deque(maxlen=self.memory_size)
-        self.ltmemory = Memory(self.memory_size)
+        self.ltmemory = PrioritizedMemory(self.memory_size)
         self.stmemory = SimpleMemory(self.memory_size)
         
         # Prediction model (the main Model)
@@ -79,7 +79,7 @@ class DQNAgent(Agent):
 
     def beginEpoch(self):
         self.stmemory.clear()
-        self.ltmemory = Memory(self.memory_size)
+        self.ltmemory = PrioritizedMemory(self.memory_size)
         return super().beginEpoch()
         
     def printSummary(self):
@@ -168,40 +168,42 @@ class DQNAgent(Agent):
         
         
         # sys.exit(1)
-        return Net(16, 128, self.env.actionSpace)
+        return Net(np.product(self.env.observationSpace), 128, self.env.actionSpace)
     
     def endEpisode(self):
-        states, _, _, nextStates, _ = self.stmemory.get()
-        # print(states.shape, nextStates.shape)
-        # states, _, _, nextStates, _ = zip(*self.stmemory)
-        # print(states, nextStates.shape)
-        # print(states.shape[0])
+        batch = self.stmemory.get()
+        
+         
+        states = np.array([x.state for x in batch])
         states = torch.tensor(states, dtype=torch.float).view(states.shape[0], -1)
-        nextStates = torch.tensor(nextStates, dtype=torch.float).view(nextStates.shape[0], -1)
-        # print(states.size(), nextStates.size())
-        results = self.model(torch.cat((states, nextStates), 0))
-        # print(results)
-        current_qs_list = results[0:len(states)]
-        next_qs_list = results[len(states):]
         
+        actions = np.array([x.action for x in batch])
+        actions = torch.tensor(actions, dtype=torch.long)
         
-        target_qs_list = self.model_target(nextStates)
-        for i, t in enumerate(self.stmemory):
-            new_q = t.reward
-            if not t.done:
-                # print(next_qs_list[i])
-                max_target_a = next_qs_list[i].argmax()
-                # print(max_target_a)
-                # print(next_qs_list[i])
-                max_target_q = target_qs_list[i][max_target_a] #Double DQN
-                # max_target_q = np.amax(target_qs_list[i])
-                new_q += self.gamma * max_target_q
+        rewards = np.array([x.reward for x in batch])
+        rewards = torch.tensor(rewards, dtype=torch.float)
+        
+        dones = np.array([x.done for x in batch])
+        dones = torch.tensor(dones, dtype=torch.float)
                 
-            td_error = (new_q - current_qs_list[i][t.action]).abs().detach()
-            # print(td_error)
-            # frame = collections.namedtuple('frame', ['state', 'action', 'reward', 'done', 'next_state'])
-            # print(td_error)
-            self.ltmemory.add(td_error, t) 
+        nextStates = np.array([x.nextState for x in batch])
+        nextStates = torch.tensor(nextStates, dtype=torch.float).view(nextStates.shape[0], -1)
+        
+        target_next_q_values = self.model_target(nextStates)
+        
+        results = self.model(torch.cat((states, nextStates), 0))
+        q_values = results[0:len(states)]
+        next_q_values = results[len(states):]
+        
+        
+        target_next_q_values = self.model_target(nextStates)
+        q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+        next_q_value = target_next_q_values.gather(1, next_q_values.max(1)[1].unsqueeze(1)).squeeze(1)
+        expected_q_value = rewards + self.gamma * next_q_value * (1 - dones)
+        error = (q_value - expected_q_value).abs()
+        
+        for e, t in zip(error, batch):
+            self.ltmemory.add(e.item(), t) 
 
             
         self.stmemory.clear()
@@ -213,35 +215,33 @@ class DQNAgent(Agent):
       
     def learn(self):
         
+        self.model.train()
+        
         # loss = 0
         
         # batch_size = min(len(self.stmemory), self.minibatch_size)
         # batch = random.sample(self.stmemory, batch_size)
-        batch, idxs, is_weight = self.ltmemory.sample(self.minibatch_size)
-        # print(batch, is_weight)
+        idxs, batch, is_weights = self.ltmemory.sample(self.minibatch_size)
+        # print(idxs, batch, is_weight)
         
-        rewards = np.array([x.reward for x in batch])
-        rewards = torch.tensor(rewards, dtype=torch.float)
-        
-        actions = np.array([x.action for x in batch])
-        actions = torch.tensor(actions, dtype=torch.long)
         
         states = np.array([x.state for x in batch])
         states = torch.tensor(states, dtype=torch.float).view(states.shape[0], -1)
         
+        actions = np.array([x.action for x in batch])
+        actions = torch.tensor(actions, dtype=torch.long)
+        
+        rewards = np.array([x.reward for x in batch])
+        rewards = torch.tensor(rewards, dtype=torch.float)
+        
         dones = np.array([x.done for x in batch])
         dones = torch.tensor(dones, dtype=torch.float)
-        
-        # print("states", states)
-        # print(np.array(states[:,1].tolist()))
-        # current_qs_list = self.prediction_predict(states)
-        
+                
         nextStates = np.array([x.nextState for x in batch])
         nextStates = torch.tensor(nextStates, dtype=torch.float).view(nextStates.shape[0], -1)
-        target_qs_list = self.model_target(nextStates)
         
+        target_next_q_values = self.model_target(nextStates)
         
-        # next_qs_list = self.prediction_predict(nextStates) #Double DQN
         results = self.model(torch.cat((states, nextStates), 0))
         q_values = results[0:len(states)]
         next_q_values = results[len(states):]
@@ -249,10 +249,13 @@ class DQNAgent(Agent):
         
         # print(actions.unsqueeze(1))
         q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
-        next_q_value = next_q_values.gather(1, next_q_values.max(1)[1].unsqueeze(1)).squeeze(1)
+        next_q_value = target_next_q_values.gather(1, next_q_values.max(1)[1].unsqueeze(1)).squeeze(1)
         expected_q_value = rewards + self.gamma * next_q_value * (1 - dones)
-        # Notice that detach the expected_q_value
-        loss = F.mse_loss(q_value, expected_q_value)
+        error = (q_value - expected_q_value).abs()
+        # print(is_weights)
+        loss = (torch.tensor(is_weights, dtype=torch.float) * F.mse_loss(q_value, expected_q_value)).mean()
+        
+        self.ltmemory.batch_update(idxs, error.detach().numpy())
         # print(loss)
         # loss = torch.zeros_like(current_qs_list)
         # for i, t in enumerate(batch):
@@ -274,34 +277,15 @@ class DQNAgent(Agent):
         loss.backward()
         self.optimizer.step()
         
-        # fit = self.model.fit(
-            # # fit_generator(states, current_qs_list, KERAS_BATCH_SIZE),
-            # states,
-            # current_qs_list,
-            # sample_weight=is_weight,
-            # epochs=1,
-            # verbose=0,
-            # validation_split=0,
-            # # batch_size=batch_size,
-            # steps_per_epoch=None,
-            # # batch_size=32,
-            # workers = 32,
-            # use_multiprocessing=False,
-        # )
-        
-        # loss += fit.history['loss'][0]
-        
         
         # Update target model counter every episode
         self.target_update_counter += 1
-        # self.ltmemory.clear()
         
         # If counter reaches set value, update target model with weights of main model
         if self.target_update_counter >= self.update_target_every:
             self.updateTarget()
             
-            
-        self.lossHistory.append(loss.detach())
+        self.lossHistory.append(loss.item())
     
     def save(self):
         try:

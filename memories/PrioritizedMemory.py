@@ -1,7 +1,7 @@
 import random
 import numpy as np
 
-class Memory:  # stored as ( s, a, r, s_ ) in SumTree
+class PrioritizedMemory(object):  # stored as ( s, a, r, s_ ) in SumTree
     e = 0.01
     a = 0.6
     beta = 0.4
@@ -40,11 +40,12 @@ class Memory:  # stored as ( s, a, r, s_ ) in SumTree
         is_weight = np.power(self.tree.n_entries * sampling_probabilities, -self.beta)
         is_weight /= is_weight.max()
 
-        return batch, idxs, is_weight
+        return idxs, batch, is_weight
 
-    def update(self, idx, error):
-        p = self._get_priority(error)
-        self.tree.update(idx, p)
+    def batch_update(self, tree_idx, abs_errors):
+        for ti, e in zip(tree_idx, abs_errors):
+            p = self._get_priority(e)
+            self.tree.update(ti, p)
 
 
 class SumTree:

@@ -17,7 +17,7 @@ def signal_handler(sig, frame):
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     env = Puzzle2048()
-    agent = A2CAgent(env)
+    agent = DQNAgent(env)
     # agent.load()
     # agent.printSummary()
     agent.train()

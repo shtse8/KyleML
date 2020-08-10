@@ -8,7 +8,7 @@ class Puzzle2048(Game):
     def __init__(self):
         self.name = "Snake"
         self.game = GameSrc()
-        self.observationSpace = (4, 4, 1)
+        self.observationSpace = (4, 4)
         self.actionSpace = 4
     
     def reset(self):
@@ -18,9 +18,9 @@ class Puzzle2048(Game):
         return self.getState()
         
     def getState(self):
-        state = np.zeros((4, 4, 1))
+        state = np.zeros((4, 4))
         for block in self.game.blocks:
-            state[block.coordinate_y][block.coordinate_x][0] = math.log2(block.score)
+            state[block.coordinate_y][block.coordinate_x] = math.log2(block.score)
         
         return state
         

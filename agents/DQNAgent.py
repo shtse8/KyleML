@@ -85,6 +85,7 @@ class DQNAgent(Agent):
         self.target_update_counter = 0
 
     def beginEpoch(self):
+        self.epsilon = self.epsilon_max
         self.stmemory.clear()
         self.ltmemory = PrioritizedMemory(self.memory_size)
         return super().beginEpoch()
@@ -112,61 +113,6 @@ class DQNAgent(Agent):
         return action
     
     def build_model(self, training = True):
-        # Define two input layers
-        
-            # state_input = Input(self.env.observationSpace, name="state_input")
-            # x = state_input
-            # if len(self.env.observationSpace) == 3:
-                # # normalized = Lambda(lambda x: x / 4.0)(obseration_input)
-                # x = Conv2D(filters=32, kernel_size=1, strides=1, activation='relu')(x)
-                # # x = MaxPooling2D(pool_size=(2, 2))(x)
-                # x = Conv2D(filters=32, kernel_size=1, strides=1, activation='relu')(x)
-                # # x = MaxPooling2D(pool_size=(2, 2))(x)
-                # x = Conv2D(filters=64, kernel_size=1, strides=1, activation='relu')(x)
-                # # x = MaxPooling2D(pool_size=(2, 2))(x)
-                # # x = Dropout(0.25)(x)
-                # # x = Flatten()(x)
-                # # state_input = Input((4), name="state_input")
-                # # concatenated = Concatenate()([flat_layer, state_input])
-            # # else 
-        
-        # x = nn.Linear(self.env.observationSpace, 128)(x)
-        # x = nn.Linear(16, 128)
-        # x = F.relu(x)
-        # x = nn.Flatten()(x)
-        # x = nn.Linear(128, self.env.actionSpace)(x)
-        
-            
-            
-            # x = Dense(64, activation='relu')(x)
-            # x = Dense(32, activation='relu')(x)
-            # x = Dropout(0.5)(x, training = training)
-            
-            # Dueling DQN
-            # state_value = Dense(1, kernel_initializer='he_uniform')(x)
-            # state_value = Lambda(lambda s: K.expand_dims(s[:, 0], -1), output_shape=self.env.actionSpace)(state_value)
-
-            # action_advantage = Dense(self.env.actionSpace, kernel_initializer='he_uniform')(x)
-            # action_advantage = Lambda(lambda a: a[:, :] - K.mean(a[:, :], keepdims=True), output_shape=self.env.actionSpace)(action_advantage)
-
-            # output = Add()([state_value, action_advantage])
-            
-            # value = Dense(self.env.actionSpace, activation='linear')(hidden)
-            # a = Dense(self.env.actionSpace, activation='linear')(hidden)
-            # meam = Lambda(lambda x: K.mean(x, axis=1, keepdims=True))(a)
-            # advantage = Subtract()([a, meam])
-            # output = Add()([value, advantage])
-
-            # output = Dense(self.env.actionSpace, activation='softmax')(q)
-            # output = Dense(3)(hidden3)
-            # model = Model(inputs=[state_input], outputs=output)
-        # opt = Adam(lr=LEARNING_RATE, clipnorm=0.1)
-        # opt = Adam(lr=self.learning_rate)
-        # opt = RMSprop(lr=self.learning_rate)
-        # model.compile(loss='mse', optimizer=opt)
-        
-        
-        # sys.exit(1)
         return Net(np.product(self.env.observationSpace), self.env.actionSpace)
     
     def endEpisode(self):
@@ -213,7 +159,6 @@ class DQNAgent(Agent):
         super().endEpisode()
       
     def learn(self):
-        
         self.model.train()
         
         # loss = 0
@@ -255,27 +200,10 @@ class DQNAgent(Agent):
         loss = (torch.tensor(is_weights, dtype=torch.float) * F.mse_loss(q_value, expected_q_value)).mean()
         
         self.ltmemory.batch_update(idxs, error.detach().numpy())
-        # print(loss)
-        # loss = torch.zeros_like(current_qs_list)
-        # for i, t in enumerate(batch):
-            # new_q = t.reward
-            # if not t.done:
-                # max_target_a = next_qs_list[i].argmax()
-                # # print(next_qs_list[i])
-                # max_target_q = target_qs_list[i][max_target_a] #Double DQN
-                # # max_target_q = np.amax(target_qs_list[i])
-                # new_q += self.discount_factor * max_target_q
-            
-            # # print(transition['action'], current_qs_list[i][transition['action']], "=>", new_q)
-            # error = (new_q - current_qs_list[i][t.action]).abs().detach()
-            # loss[i][t.action] = F.mse_loss(current_qs_list[i][t.action], new_q)
-            # # current_qs_list[i][t.action] = new_q
-            # self.ltmemory.update(idxs[i], error)
-            
+        
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        
         
         # Update target model counter every episode
         self.target_update_counter += 1

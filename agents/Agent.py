@@ -30,7 +30,7 @@ class Agent(object):
         self.target_epochs = kwargs.get('target_epochs', 1000)
         self.epochs = 0
         self.episodes = 0
-        self.target_episodes = kwargs.get('episodes', 500)
+        self.target_episodes = kwargs.get('episodes', 1000)
         self.episode_start_time = 0
         self.steps = 0
         self.total_rewards = 0
@@ -86,7 +86,6 @@ class Agent(object):
    
     def beginEpisode(self):
         self.episodes += 1
-        self.steps = 0
         self.total_rewards = 0
         self.episode_start_time = time.perf_counter()
         return self.episodes <= self.target_episodes
@@ -101,7 +100,7 @@ class Agent(object):
         bestReward = np.max(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         avgReward = np.mean(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         
-        print(f'Epoch #{self.epochs} {self.episodes:>5}/{self.target_episodes} | Loss: {avgLoss:8.4f} | Rewards: {self.total_rewards:>5} (Best: {bestReward:>5}, AVG: {avgReward:>5.2f}) | steps: {self.steps:>4} | Time: {duration: >5.2f}', end = "\r")
+        print(f'Epoch #{self.epochs} {self.episodes:>5}/{self.target_episodes} | Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, AVG: {avgReward:>5.2f} | steps: {self.steps/duration:>7.2f}/s | Time: {duration: >5.2f}s', end = "\r")
     
     def learn(self):
         raise NotImplementedError()

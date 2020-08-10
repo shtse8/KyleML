@@ -7,6 +7,7 @@ import sys
 import signal
 from games.Snake import Snake
 from games.puzzle2048 import Puzzle2048
+from games.CartPole import CartPole
 from agents.DQNAgent import DQNAgent
 from agents.A2CAgent import A2CAgent
 

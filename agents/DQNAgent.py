@@ -1,18 +1,7 @@
 import os
-import tensorflow as tf
-from keras.callbacks import Callback
-from keras.optimizers import Adam, RMSprop
-from keras.utils import Sequence
-from keras.models import Sequential, Model
-from keras.layers import Dense, Dropout, Concatenate, Input, Flatten, Conv2D, Lambda, MaxPooling2D, Subtract, Add
-from keras.utils import to_categorical
-import keras.backend as K
-from multiprocessing import Pool, TimeoutError
 import __main__
 import random
 import numpy as np
-import pandas as pd
-from operator import add
 import sys
 import collections
 import math
@@ -53,9 +42,9 @@ class DQNAgent(Agent):
         
         # Trainning
         self.weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + ".h5")
-        self.update_target_every = kwargs.get('update_target_every', 20)
+        self.update_target_every = kwargs.get('update_target_every', 100)
         self.learning_rate = kwargs.get('learning_rate', 0.01)
-        self.gamma = kwargs.get('gamma', 0.995)
+        self.gamma = kwargs.get('gamma', 0.9)
         
         # Exploration
         self.epsilon_max = kwargs.get('epsilon_max', 1.00)
@@ -80,7 +69,6 @@ class DQNAgent(Agent):
         
         # Target model
         self.model_target = self.build_model()
-        self.model_target.load_state_dict(self.model.state_dict())
         
         self.target_update_counter = 0
 
@@ -88,6 +76,8 @@ class DQNAgent(Agent):
         self.epsilon = self.epsilon_max
         self.stmemory.clear()
         self.ltmemory = PrioritizedMemory(self.memory_size)
+        self.updateTarget()
+        self.target_update_counter = 0
         return super().beginEpoch()
         
     def printSummary(self):
@@ -107,9 +97,9 @@ class DQNAgent(Agent):
             action = random.randint(0, self.env.actionSpace - 1)
         else:
             self.model.eval()
-            stateTensor = torch.tensor(state, dtype=torch.float).unsqueeze(0).view(1, -1)
+            stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
             prediction = self.model(stateTensor)
-            action = prediction.argmax().detach()
+            action = prediction.argmax().item()
         return action
     
     def build_model(self, training = True):
@@ -191,12 +181,12 @@ class DQNAgent(Agent):
         next_q_values = results[len(states):]
         # print(results, len(results), current_qs_list, len(current_qs_list), next_qs_list)
         
-        # print(actions.unsqueeze(1))
         q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
         next_q_value = target_next_q_values.gather(1, next_q_values.max(1)[1].unsqueeze(1)).squeeze(1)
         expected_q_value = rewards + self.gamma * next_q_value * (1 - dones)
         error = (q_value - expected_q_value).abs()
-        # print(is_weights)
+        
+        # Loss with sample weights
         loss = (torch.tensor(is_weights, dtype=torch.float) * F.mse_loss(q_value, expected_q_value)).mean()
         
         self.ltmemory.batch_update(idxs, error.detach().numpy())

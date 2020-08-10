@@ -31,14 +31,21 @@ import torchvision.transforms as T
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Net(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
+    def __init__(self, input_size, output_size):
         super().__init__()
-        self.linear1 = nn.Linear(input_size, hidden_size)
-        self.linear2 = nn.Linear(hidden_size, output_size)
+        self.linear = nn.Linear(input_size, 256)
+        self.value = nn.Linear(256, 1)
+        self.adv = nn.Linear(256, output_size)
+        
     def forward(self, x):
-        x = F.relu(self.linear1(x))
-        x = self.linear2(x)
-        return x
+        x = F.relu(self.linear(x))
+
+        value = self.value(x)
+        adv = self.adv(x)
+
+        advAverage = adv.mean(1, keepdim=True)
+        Q = value + adv - advAverage
+        return Q
 
 class DQNAgent(Agent):
     def __init__(self, env, **kwargs):
@@ -96,20 +103,12 @@ class DQNAgent(Agent):
     
     def get_action(self, state):
         if np.random.uniform() < self.epsilon:
-            # For exploration
             action = random.randint(0, self.env.actionSpace - 1)
         else:
-            # self.model.eval()
-            # print(state)
+            self.model.eval()
             stateTensor = torch.tensor(state, dtype=torch.float).unsqueeze(0).view(1, -1)
-            # print(stateTensor)
             prediction = self.model(stateTensor)
-            # print(prediction)
             action = prediction.argmax().detach()
-            # prediction = self.model.predict(np.array([state]))
-            # action = np.argmax(prediction[0])
-        
-        # print(f'[{game.counter}-{game.record}]', game.steps, "taking action:", action == 2 and "L" or action == 1 and "R" or "S", reward, game.score, prediction[0])
         return action
     
     def build_model(self, training = True):
@@ -168,7 +167,7 @@ class DQNAgent(Agent):
         
         
         # sys.exit(1)
-        return Net(np.product(self.env.observationSpace), 128, self.env.actionSpace)
+        return Net(np.product(self.env.observationSpace), self.env.actionSpace)
     
     def endEpisode(self):
         batch = self.stmemory.get()

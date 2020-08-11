@@ -10,6 +10,7 @@ class Puzzle2048(Game):
         self.game = GameSrc()
         self.observationSpace = (4, 4)
         self.actionSpace = 4
+        self.reward = 0
     
     def reset(self):
         self.game = GameSrc()
@@ -20,7 +21,7 @@ class Puzzle2048(Game):
     def getState(self):
         state = np.zeros((4, 4))
         for block in self.game.blocks:
-            state[block.coordinate_y][block.coordinate_x] = math.log2(block.score) / 10
+            state[block.coordinate_y][block.coordinate_x] = math.log2(block.score)
         
         return state
         
@@ -28,13 +29,13 @@ class Puzzle2048(Game):
         action_map = [Direction.Up, Direction.Down, Direction.Left, Direction.Right]
         score = self.game.score
         self.game.slide(action_map[action])
-        reward = self.game.score - score
-        return self.getState(), reward, self.getDone()
+        self.reward = self.game.score - score
+        return self.getState(), self.getReward(), self.getDone()
         
     def getDone(self):
         return self.game.is_end
         
     def getReward(self):
-        return 0
+        return self.reward
     
     

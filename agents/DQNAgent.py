@@ -44,9 +44,9 @@ class DQNAgent(Agent):
         
         # Trainning
         self.weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + ".h5")
-        self.update_target_every = kwargs.get('update_target_every', 100)
+        self.update_target_every = kwargs.get('update_target_every', 1000)
         self.learning_rate = kwargs.get('learning_rate', .001)
-        self.gamma = kwargs.get('gamma', 0.995)
+        self.gamma = kwargs.get('gamma', 0.99)
         
         # Exploration
         self.epsilon_max = kwargs.get('epsilon_max', 1.00)
@@ -56,10 +56,10 @@ class DQNAgent(Agent):
         self.epsilon_decay = ((self.epsilon_max - self.epsilon_min) / (self.target_trains * self.epsilon_phase_size))
         
         # Memory
-        self.memory_size = kwargs.get('memory_size', 10000)
+        self.memory_size = kwargs.get('memory_size', 100000)
         
         # Mini Batch
-        self.minibatch_size = kwargs.get('minibatch_size', 32)
+        self.minibatch_size = kwargs.get('minibatch_size', 64)
         
         # self.ltmemory = collections.deque(maxlen=self.memory_size)
         self.ltmemory = PrioritizedMemory(self.memory_size)
@@ -67,6 +67,7 @@ class DQNAgent(Agent):
         
         # Prediction model (the main Model)
         self.model = Net(np.product(self.env.observationSpace), self.env.actionSpace)
+        # self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         
         # Target model
@@ -74,14 +75,14 @@ class DQNAgent(Agent):
         
         self.target_update_counter = 0
 
-    def beginEpoch(self):
+    def beginPhrase(self):
         self.epsilon = self.epsilon_max
         self.stmemory.clear()
         self.ltmemory = PrioritizedMemory(self.memory_size)
         self.updateTarget()
         self.target_update_counter = 0
-        return super().beginEpoch()
-        
+        return super().beginPhrase()
+    
     def printSummary(self):
         print(self.model)
 
@@ -121,7 +122,6 @@ class DQNAgent(Agent):
         super().endEpisode()
       
     def learn(self):
-        self.model.train()
         
         # loss = 0
         
@@ -131,17 +131,18 @@ class DQNAgent(Agent):
         # print(idxs, batch, is_weight)
         
         q_value, expected_q_value, error = self.prepareData(batch)
+        self.ltmemory.batch_update(idxs, error.detach().numpy())
         
         is_weights = torch.tensor(is_weights, dtype=torch.float)
-        
-        # Loss with sample weights
-        # loss = (torch.tensor(is_weights, dtype=torch.float) * F.mse_loss(q_value, expected_q_value)).mean()
         loss = self.weighted_mse_loss(q_value, expected_q_value, is_weights)
-        
-        self.ltmemory.batch_update(idxs, error.detach().numpy())
         
         self.optimizer.zero_grad()
         loss.backward()
+        # If the divergence of loss value is caused by gradient explode, you can clip the gradient. In Deepmind's 2015 DQN, the author clipped the gradient by limiting the value within [-1, 1]. 
+        for param in self.model.parameters():
+            param.grad.data.clamp_(-1, 1)
+        # In the other case, the author of Prioritized Experience Replay clip gradient by limiting the norm within 10.
+        # nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
         self.optimizer.step()
         
         # Update target model counter every episode
@@ -157,6 +158,8 @@ class DQNAgent(Agent):
         return (weight * (input - target) ** 2).mean()
 
     def prepareData(self, batch):
+        self.model.train()
+        
         states = np.array([x.state for x in batch])
         states = torch.tensor(states, dtype=torch.float).view(states.shape[0], -1)
         

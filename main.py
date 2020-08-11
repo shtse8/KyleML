@@ -5,7 +5,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import sys
 import signal
-# from games.Snake import Snake
+from games.Snake import Snake
+from games.SimpleSnake import SimpleSnake
 from games.puzzle2048 import Puzzle2048
 # from games.CartPole import CartPole
 from agents.DQNAgent import DQNAgent

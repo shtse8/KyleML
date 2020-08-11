@@ -1,44 +1,26 @@
-# import os
-# os.environ['TF_CPP_MIN_VLOG_LEVEL'] = '3'
-# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-# from keras.models import Sequential
-# from keras.layers.core import Dense, Dropout
-# import tensorflow as tf
 
-# model = Sequential()
-# # model.add(Dense(8, input_shape=(16,)))
-# # Afterwards, we do automatic shape inference:  
-# # model.add(Dense(4))
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import torchvision.transforms as T
 
-# model.add(tf.keras.Input(shape=(16,)))
-# model.add(Dense(8))
+modelA = nn.Linear(10, 10)
+modelB = nn.Linear(10, 10)
+modelC = nn.Linear(10, 10)
 
-# print(len(model.weights))
-# import numpy as np
-# from keras.utils import to_categorical
-# actions = [1,2,0,2,0,1,2]
-# output = np.logical_not(np.array([to_categorical(action, num_classes=3) for action in actions])).astype(int)
-# print(output)
+x = torch.randn(1, 10)
+print(x)
 
-# import collections
-# import random
-# memory = collections.deque(maxlen=10000)
+a = modelA(x)
+b = modelB(a.detach())
+b.mean().backward()
+print("modelA.weight.grad", modelA.weight.grad)
+print("modelB.weight.grad", modelB.weight.grad)
+print("modelC.weight.grad", modelC.weight.grad)
 
-# while True:
-    # memory.append(random.random())
-    # print(len(memory), memory[0])
-    
-import numpy as np
-import collections
-# a = collections.deque(maxlen=4)
-# a.extend([1] * 4)
-# print(a)
-# print(np.zeros((12,)+(3,4)))
-
-# a = np.array([[1, 2, 7], [3, 4, 8], [5, 6, 9]])
-
-# print(a[a[:,0] == 1])
-
-a = (22, 22) + (1,)
-print(a)
+c = modelC(a)
+c.mean().backward()
+print(modelA.weight.grad)
+print(modelB.weight.grad)
+print(modelC.weight.grad)

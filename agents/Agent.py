@@ -24,6 +24,7 @@ from enum import Enum
 class Phrase(Enum):
     train = 1
     test = 2
+    play = 3
 
 class Agent(object):
     def __init__(self, env, **kwargs) -> None:
@@ -37,7 +38,8 @@ class Agent(object):
         
         self.target_episodes = 0
         # self.phrases = [Phrase.train, Phrase.test]
-        self.phrases = [Phrase.train]
+        # self.phrases = [Phrase.train]
+        self.phrases = [Phrase.play]
         self.phraseIndex = 0
         self.phrase = ""
         self.epochs = 0
@@ -84,6 +86,8 @@ class Agent(object):
                         nextState, reward, done = self.env.takeAction(action)
                         self.commit(Transition(state, action, reward, nextState, done))
                         state = nextState
+                        if self.isPlaying():
+                            time.sleep(0.3)
                     self.endEpisode()
                 self.endPhrase()
             self.endEpoch()
@@ -97,6 +101,9 @@ class Agent(object):
     def isTesting(self):
         return self.getPhrase() == Phrase.test
         
+    def isPlaying(self):
+        return self.getPhrase() == Phrase.play
+        
     def beginPhrase(self):
         if self.phraseIndex >= len(self.phrases):
             return False
@@ -109,6 +116,8 @@ class Agent(object):
             self.target_episodes = self.target_trains
         elif self.isTesting():
             self.target_episodes = self.target_tests
+        elif self.isPlaying():
+            self.target_episodes = 1
         return True
     
     def endPhrase(self):

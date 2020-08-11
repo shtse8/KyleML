@@ -103,7 +103,7 @@ class A2CAgent(Agent):
         model.compile(loss='mse', optimizer=opt)
         return model
     
-    def get_action(self, state):
+    def getAction(self, state):
         # print(np.array(state))
         prediction = self.actor.predict([np.array([state])])[0]
         # print(prediction)

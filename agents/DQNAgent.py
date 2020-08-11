@@ -94,7 +94,7 @@ class DQNAgent(Agent):
             self.epsilon -= self.epsilon_decay
             self.epsilon = max(self.epsilon_min, self.epsilon)
     
-    def get_action(self, state):
+    def getAction(self, state):
         if self.isTraining() and np.random.uniform() < self.epsilon:
             action = random.randint(0, self.env.actionSpace - 1)
         else:
@@ -108,7 +108,7 @@ class DQNAgent(Agent):
         if self.isTraining():
             batch = self.stmemory.get()
             
-            q_value, expected_q_value, error = self.prepareData(batch)
+            _, _, error = self.prepareData(batch)
              
             for e, t in zip(error, batch):
                 self.ltmemory.add(e.item(), t) 
@@ -132,8 +132,11 @@ class DQNAgent(Agent):
         
         q_value, expected_q_value, error = self.prepareData(batch)
         
+        is_weights = torch.tensor(is_weights, dtype=torch.float)
+        
         # Loss with sample weights
-        loss = (torch.tensor(is_weights, dtype=torch.float) * F.mse_loss(q_value, expected_q_value)).mean()
+        # loss = (torch.tensor(is_weights, dtype=torch.float) * F.mse_loss(q_value, expected_q_value)).mean()
+        loss = self.weighted_mse_loss(q_value, expected_q_value, is_weights)
         
         self.ltmemory.batch_update(idxs, error.detach().numpy())
         
@@ -149,6 +152,9 @@ class DQNAgent(Agent):
             self.updateTarget()
             
         self.lossHistory.append(loss.item())
+    
+    def weighted_mse_loss(self, input, target, weight):
+        return (weight * (input - target) ** 2).mean()
 
     def prepareData(self, batch):
         states = np.array([x.state for x in batch])
@@ -171,10 +177,9 @@ class DQNAgent(Agent):
         results = self.model(torch.cat((states, nextStates), 0))
         q_values = results[0:len(states)]
         next_q_values = results[len(states):]
-        # print(results, len(results), current_qs_list, len(current_qs_list), next_qs_list)
         
         q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
-        next_q_value = target_next_q_values.gather(1, next_q_values.max(1)[1].unsqueeze(1)).squeeze(1)
+        next_q_value = target_next_q_values.gather(1, next_q_values.argmax(1).unsqueeze(1)).squeeze(1)
         expected_q_value = rewards + self.gamma * next_q_value * (1 - dones)
         error = (q_value - expected_q_value).abs()
         

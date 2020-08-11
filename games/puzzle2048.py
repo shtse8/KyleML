@@ -20,7 +20,7 @@ class Puzzle2048(Game):
     def getState(self):
         state = np.zeros((4, 4))
         for block in self.game.blocks:
-            state[block.coordinate_y][block.coordinate_x] = math.log2(block.score)
+            state[block.coordinate_y][block.coordinate_x] = math.log2(block.score) / 10
         
         return state
         

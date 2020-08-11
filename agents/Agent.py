@@ -65,7 +65,7 @@ class Agent(object):
     def printSummary(self):
         pass
        
-    def get_action(self, state):
+    def getAction(self, state):
         raise NotImplementedError()
     
     def commit(self, transition: Transition):
@@ -80,7 +80,7 @@ class Agent(object):
                     state = self.env.reset()
                     done = False
                     while not done:
-                        action = self.get_action(state)
+                        action = self.getAction(state)
                         nextState, reward, done = self.env.takeAction(action)
                         self.commit(Transition(state, action, reward, nextState, done))
                         state = nextState

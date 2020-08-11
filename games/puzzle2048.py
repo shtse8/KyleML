@@ -1,43 +1,42 @@
 import numpy as np
 import math
 
-from .src.puzzle2048 import Board as GameSrc, Direction
+from .src.game2048 import game2048
 from .Game import Game
+import gym
+# import gym_2048
 
 class Puzzle2048(Game):
     def __init__(self):
-        self.name = "Snake"
-        self.game = GameSrc()
-        self.observationSpace = (4, 4)
+        self.name = "game2048"
+        self.size = 4
+        self.game = game2048(self.size)
+        self.observationSpace = (self.size, self.size)
         self.actionSpace = 4
         self.reward = 0
     
     def reset(self):
-        self.game.reset()
+        self.game = game2048(4)
         # self.game.food.x = self.game.player.x + 2
         # self.game.food.y = self.game.player.y
         return self.getState()
         
     def getState(self):
-        state = np.zeros((4, 4))
-        for block in self.game.blocks:
-            state[block.coordinate_y][block.coordinate_x] = math.log2(block.score)
-        
-        return state
+        return self.game.game_state
         
     def takeAction(self, action):
-        action_map = [Direction.Up, Direction.Down, Direction.Left, Direction.Right]
-        score = self.game.score
-        self.game.slide(action_map[action])
-        self.reward = self.game.score - score
-        self.game.update()
+        action_map = ["up", "down", "left", "right",]
+        score = self.game.get_score()
+        self.game.swipe(action_map[action])
+        self.reward = self.game.get_score() - score
+        # self.game.update()
         return self.getState(), self.getReward(), self.getDone()
         
     def getDone(self):
-        return self.game.is_end
+        return self.game.check_for_game_over()
         
     def getReward(self):
         return self.reward
     
-    def render(self):
-        return self.game.render()
+    # def render(self):
+        # return self.game.render()

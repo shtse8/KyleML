@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import time
 from collections import deque
 from random import randint
-from keras.utils import to_categorical
 import atexit
 import signal
 import sys

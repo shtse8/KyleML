@@ -1,12 +1,4 @@
 import os
-import tensorflow as tf
-from keras.callbacks import Callback
-from keras.optimizers import Adam, RMSprop
-from keras.utils import Sequence
-from keras.models import Sequential, Model
-from keras.layers import Dense, Dropout, Concatenate, Input, Flatten, Conv2D, Lambda, MaxPooling2D, Subtract, Add
-from keras.utils import to_categorical
-import keras.backend as K
 from multiprocessing import Pool, TimeoutError
 import __main__
 import random
@@ -18,7 +10,6 @@ import collections
 import math
 import time
 from memories.Transition import Transition
-tf.compat.v1.disable_eager_execution()
 from enum import Enum
 
 class Phrase(Enum):
@@ -38,8 +29,8 @@ class Agent(object):
         
         self.target_episodes = 0
         # self.phrases = [Phrase.train, Phrase.test]
-        # self.phrases = [Phrase.train]
-        self.phrases = [Phrase.play]
+        self.phrases = [Phrase.train]
+        # self.phrases = [Phrase.play]
         self.phraseIndex = 0
         self.phrase = ""
         self.epochs = 0

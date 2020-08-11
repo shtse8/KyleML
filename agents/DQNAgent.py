@@ -139,8 +139,8 @@ class DQNAgent(Agent):
         self.optimizer.zero_grad()
         loss.backward()
         # If the divergence of loss value is caused by gradient explode, you can clip the gradient. In Deepmind's 2015 DQN, the author clipped the gradient by limiting the value within [-1, 1]. 
-        for param in self.model.parameters():
-            param.grad.data.clamp_(-1, 1)
+        # for param in self.model.parameters():
+            # param.grad.data.clamp_(-1, 1)
         # In the other case, the author of Prioritized Experience Replay clip gradient by limiting the norm within 10.
         # nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
         self.optimizer.step()

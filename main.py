@@ -5,12 +5,13 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import sys
 import signal
-from games.Snake import Snake
-from games.SimpleSnake import SimpleSnake
+# from games.Snake import Snake
+# from games.SimpleSnake import SimpleSnake
 from games.puzzle2048 import Puzzle2048
 # from games.CartPole import CartPole
+# from games.CartPole import CartPole
 from agents.DQNAgent import DQNAgent
-from agents.A2CAgent import A2CAgent
+# from agents.A2CAgent import A2CAgent
 
 def signal_handler(sig, frame):
     print()
@@ -23,9 +24,9 @@ def signal_handler(sig, frame):
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     game = Puzzle2048()
-    game.render()
+    # game.render()
     agent = DQNAgent(game)
-    agent.load()
+    # agent.load()
     # agent.printSummary()
     agent.train()
     # agent.play(render=True)

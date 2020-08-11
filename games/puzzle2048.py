@@ -13,7 +13,7 @@ class Puzzle2048(Game):
         self.reward = 0
     
     def reset(self):
-        self.game = GameSrc()
+        self.game.reset()
         # self.game.food.x = self.game.player.x + 2
         # self.game.food.y = self.game.player.y
         return self.getState()
@@ -30,6 +30,7 @@ class Puzzle2048(Game):
         score = self.game.score
         self.game.slide(action_map[action])
         self.reward = self.game.score - score
+        self.game.update()
         return self.getState(), self.getReward(), self.getDone()
         
     def getDone(self):
@@ -38,4 +39,5 @@ class Puzzle2048(Game):
     def getReward(self):
         return self.reward
     
-    
+    def render(self):
+        return self.game.render()

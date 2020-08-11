@@ -104,12 +104,20 @@ class Block:
 
 class Board:
     def __init__(self):
+        self.fps = 30
+        
+        self.display = None
+        self.clock = None
+        self.resources = {}
+        self.reset()
+    
+    def reset(self):
         self.blocks = [Block(), ]
         self.score = 0
         self.max_score = max([block.score for block in self.blocks])
         self.next_direction = Direction.Up
         self.is_end = False
-
+        
     def handle_block_slide(self, direction):
         self.next_direction = direction
         # check each row/column (depend on direction)
@@ -207,6 +215,69 @@ class Board:
     def get_block_num(self):
         return len(self.blocks)
 
+    def render(self):
+        global BLOCK_BOARD
+        print("render")
+        pygame.init()
+        self.clock = pygame.time.Clock()
+        self.display = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        BLOCK_BOARD = pygame.Rect(X_MARGIN - BOARD_OUTER_LINE_WIDTH, Y_MARGIN - BOARD_OUTER_LINE_WIDTH,
+                                  (BLOCK_SIZE + MARGIN_SIZE) * BOARD_WIDTH + BOARD_OUTER_LINE_WIDTH * 2 - MARGIN_SIZE,
+                                  (BLOCK_SIZE + MARGIN_SIZE) * BOARD_HEIGHT + BOARD_OUTER_LINE_WIDTH * 2 - MARGIN_SIZE)
+
+        # Set Font
+        self.resources['font'] = pygame.font.Font('resource/SourceSansPro-Regular.ttf', 64)
+        self.resources['title'] = pygame.font.Font('resource/SourceSansPro-Regular.ttf', 72)
+
+       
+        title_text = 'Your Score: '
+
+        pygame.display.set_caption('2048')
+        self.display.fill(BACKGROUND_COLOR)
+        self.clock.tick(self.fps)
+    
+    def update(self):
+        global BLOCK_BOARD
+        if self.display == None:
+            return
+        self.display.fill(BACKGROUND_COLOR)
+        pygame.draw.rect(self.display, Color.DeepOrange.value, BLOCK_BOARD, BOARD_OUTER_LINE_WIDTH)
+        pygame.event.get()
+        self.draw_blocks()
+        
+        score_obj = self.resources['font'].render(str(self.score), True, TEXT_COLOR)
+        score_obj_rect = score_obj.get_rect()
+        score_obj_rect.center = (self.display.get_width() / 2, 50)
+        self.display.blit(score_obj, score_obj_rect)
+        
+        pygame.display.update()
+            
+    def draw_blocks(self):
+        for block in self.blocks:
+            left, top = self.block_position_to_pixel(block.coordinate_x, block.coordinate_y)
+            block_rect_obj = pygame.Rect(left, top, BLOCK_SIZE, BLOCK_SIZE)
+            pygame.draw.rect(self.display, COLOR_SWITCHER[block.score], block_rect_obj)
+            text_surface_obj = self.resources['font'].render(str(block.score), True, TEXT_COLOR)
+            text_rect_obj = text_surface_obj.get_rect()
+            text_rect_obj.center = block_rect_obj.center
+            self.display.blit(text_surface_obj, text_rect_obj)
+
+    def block_position_to_pixel(self, x, y):
+        assert (0 <= x < BOARD_WIDTH) and (0 <= y < BOARD_HEIGHT), \
+            'function "block_position_to_pixel": invalid position ' + str((x, y)) + ', which must be in [0, board_size).'
+        pixel_left = X_MARGIN + (BLOCK_SIZE + MARGIN_SIZE) * x
+        pixel_top = Y_MARGIN + (BLOCK_SIZE + MARGIN_SIZE) * y
+
+        return pixel_left, pixel_top
+
+
+    # def draw_title(self, title):
+        # assert isinstance(title, str), 'function "draw_title": title must be string.'
+        # text_surface_obj = TITLE_OBJ.render(title, True, TEXT_COLOR)
+        # text_rect_obj = text_surface_obj.get_rect()
+        # text_rect_obj.center = TITLE_CENTER
+        # self.display.blit(text_surface_obj, text_rect_obj)
+        
 
 # def get_state(main_board):
     # # observation = self.get_observation(game)
@@ -218,25 +289,8 @@ class Board:
 
 
 # def main():
-    # global FPS_CLOCK, DISPLAY_SURF, FONT_OBJ, TITLE_OBJ, BLOCK_BOARD
-    # # pygame.init()
-    # # FPS_CLOCK = pygame.time.Clock()
-    # # DISPLAY_SURF = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    # # BLOCK_BOARD = pygame.Rect(X_MARGIN - BOARD_OUTER_LINE_WIDTH, Y_MARGIN - BOARD_OUTER_LINE_WIDTH,
-                              # # (BLOCK_SIZE + MARGIN_SIZE) * BOARD_WIDTH + BOARD_OUTER_LINE_WIDTH * 2 - MARGIN_SIZE,
-                              # # (BLOCK_SIZE + MARGIN_SIZE) * BOARD_HEIGHT + BOARD_OUTER_LINE_WIDTH * 2 - MARGIN_SIZE)
-
-    # # Set Font
-    # # FONT_OBJ = pygame.font.Font('resource/SourceSansPro-Regular.ttf', FONT_SIZE)
-    # # TITLE_OBJ = pygame.font.Font('resource/SourceSansPro-Regular.ttf', TITLE_SIZE)
-
-   
-    # title_text = 'Your Score: '
-
-    # # pygame.display.set_caption('2048')
-    # # DISPLAY_SURF.fill(BACKGROUND_COLOR)
-    # # FPS_CLOCK.tick(FPS)
-
+    # global self.clock, self.display, FONT_OBJ, TITLE_OBJ, BLOCK_BOARD
+    # 
     # agent = Agent((4, 4), 4)
     # action_map = [Direction.Up, Direction.Down, Direction.Left, Direction.Right]
     
@@ -245,9 +299,6 @@ class Board:
         # agent.episodes = 0
         # while agent.begin_episode():
             # main_board = Board()
-            # # DISPLAY_SURF.fill(BACKGROUND_COLOR)
-            # # pygame.draw.rect(DISPLAY_SURF, Color.DeepOrange.value, BLOCK_BOARD, BOARD_OUTER_LINE_WIDTH)
-            # # pygame.event.get()
             # while not main_board.is_end:
                 # score = main_board.score
                 # state = get_state(main_board)
@@ -259,60 +310,31 @@ class Board:
                 # # memory = (state, action_index, reward, main_board.is_end, next_state)
                 # # print(memory)
                 # agent.commit_memory(state, action_index, reward, main_board.is_end, next_state)
-                # # draw_blocks(main_board)
-                # # pygame.display.update()
+                # # 
             # agent.end_episode()
 
-def draw_blocks(board_in):
-    assert isinstance(board_in, Board), 'function "draw_blocks": accepts "Board" class argument only.'
-    for block in board_in.blocks:
-        left, top = block_position_to_pixel(block.coordinate_x, block.coordinate_y)
-        block_rect_obj = pygame.Rect(left, top, BLOCK_SIZE, BLOCK_SIZE)
-        pygame.draw.rect(DISPLAY_SURF, COLOR_SWITCHER[block.score], block_rect_obj)
-        text_surface_obj = FONT_OBJ.render(str(block.score), True, TEXT_COLOR)
-        text_rect_obj = text_surface_obj.get_rect()
-        text_rect_obj.center = block_rect_obj.center
-        DISPLAY_SURF.blit(text_surface_obj, text_rect_obj)
 
+# def handle_win_or_lost(result, title):
+    # assert isinstance(result, Result), 'function "handle_win_or_lost": result must be "Result" class.'
+    # self.display.fill(BACKGROUND_COLOR)
+    # text_y = Y_MARGIN + int(TITLE_SIZE / 2)
+    # result_font = pygame.font.Font('resource/SourceSansPro-Regular.ttf', RESULT_SIZE)
 
-def block_position_to_pixel(x, y):
-    assert (0 <= x < BOARD_WIDTH) and (0 <= y < BOARD_HEIGHT), \
-        'function "block_position_to_pixel": invalid position ' + str((x, y)) + ', which must be in [0, board_size).'
-    pixel_left = X_MARGIN + (BLOCK_SIZE + MARGIN_SIZE) * x
-    pixel_top = Y_MARGIN + (BLOCK_SIZE + MARGIN_SIZE) * y
+    # tokens = title.split('\n')
+    # text_surface_obj = TITLE_OBJ.render(tokens[0], True, TEXT_COLOR, BACKGROUND_COLOR)
+    # text_rect_obj = text_surface_obj.get_rect()
+    # text_rect_obj.top = text_y
+    # text_rect_obj.centerx = int(WINDOW_WIDTH / 2)
+    # self.display.blit(text_surface_obj, text_rect_obj)
+    # text_y += RESULT_SIZE
 
-    return pixel_left, pixel_top
-
-
-def draw_title(title):
-    assert isinstance(title, str), 'function "draw_title": title must be string.'
-    text_surface_obj = TITLE_OBJ.render(title, True, TEXT_COLOR)
-    text_rect_obj = text_surface_obj.get_rect()
-    text_rect_obj.center = TITLE_CENTER
-    DISPLAY_SURF.blit(text_surface_obj, text_rect_obj)
-    
-
-def handle_win_or_lost(result, title):
-    assert isinstance(result, Result), 'function "handle_win_or_lost": result must be "Result" class.'
-    DISPLAY_SURF.fill(BACKGROUND_COLOR)
-    text_y = Y_MARGIN + int(TITLE_SIZE / 2)
-    result_font = pygame.font.Font('resource/SourceSansPro-Regular.ttf', RESULT_SIZE)
-
-    tokens = title.split('\n')
-    text_surface_obj = TITLE_OBJ.render(tokens[0], True, TEXT_COLOR, BACKGROUND_COLOR)
-    text_rect_obj = text_surface_obj.get_rect()
-    text_rect_obj.top = text_y
-    text_rect_obj.centerx = int(WINDOW_WIDTH / 2)
-    DISPLAY_SURF.blit(text_surface_obj, text_rect_obj)
-    text_y += RESULT_SIZE
-
-    for text in tokens[1:]:
-        text_y += int(RESULT_SIZE * 1.5)
-        text_surface_obj = result_font.render(text, True, TEXT_COLOR, BACKGROUND_COLOR)
-        text_rect_obj = text_surface_obj.get_rect()
-        text_rect_obj.top = text_y
-        text_rect_obj.centerx = int(WINDOW_WIDTH / 2)
-        DISPLAY_SURF.blit(text_surface_obj, text_rect_obj)
+    # for text in tokens[1:]:
+        # text_y += int(RESULT_SIZE * 1.5)
+        # text_surface_obj = result_font.render(text, True, TEXT_COLOR, BACKGROUND_COLOR)
+        # text_rect_obj = text_surface_obj.get_rect()
+        # text_rect_obj.top = text_y
+        # text_rect_obj.centerx = int(WINDOW_WIDTH / 2)
+        # self.display.blit(text_surface_obj, text_rect_obj)
 
 # if __name__ == '__main__':
     # main()

@@ -22,9 +22,10 @@ def signal_handler(sig, frame):
 
 def main():
     signal.signal(signal.SIGINT, signal_handler)
-    env = Puzzle2048()
-    agent = DQNAgent(env)
-    # agent.load()
+    game = Puzzle2048()
+    game.render()
+    agent = DQNAgent(game)
+    agent.load()
     # agent.printSummary()
     agent.train()
     # agent.play(render=True)

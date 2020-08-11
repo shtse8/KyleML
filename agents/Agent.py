@@ -19,7 +19,11 @@ import math
 import time
 from memories.Transition import Transition
 tf.compat.v1.disable_eager_execution()
+from enum import Enum
 
+class Phrase(Enum):
+    train = 1
+    test = 2
 
 class Agent(object):
     def __init__(self, env, **kwargs) -> None:
@@ -27,37 +31,36 @@ class Agent(object):
         self.env = env
         
         # Trainning
-        self.target_epochs = kwargs.get('target_epochs', 1000)
+        self.target_epochs = kwargs.get('target_epochs', 10000)
+        self.target_trains = kwargs.get('target_trains', 2000)
+        self.target_tests = kwargs.get('target_tests', 100)
+        
+        self.target_episodes = 0
+        # self.phrases = [Phrase.train, Phrase.test]
+        self.phrases = [Phrase.train]
+        self.phraseIndex = 0
+        self.phrase = ""
         self.epochs = 0
         self.episodes = 0
-        self.target_episodes = kwargs.get('episodes', 1000)
         self.episode_start_time = 0
         self.steps = 0
         self.total_rewards = 0
         self.highest_rewards = 0
         
         # History
-        self.rewardHistory = collections.deque(maxlen=self.target_episodes)
-        self.lossHistory = collections.deque(maxlen=self.target_episodes)
+        self.rewardHistory = collections.deque(maxlen=max(self.target_trains, self.target_tests))
+        self.lossHistory = collections.deque(maxlen=max(self.target_trains, self.target_tests))
         self.bestReward = -np.Infinity
         
-        self.epochStartTime = 0
+        self.startTime = 0
 
     def beginEpoch(self):
         self.epochs += 1
-        self.episodes = 0
-        self.steps = 0
-        self.rewardHistory.clear()
-        self.lossHistory.clear()
-        self.epochStartTime = time.perf_counter()
+        self.phraseIndex = 0
         return self.epochs <= self.target_epochs
     
     def endEpoch(self):
-        bestReward = np.max(self.rewardHistory)
-        if bestReward > self.bestReward:
-            self.bestReward = bestReward
         self.save()
-        print(f"")
     
     def printSummary(self):
         pass
@@ -70,20 +73,48 @@ class Agent(object):
         self.total_rewards += transition.reward
         # self.update()
     
-    
     def train(self):
         while self.beginEpoch():
-            while self.beginEpisode():
-                state = self.env.reset()
-                done = False
-                while not done:
-                    action = self.get_action(state)
-                    nextState, reward, done = self.env.takeAction(action)
-                    self.commit(Transition(state, action, reward, nextState, done))
-                    state = nextState
-                self.endEpisode()
+            while self.beginPhrase():
+                while self.beginEpisode():
+                    state = self.env.reset()
+                    done = False
+                    while not done:
+                        action = self.get_action(state)
+                        nextState, reward, done = self.env.takeAction(action)
+                        self.commit(Transition(state, action, reward, nextState, done))
+                        state = nextState
+                    self.endEpisode()
+                self.endPhrase()
             self.endEpoch()
-   
+            
+    def getPhrase(self):
+        return self.phrases[self.phraseIndex]
+        
+    def isTraining(self):
+        return self.getPhrase() == Phrase.train
+        
+    def isTesting(self):
+        return self.getPhrase() == Phrase.test
+        
+    def beginPhrase(self):
+        if self.phraseIndex >= len(self.phrases):
+            return False
+        self.episodes = 0
+        self.steps = 0
+        self.rewardHistory.clear()
+        self.lossHistory.clear()
+        self.startTime = time.perf_counter()
+        if self.isTraining():
+            self.target_episodes = self.target_trains
+        elif self.isTesting():
+            self.target_episodes = self.target_tests
+        return True
+    
+    def endPhrase(self):
+        self.phraseIndex += 1
+        print()
+        
     def beginEpisode(self):
         self.episodes += 1
         self.total_rewards = 0
@@ -92,15 +123,18 @@ class Agent(object):
         
     def endEpisode(self):
         self.rewardHistory.append(self.total_rewards)
+        # bestReward = np.max(self.rewardHistory)
+        # if bestReward > self.bestReward:
+            # self.bestReward = bestReward
         self.update()
       
     def update(self):
-        duration = time.perf_counter() - self.epochStartTime
+        duration = time.perf_counter() - self.startTime
         avgLoss = np.mean(self.lossHistory) if len(self.lossHistory) > 0 else math.nan
         bestReward = np.max(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         avgReward = np.mean(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
-        
-        print(f'Epoch #{self.epochs} {self.episodes:>5}/{self.target_episodes} | Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, AVG: {avgReward:>5.2f} | steps: {self.steps/duration:>7.2f}/s | Time: {duration: >5.2f}s', end = "\r")
+        progress = self.episodes / self.target_episodes
+        print(f'Epoch #{self.epochs:>3} {self.getPhrase().name:5} {progress:>4.0%} | Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, AVG: {avgReward:>5.2f} | steps: {self.steps/duration:>7.2f}/s | Time: {duration: >5.2f}s', end = "\r")
     
     def learn(self):
         raise NotImplementedError()

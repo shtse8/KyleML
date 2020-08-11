@@ -5,19 +5,23 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import sys
 import signal
-from games.Snake import Snake
+# from games.Snake import Snake
 from games.puzzle2048 import Puzzle2048
-from games.CartPole import CartPole
+# from games.CartPole import CartPole
 from agents.DQNAgent import DQNAgent
 from agents.A2CAgent import A2CAgent
 
 def signal_handler(sig, frame):
+    print()
+    print()
+    print()
+    
     print('You pressed Ctrl+C!')
     sys.exit(0)
 
 def main():
     signal.signal(signal.SIGINT, signal_handler)
-    env = Snake()
+    env = Puzzle2048()
     agent = DQNAgent(env)
     # agent.load()
     # agent.printSummary()

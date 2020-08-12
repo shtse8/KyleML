@@ -9,6 +9,7 @@ import sys
 import collections
 import math
 import time
+import matplotlib.pyplot as plt
 from memories.Transition import Transition
 from enum import Enum
 
@@ -24,7 +25,7 @@ class Agent(object):
         
         # Trainning
         self.target_epochs = kwargs.get('target_epochs', 10000)
-        self.target_trains = kwargs.get('target_trains', 10000)
+        self.target_trains = kwargs.get('target_trains', 1000)
         self.target_tests = kwargs.get('target_tests', 100)
         
         self.target_episodes = 0
@@ -38,6 +39,7 @@ class Agent(object):
         self.episode_start_time = 0
         self.steps = 0
         self.total_rewards = 0
+        self.total_loss = 0
         self.highest_rewards = 0
         
         # History
@@ -46,6 +48,11 @@ class Agent(object):
         self.bestReward = -np.Infinity
         
         self.startTime = 0
+
+        # plt.ion()
+        # plt.ylabel("Loss")
+        # plt.xlabel("Episode")
+        # plt.show(block=False)
 
     def beginEpoch(self):
         self.epochs += 1
@@ -113,15 +120,21 @@ class Agent(object):
     
     def endPhrase(self):
         self.phraseIndex += 1
+        # plt.cla()
+        # plt.plot(self.lossHistory)
+        # plt.draw()
+        # plt.pause(0.00001)
         print()
         
     def beginEpisode(self):
         self.episodes += 1
         self.total_rewards = 0
+        self.total_loss = 0
         self.episode_start_time = time.perf_counter()
         return self.episodes <= self.target_episodes
         
     def endEpisode(self):
+        self.lossHistory.append(self.total_loss)
         self.rewardHistory.append(self.total_rewards)
         # bestReward = np.max(self.rewardHistory)
         # if bestReward > self.bestReward:
@@ -134,7 +147,10 @@ class Agent(object):
         bestReward = np.max(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         avgReward = np.mean(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         progress = self.episodes / self.target_episodes
-        print(f'Epoch #{self.epochs:>3} {self.getPhrase().name:5} {progress:>4.0%} | Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, AVG: {avgReward:>5.2f} | steps: {self.steps/duration:>7.2f}/s | Time: {duration: >5.2f}s', end = "\r")
+        durectionPerEpisode = self.episodes/duration
+        estimateDuration = self.target_episodes / durectionPerEpisode
+        print(f"Epoch #{self.epochs:>3} {self.getPhrase().name:5} {progress:>4.0%} | " + \
+            f'Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, AVG: {avgReward:>5.2f} | Steps: {self.steps/duration:>7.2f}/s, {self.steps/self.episodes:>6.2f}/ep | Episodes: {self.episodes/duration:>6.2f}/s | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\r\b")
     
     def learn(self):
         raise NotImplementedError()

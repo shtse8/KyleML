@@ -1,13 +1,6 @@
 import numpy as np
 import math
 
-#parameters
-TWO_FREQ = 0.75 #twos appear this fraction of the time and 4s appear 1-TWO_FREQ
-
-#game score computed as MAX_SCORE_SCALE * max_val + SUM_SCORE_SCALE * board_sum
-MAX_SCORE_SCALE = 10
-SUM_SCORE_SCALE = 1
-
 class Traversal:
     def __init__(self):
         self.x = []
@@ -104,10 +97,10 @@ class Grid:
     
 class game2048:
 
-    def __init__(self, n, random_stream=np.random.RandomState()):
+    def __init__(self, size):
         #create a new game and initialize two tiles
         self.startTiles = 2
-        self.size = n
+        self.size = size
         self.grid = Grid(self.size)
         self.over        = False
         self.won         = False
@@ -176,7 +169,7 @@ class game2048:
 
                         # The mighty 2048 tile
                         if merged.value == 2048:
-                            self.won = true
+                            self.won = True
                             
                     else:
                         self.moveTile(tile, positions["farthest"])

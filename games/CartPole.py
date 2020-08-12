@@ -9,8 +9,8 @@ class CartPole(Game):
         self.name = "CartPole-v0"
         self.game = gym.make('CartPole-v0')
         self.game._max_episode_steps = 10000
-        self.observationSpace = 4
-        self.actionSpace = 2
+        self.observationSpace = self.game.observation_space.shape[0]
+        self.actionSpace = self.game.action_space.n
         self.state = None
         self.done = False
         self.reward = 0
@@ -26,7 +26,7 @@ class CartPole(Game):
         
     def takeAction(self, action):
         self.state, self.reward, self.done, _ = self.game.step(action)
-        return self.state, self.reward, self.done
+        return self.getState(), self.getReward(), self.getDone()
         
     def getDone(self):
         return self.done

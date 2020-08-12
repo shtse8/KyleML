@@ -17,7 +17,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torchvision.transforms as T
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Net(nn.Module):
     def __init__(self, input_size, output_size):
@@ -44,13 +44,13 @@ class DQNAgent(Agent):
         
         # Trainning
         self.weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + ".h5")
-        self.update_target_every = kwargs.get('update_target_every', 1000)
+        self.update_target_every = kwargs.get('update_target_every', 100)
         self.learning_rate = kwargs.get('learning_rate', .001)
         self.gamma = kwargs.get('gamma', 0.99)
         
         # Exploration
         self.epsilon_max = kwargs.get('epsilon_max', 1.00)
-        self.epsilon_min = kwargs.get('epsilon_min', 0.01)
+        self.epsilon_min = kwargs.get('epsilon_min', 0.1)
         self.epsilon_phase_size = kwargs.get('epsilon_phase_size', 0.5)
         self.epsilon = self.epsilon_max
         self.epsilon_decay = ((self.epsilon_max - self.epsilon_min) / (self.target_trains * self.epsilon_phase_size))
@@ -80,7 +80,6 @@ class DQNAgent(Agent):
         self.stmemory.clear()
         self.ltmemory = PrioritizedMemory(self.memory_size)
         self.updateTarget()
-        self.target_update_counter = 0
         return super().beginPhrase()
     
     def printSummary(self):
@@ -113,6 +112,7 @@ class DQNAgent(Agent):
              
             for e, t in zip(error, batch):
                 self.ltmemory.add(e.item(), t) 
+                # self.ltmemory.add(e.item(), t) 
 
             self.stmemory.clear()
             
@@ -152,7 +152,7 @@ class DQNAgent(Agent):
         if self.target_update_counter >= self.update_target_every:
             self.updateTarget()
             
-        self.lossHistory.append(loss.item())
+        self.total_loss += loss.item()
     
     def weighted_mse_loss(self, input, target, weight):
         return (weight * (input - target) ** 2).mean()

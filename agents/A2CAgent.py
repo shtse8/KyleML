@@ -1,172 +1,230 @@
 import os
-import tensorflow as tf
-from keras.optimizers import Adam, RMSprop
-from keras.utils import Sequence
-from keras.models import Sequential, Model
-from keras.layers import Dense, Dropout, Concatenate, Input, Flatten, Conv2D, Lambda, MaxPooling2D, Subtract, Add
-from keras.utils import to_categorical
-import keras.backend as K
-from multiprocessing import Pool, TimeoutError
 import __main__
 import random
 import numpy as np
-import pandas as pd
-from operator import add
 import sys
 import collections
 import math
 import time
-# from memories.Memory import Memory
-from memories.OnPolicy import OnPolicy
-from memories.Transition import Transition
+from memories.PrioritizedMemory import PrioritizedMemory
 from memories.SimpleMemory import SimpleMemory
-from policies.Policy import Greedy, GaussianEpsGreedy
+from memories.Transition import Transition
 from .Agent import Agent
 
-class A2CAgent(Agent):
-    def __init__(self, env, **kwargs) -> None:
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import torchvision.transforms as T
+
+
+def set_init(layers):
+    for layer in layers:
+        nn.init.normal_(layer.weight, mean=0., std=0.1)
+        nn.init.constant_(layer.bias, 0.)
+
+class Net(nn.Module):
+    def __init__(self, s_dim, a_dim):
+        super(Net, self).__init__()
+        self.s_dim = s_dim
+        self.a_dim = a_dim
+        self.pi1 = nn.Linear(s_dim, 128)
+        self.pi2 = nn.Linear(128, a_dim)
+        self.v1 = nn.Linear(s_dim, 128)
+        self.v2 = nn.Linear(128, 1)
+
+        set_init([self.pi1, self.pi2, self.v1, self.v2])
+        self.distribution = torch.distributions.Categorical
+        
+    def forward(self, x):
+        pi1 = torch.tanh(self.pi1(x))
+        logits = self.pi2(pi1)
+        v1 = torch.tanh(self.v1(x))
+        values = self.v2(v1)
+        return logits, values
+
+    def choose_action(self, s):
+        self.eval()
+        logits, _ = self.forward(s)
+        prob = F.softmax(logits, dim=1).data
+        m = self.distribution(prob)
+        return m.sample().numpy()[0]
+
+    def loss_func(self, s, a, v_t):
+        self.train()
+        logits, values = self.forward(s)
+        td = v_t - values
+        c_loss = td.pow(2)
+        
+        probs = F.softmax(logits, dim=1)
+        m = self.distribution(probs)
+        exp_v = m.log_prob(a) * td.detach().squeeze()
+        a_loss = -exp_v
+        total_loss = (c_loss + a_loss).mean()
+        return total_loss
+
+class DQNAgent(Agent):
+    def __init__(self, env, **kwargs):
         super().__init__(env, **kwargs)
         
-        self.training = True
-        self.nsteps = 1
+        # Trainning
+        self.weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + ".h5")
+        self.update_target_every = kwargs.get('update_target_every', 1000)
+        self.learning_rate = kwargs.get('learning_rate', .001)
+        self.gamma = kwargs.get('gamma', 0.99)
         
-        # History
-        self.actor_weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + "_actor.h5")
-        self.critic_weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + "_critic.h5")
-        self.learning_rate = kwargs.get('learning_rate', 0.001)
-        self.gamma = kwargs.get('gamma', 0.995)
-        self.value_loss = kwargs.get('value_loss', 0.5)
-        self.entropy_loss = kwargs.get('entropy_loss', 0.01)
+        # Exploration
+        self.epsilon_max = kwargs.get('epsilon_max', 1.00)
+        self.epsilon_min = kwargs.get('epsilon_min', 0.01)
+        self.epsilon_phase_size = kwargs.get('epsilon_phase_size', 0.5)
+        self.epsilon = self.epsilon_max
+        self.epsilon_decay = ((self.epsilon_max - self.epsilon_min) / (self.target_trains * self.epsilon_phase_size))
         
         # Memory
-        self.memory_size = kwargs.get('memory_size', 10000)
+        self.memory_size = kwargs.get('memory_size', 100000)
         
         # Mini Batch
         self.minibatch_size = kwargs.get('minibatch_size', 64)
         
-        self.train_overall_loss = []
-        self.memory = SimpleMemory(self.memory_size)
+        # self.ltmemory = collections.deque(maxlen=self.memory_size)
+        self.ltmemory = PrioritizedMemory(self.memory_size)
+        self.stmemory = SimpleMemory(self.memory_size)
         
-        self.actor = self.getActor()
-        self.critic = self.getCritic()
+        # Prediction model (the main Model)
+        self.model = Net(np.product(self.env.observationSpace), self.env.actionSpace)
+        # self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         
+        # Target model
+        self.model_target = Net(np.product(self.env.observationSpace), self.env.actionSpace)
         
+        self.target_update_counter = 0
+
+    def beginPhrase(self):
+        self.epsilon = self.epsilon_max
+        self.stmemory.clear()
+        self.ltmemory = PrioritizedMemory(self.memory_size)
+        self.updateTarget()
+        self.target_update_counter = 0
+        return super().beginPhrase()
+    
     def printSummary(self):
-        print(self.actor.summary())
-        print(self.critic.summary())
-    
-    def discount_rewards(self, reward):
-        # Compute the gamma-discounted rewards over an episode
-        running_add = 0
-        discounted_r = np.zeros_like(reward)
-        for i in reversed(range(0,len(reward))):
-            if reward[i] != 0: # reset the sum, since this was a game boundary (pong specific!)
-                running_add = 0
-            running_add = running_add * self.gamma + reward[i]
-            discounted_r[i] = running_add
-        # print(discounted_r, reward)
-        discounted_r -= np.mean(discounted_r) # normalizing the result
-        # discounted_r /= np.std(discounted_r) # divide by standard deviation
-        return discounted_r
+        print(self.model)
 
-
-    def getActor(self, training = True):
-        # Define two input layers
-    
-        state_input = Input(self.env.observationSpace, name="state_input")
-        x = state_input
-        x = Flatten()(state_input)
-        x = Dense(128, activation='relu')(x)
-        x = Dense(64, activation='relu')(x)
-        x = Dense(32, activation='relu')(x)
-        # x = Dropout(0.5)(x, training = training)
-        
-        output = Dense(self.env.actionSpace, activation='softmax', kernel_initializer='he_uniform')(x) # Actor (Policy Network)
-        model = Model(inputs=[state_input], outputs=output)
-        opt = RMSprop(lr=self.learning_rate)
-        model.compile(loss='sparse_categorical_crossentropy', optimizer=opt)
-        return model
-        
-    def getCritic(self, training = True):
-    
-        state_input = Input(self.env.observationSpace, name="state_input")
-        x = state_input
-        x = Flatten()(state_input)
-        x = Dense(128, activation='relu')(x)
-        x = Dense(64, activation='relu')(x)
-        x = Dense(32, activation='relu')(x)
-        # x = Dropout(0.5)(x, training = training)
-        
-        output = Dense(1, kernel_initializer='he_uniform')(x) # Actor (Policy Network)
-        model = Model(inputs=[state_input], outputs=output)
-        opt = RMSprop(lr=self.learning_rate)
-        model.compile(loss='mse', optimizer=opt)
-        return model
-    
-    def getAction(self, state):
-        # print(np.array(state))
-        prediction = self.actor.predict([np.array([state])])[0]
-        # print(prediction)
-        action = np.random.choice(self.env.actionSpace, p=prediction)
-        # print(action)
-        return action
-            
-    
     def commit(self, transition: Transition):
-        self.memory.add(transition)
+        self.stmemory.add(transition)
         super().commit(transition)
         
+    def update_epsilon(self):
+        if self.epsilon > self.epsilon_min:
+            self.epsilon -= self.epsilon_decay
+            self.epsilon = max(self.epsilon_min, self.epsilon)
+    
+    def getAction(self, state):
+        if self.isTraining() and np.random.uniform() < self.epsilon:
+            action = random.randint(0, self.env.actionSpace - 1)
+        else:
+            self.model.eval()
+            stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
+            prediction = self.model(stateTensor)
+            action = prediction.argmax().item()
+        return action
+    
     def endEpisode(self):
-        self.learn()
+        if self.isTraining():
+            batch = self.stmemory.get()
+            
+            _, _, error = self.prepareData(batch)
+             
+            for e, t in zip(error, batch):
+                self.ltmemory.add(e.item(), t) 
+
+            self.stmemory.clear()
+            
+            self.learn()
+            self.update_epsilon()
+        
         super().endEpisode()
       
     def learn(self):
         
-        tic = time.perf_counter()
-        loss = 0
+        # loss = 0
         
-        states, actions, rewards, _, _ = self.memory.get()
+        # batch_size = min(len(self.stmemory), self.minibatch_size)
+        # batch = random.sample(self.stmemory, batch_size)
+        idxs, batch, is_weights = self.ltmemory.sample(self.minibatch_size)
+        # print(idxs, batch, is_weight)
         
-        # Compute discounted rewards
-        discounted_r = self.discount_rewards(rewards)
-        # print(discounted_r)
+        q_value, expected_q_value, error = self.prepareData(batch)
+        self.ltmemory.batch_update(idxs, error.detach().numpy())
+        
+        is_weights = torch.tensor(is_weights, dtype=torch.float)
+        loss = self.weighted_mse_loss(q_value, expected_q_value, is_weights)
+        
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+        # Update target model counter every episode
+        self.target_update_counter += 1
+        
+        # If counter reaches set value, update target model with weights of main model
+        if self.target_update_counter >= self.update_target_every:
+            self.updateTarget()
+            
+        self.lossHistory.append(loss.item())
+    
+    def weighted_mse_loss(self, input, target, weight):
+        return (weight * (input - target) ** 2).mean()
 
-        values = self.critic.predict([states])[:, 0]
-        # Compute advantages
-        advantages = discounted_r - values
-        # training Actor and Critic networks
-        # print(advantages)
-        result = self.actor.fit([states], actions, sample_weight=advantages, epochs=1, verbose=0)
-        loss += result.history['loss'][0]
-        reuslt = self.critic.fit([states], discounted_r, epochs=1, verbose=0)
-        loss += result.history['loss'][0]
-        # reset training memory
-        self.memory.clear()
+    def prepareData(self, batch):
+        self.model.train()
         
-            
-        self.save()
-            
+        states = np.array([x.state for x in batch])
+        states = torch.tensor(states, dtype=torch.float).view(states.shape[0], -1)
+        
+        actions = np.array([x.action for x in batch])
+        actions = torch.tensor(actions, dtype=torch.long)
+        
+        rewards = np.array([x.reward for x in batch])
+        rewards = torch.tensor(rewards, dtype=torch.float)
+        
+        dones = np.array([x.done for x in batch])
+        dones = torch.tensor(dones, dtype=torch.float)
                 
-        toc = time.perf_counter()
-        return {
-            'loss': loss,
-            'duration': toc - tic
-        }
-
+        nextStates = np.array([x.nextState for x in batch])
+        nextStates = torch.tensor(nextStates, dtype=torch.float).view(nextStates.shape[0], -1)
+        
+        target_next_q_values = self.model_target(nextStates)
+        
+        results = self.model(torch.cat((states, nextStates), 0))
+        q_values = results[0:len(states)]
+        next_q_values = results[len(states):]
+        
+        q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+        next_q_value = target_next_q_values.gather(1, next_q_values.argmax(1).unsqueeze(1)).squeeze(1)
+        expected_q_value = rewards + self.gamma * next_q_value * (1 - dones)
+        error = (q_value - expected_q_value).abs()
+        
+        return q_value, expected_q_value, error
+    
     def save(self):
         try:
-            self.actor.save_weights(self.actor_weights_path)
-            self.critic.save_weights(self.critic_weights_path)
+            torch.save(self.model.state_dict(), self.weights_path)
             # print("Saved Weights.")
         except:
             print("Failed to save.")
         
     def load(self):
         try:
-            self.actor.load_weights(self.actor_weights_path)
-            self.critic.load_weights(self.critic_weights_path)
-            # print("Weights loaded.")
+            # self.model.load_weights(self.weights_path)
+            self.model.load_state_dict(torch.load(self.weights_path))
+            print("Weights loaded.")
         except:
             print("Failed to load.")
     
+    def updateTarget(self):
+        # print("Target is updated.")
+        self.model_target.load_state_dict(self.model.state_dict())
+        self.target_update_counter = 0
                 

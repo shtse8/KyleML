@@ -6,6 +6,7 @@ class PrioritizedMemory(object):  # stored as ( s, a, r, s_ ) in SumTree
     a = 0.6
     beta = 0.4
     beta_increment_per_sampling = 0.001
+    abs_err_upper = 1.  # clipped abs error
 
     def __init__(self, capacity):
         self.tree = SumTree(capacity)
@@ -14,9 +15,11 @@ class PrioritizedMemory(object):  # stored as ( s, a, r, s_ ) in SumTree
     def _get_priority(self, error):
         return (np.abs(error) + self.e) ** self.a
 
-    def add(self, error, sample):
-        p = self._get_priority(error)
-        self.tree.add(p, sample)
+    def add(self, sample):
+        max_p = self.tree.max_p
+        if max_p == 0:
+            max_p = self.abs_err_upper
+        self.tree.add(max_p, sample)
 
     def sample(self, n):
         batch = []
@@ -56,10 +59,18 @@ class SumTree:
         self.tree = np.zeros(2 * capacity - 1)
         self.data = np.zeros(capacity, dtype=object)
         self.n_entries = 0
+        self.max_p = 0
 
     def update(self, tree_idx, p):
+        # update leaf node
         change = p - self.tree[tree_idx]
+        isMax = self.tree[tree_idx] == self.max_p
         self.tree[tree_idx] = p
+        if isMax:
+            self.max_p = np.max(self.tree[-self.capacity:])
+        elif p > self.max_p:
+            self.max_p = p
+
         # then propagate the change through tree
         while tree_idx != 0:    # this method is faster than the recursive loop in the reference code
             tree_idx = (tree_idx - 1) // 2

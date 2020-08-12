@@ -11,6 +11,7 @@ import math
 import time
 import matplotlib.pyplot as plt
 from memories.Transition import Transition
+from utils.errors import InvalidAction
 from enum import Enum
 
 class Phrase(Enum):
@@ -80,8 +81,14 @@ class Agent(object):
                     state = self.env.reset()
                     done = False
                     while not done:
-                        action = self.getAction(state)
-                        nextState, reward, done = self.env.takeAction(action)
+                        actionMask = np.ones(self.env.actionSpace)
+                        while True:
+                            try:
+                                action = self.getAction(state, actionMask)
+                                nextState, reward, done = self.env.takeAction(action)
+                                break
+                            except InvalidAction:
+                                actionMask[action] = 0
                         self.commit(Transition(state, action, reward, nextState, done))
                         state = nextState
                         if self.isPlaying():

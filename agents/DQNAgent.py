@@ -50,7 +50,7 @@ class DQNAgent(Agent):
         
         # Exploration
         self.epsilon_max = kwargs.get('epsilon_max', 1.00)
-        self.epsilon_min = kwargs.get('epsilon_min', 0.1)
+        self.epsilon_min = kwargs.get('epsilon_min', 0.01)
         self.epsilon_phase_size = kwargs.get('epsilon_phase_size', 0.5)
         self.epsilon = self.epsilon_max
         self.epsilon_decay = ((self.epsilon_max - self.epsilon_min) / (self.target_trains * self.epsilon_phase_size))
@@ -86,7 +86,9 @@ class DQNAgent(Agent):
         print(self.model)
 
     def commit(self, transition: Transition):
-        self.stmemory.add(transition)
+        if self.isTraining():
+            # self.stmemory.add(transition)
+            self.ltmemory.add(transition)
         super().commit(transition)
         
     def update_epsilon(self):
@@ -94,18 +96,21 @@ class DQNAgent(Agent):
             self.epsilon -= self.epsilon_decay
             self.epsilon = max(self.epsilon_min, self.epsilon)
     
-    def getAction(self, state):
+    def getAction(self, state, actionMask = None):
         if self.isTraining() and np.random.uniform() < self.epsilon:
             action = random.randint(0, self.env.actionSpace - 1)
         else:
             self.model.eval()
             stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
-            prediction = self.model(stateTensor)
-            action = prediction.argmax().item()
+            prediction = self.model(stateTensor).detach().numpy()
+            if actionMask is not None:
+                prediction *= actionMask
+            action = np.argmax(prediction)
         return action
     
     def endEpisode(self):
         if self.isTraining():
+            """ 
             batch = self.stmemory.get()
             
             _, _, error = self.prepareData(batch)
@@ -115,7 +120,7 @@ class DQNAgent(Agent):
                 # self.ltmemory.add(e.item(), t) 
 
             self.stmemory.clear()
-            
+            """
             self.learn()
             self.update_epsilon()
         
@@ -139,8 +144,8 @@ class DQNAgent(Agent):
         self.optimizer.zero_grad()
         loss.backward()
         # If the divergence of loss value is caused by gradient explode, you can clip the gradient. In Deepmind's 2015 DQN, the author clipped the gradient by limiting the value within [-1, 1]. 
-        # for param in self.model.parameters():
-            # param.grad.data.clamp_(-1, 1)
+        for param in self.model.parameters():
+            param.grad.data.clamp_(-1, 1)
         # In the other case, the author of Prioritized Experience Replay clip gradient by limiting the norm within 10.
         # nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
         self.optimizer.step()

@@ -29,7 +29,6 @@ class PrioritizedMemory(object):  # stored as ( s, a, r, s_ ) in SumTree
         self.beta = np.min([1., self.beta + self.beta_increment_per_sampling])  # max = 1
 
         min_prob = np.min(self.tree.tree[-self.tree.capacity:]) / self.tree.total_p     # for later calculate ISweight
-        print("min_prob", min_prob, self.tree.tree)
         for i in range(n):
             a, b = pri_seg * i, pri_seg * (i + 1)
             v = np.random.uniform(a, b)
@@ -58,7 +57,6 @@ class SumTree(object):
     def __init__(self, capacity):
         self.capacity = capacity  # for all priority values
         self.tree = np.zeros(2 * capacity - 1)
-        print(self.tree)
         # [--------------Parent nodes-------------][-------leaves to recode priority-------]
         #             size: capacity - 1                       size: capacity
         self.data = np.zeros(capacity, dtype=object)  # for all transitions

@@ -183,6 +183,8 @@ class game2048:
 
             if not self.movesAvailable():
                 self.over = True # Game over!
+
+        return moved
        
     def getVector(self, direction):
         # Coords representing tile movement

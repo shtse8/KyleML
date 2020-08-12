@@ -1,10 +1,12 @@
 import numpy as np
 import math
 
+from utils.errors import InvalidAction
 from .src.game2048 import game2048
 from .Game import Game
 import gym
 # import gym_2048
+
 
 class Puzzle2048(Game):
     def __init__(self):
@@ -23,13 +25,15 @@ class Puzzle2048(Game):
         state = np.zeros((self.size, self.size), dtype=int)
         for _, _, cell in self.game.grid.eachCell():
             if cell:
-                state[cell.x][cell.y] = cell.value
+                state[cell.x][cell.y] = math.log2(cell.value)
         return state
         
     def takeAction(self, action):
         score = self.game.score
-        self.game.move(action)
+        moved = self.game.move(action)
         self.reward = self.game.score - score
+        if not moved:
+            raise InvalidAction()
         # self.game.update()
         return self.getState(), self.getReward(), self.getDone()
         

@@ -44,7 +44,7 @@ class DQNAgent(Agent):
         
         # Trainning
         self.weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + ".h5")
-        self.update_target_every = kwargs.get('update_target_every', 100)
+        self.update_target_every = kwargs.get('update_target_every', 1000)
         self.learning_rate = kwargs.get('learning_rate', .001)
         self.gamma = kwargs.get('gamma', 0.99)
         
@@ -98,15 +98,14 @@ class DQNAgent(Agent):
     
     def getAction(self, state, actionMask = None):
         if self.isTraining() and np.random.uniform() < self.epsilon:
-            action = random.randint(0, self.env.actionSpace - 1)
+            prediction = np.random.rand(self.env.actionSpace)
         else:
             self.model.eval()
             stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
             prediction = self.model(stateTensor).detach().numpy()
-            if actionMask is not None:
-                prediction *= actionMask
-            action = np.argmax(prediction)
-        return action
+        if actionMask is not None:
+            prediction *= actionMask
+        return np.argmax(prediction)
     
     def endEpisode(self):
         if self.isTraining():

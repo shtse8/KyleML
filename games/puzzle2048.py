@@ -16,24 +16,25 @@ class Puzzle2048(Game):
         self.reward = 0
     
     def reset(self):
-        self.game = game2048(4)
-        # self.game.food.x = self.game.player.x + 2
-        # self.game.food.y = self.game.player.y
+        self.game = game2048(self.size)
         return self.getState()
         
     def getState(self):
-        return self.game.game_state
+        state = np.zeros((self.size, self.size), dtype=int)
+        for _, _, cell in self.game.grid.eachCell():
+            if cell:
+                state[cell.x][cell.y] = cell.value
+        return state
         
     def takeAction(self, action):
-        action_map = ["up", "down", "left", "right",]
-        score = self.game.get_score()
-        self.game.swipe(action_map[action])
-        self.reward = self.game.get_score() - score
+        score = self.game.score
+        self.game.move(action)
+        self.reward = self.game.score - score
         # self.game.update()
         return self.getState(), self.getReward(), self.getDone()
         
     def getDone(self):
-        return self.game.check_for_game_over()
+        return self.game.isGameTerminated()
         
     def getReward(self):
         return self.reward

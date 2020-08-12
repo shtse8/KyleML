@@ -1,7 +1,6 @@
 import numpy as np
 import math
 
-
 #parameters
 TWO_FREQ = 0.75 #twos appear this fraction of the time and 4s appear 1-TWO_FREQ
 
@@ -9,162 +8,249 @@ TWO_FREQ = 0.75 #twos appear this fraction of the time and 4s appear 1-TWO_FREQ
 MAX_SCORE_SCALE = 10
 SUM_SCORE_SCALE = 1
 
+class Traversal:
+    def __init__(self):
+        self.x = []
+        self.y = []
+
+class Coord:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+class Vector(Coord):
+    def __init__(self, x, y):
+        super().__init__(x, y)
+        
+class Tile(Coord):
+    def __init__(self, position, value = 2):
+        super().__init__(position.x, position.y)
+        self.value = value
+        
+        self.previousPosition = None
+        self.mergedFrom       = None # Tracks tiles that merged together
+
+    def savePosition(self):
+        self.previousPosition = Coord(self.x, self.y)
+
+    def updatePosition(self, position):
+        self.x = position.x
+        self.y = position.y
+
+class Grid:
+    def __init__(self, size, previousState = None):
+        self.size = size
+        self.cells =  self.fromState(previousState) if previousState != None else self.empty()
+        
+    def empty(self):
+        return np.empty((self.size, self.size), dtype=object)
+        
+    def fromState(self, state):
+        cells = []
+
+        for i in range(self.size):
+            row = cells[x] = []
+            
+            for y in range(self.size):
+                tile = state[x][y]
+                row.append(tile if Tile(tile.position, tile.value) else None)
+                
+        return cells
+    
+    def randomAvailableCell(self):
+        cells = self.availableCells()
+
+        if len(cells) > 0:
+            return np.random.choice(cells)
+            
+            
+    def availableCells(self):
+        cells = []
+        
+        for x, y, tile in self.eachCell():
+            if not tile:
+                cells.append(Coord(x, y))
+                
+        return np.array(cells)
+
+    def eachCell(self):
+        for x in range(self.size):
+            for y in range(self.size):
+                yield x, y, self.cells[x][y]
+            
+    def cellsAvailable(self):
+        return len(self.availableCells()) > 0
+        
+    def cellAvailable(self, cell):
+        return not self.cellOccupied(cell)
+        
+    def cellOccupied(self, cell):
+        return self.cellContent(cell) != None
+        
+    def cellContent(self, cell):
+        if self.withinBounds(cell):
+            return self.cells[cell.x][cell.y]
+        else:
+            return None
+            
+    def insertTile(self, tile):
+        self.cells[tile.x][tile.y] = tile
+        
+    def removeTile(self, tile):
+        self.cells[tile.x][tile.y] = None
+        
+    def withinBounds(self, position):
+        return position.x >= 0 and position.x < self.size and position.y >= 0 and position.y < self.size
+    
 class game2048:
 
     def __init__(self, n, random_stream=np.random.RandomState()):
         #create a new game and initialize two tiles
-        self.n = n
-        self.game_state = np.zeros([n, n])
-        self.random_stream = random_stream
-        self.generate_tile()
-        self.generate_tile()
-        self.score = 0
-        self.moved = False
-    def get_tile(self, row, col):
-        return self.game_state[row][col]
+        self.startTiles = 2
+        self.size = n
+        self.grid = Grid(self.size)
+        self.over        = False
+        self.won         = False
+        self.keepPlaying = True
+        self.score       = 0
+        # Add the initial tiles
+        self.addStartTiles()
+    
+    def addStartTiles(self):
+        for i in range(self.startTiles):
+            self.addRandomTile()
+            
+    def addRandomTile(self):
+        if self.grid.cellsAvailable():
+            value = 2 if np.random.uniform() < 0.9 else 4
+            tile = Tile(self.grid.randomAvailableCell(), value)
+            
+            self.grid.insertTile(tile)
+            
+    def prepareTiles(self):
+        for _, _, tile in self.grid.eachCell():
+            if tile:
+                tile.mergedFrom = None
+                tile.savePosition()
+                
+    def moveTile(self, tile, cell):
+        self.grid.cells[tile.x][tile.y] = None
+        self.grid.cells[cell.x][cell.y] = tile
+        tile.updatePosition(cell)
+        
+    def isGameTerminated(self):
+        return self.over or (self.won and not self.keepPlaying)
+        
+    def move(self, direction):
+        if self.isGameTerminated():
+            return # Don't do anything if the game's over
 
-    def get_empty_idx(self):
-        # determine which tiles are empty and return list of linear indeces
-        idx = np.arange(self.n**2)
-        return idx[np.reshape(self.game_state, -1) == 0]
+        vector = self.getVector(direction)
+        traversals = self.buildTraversals(vector)
+        moved = False
 
-    def generate_tile(self):
-        # randomly choose empty slot and value for new tile
-        tile_idx = self.random_stream.choice(self.get_empty_idx(), 1)
-        if self.random_stream.random_sample() < TWO_FREQ:
-            tile_val = 2
-        else:
-            tile_val = 4
-        self.place_tile(tile_idx, tile_val)
+        self.prepareTiles()
 
-    def place_tile(self, idx, val):
-        # place given value tile at specified index
-        if idx.shape[0] == 1:
-            self.game_state[self.idx_lin2vec(idx)] = val
-        elif idx.shape[0] == 2:
-            self.game_state[idx] = val
-        else:
-            raise ValueError('Invalid array size')
+        # Traverse the grid in the right direction and move tiles
+        for x in traversals.x:
+            for y in traversals.y:
+                cell = Coord(x, y)
+                tile = self.grid.cellContent(cell)
+                if tile:
+                    positions = self.findFarthestPosition(cell, vector)
+                    next = self.grid.cellContent(positions["next"])
+                        
+                    # Only one merger per row traversal?
+                    if next and next.value == tile.value and not next.mergedFrom:
+                        merged = Tile(positions["next"], tile.value * 2)
+                        merged.mergedFrom = [tile, next]
+                        
+                        self.grid.insertTile(merged)
+                        self.grid.removeTile(tile)
+                        
+                        # Converge the two tiles' positions
+                        tile.updatePosition(positions["next"])
 
-    def idx_lin2vec(self, idx_lin):
-        # convert linear index into xy coordinates
-        x = math.floor(idx_lin / self.n)
-        y = idx_lin - x*self.n
-        return x, y
+                        # Update the score
+                        self.score += merged.value
 
-    def idx_vec2lin(self, idx_vec):
-        # convert xy cooreindate into linear index
-        return self.n*idx_vec[0] + idx_vec[1]
+                        # The mighty 2048 tile
+                        if merged.value == 2048:
+                            self.won = true
+                            
+                    else:
+                        self.moveTile(tile, positions["farthest"])
+                    
 
-    def show_state(self):
-        print(self.game_state)
+                    if not self.positionsEqual(cell, tile):
+                        moved = True # The tile moved from its original cell!
+                        
+        if moved:
+            self.addRandomTile()
 
-    def swipe(self, swipe_direction):
-        # old_state = np.copy(self.game_state)
-        self.moved = False
-        if swipe_direction == 'left':
-            for i in range(self.n):
-                self.move_col(i, -1)
-        elif swipe_direction == 'right':
-            for i in range(self.n-1, -1, -1):
-                self.move_col(i, 1)
-        elif swipe_direction == 'up':
-            for i in range(self.n):
-                self.move_row(i, -1)
-        elif swipe_direction == 'down':
-            for i in range(self.n-1, -1, -1):
-                self.move_row(i, 1)
-        else:
-            raise ValueError('invalid direction')
+            if not self.movesAvailable():
+                self.over = True # Game over!
+       
+    def getVector(self, direction):
+        # Coords representing tile movement
+        map = [
+            Vector(0, -1), # Up
+            Vector(1, 0),  # Right
+            Vector(0, 1),  # Down
+            Vector(-1, 0)  # Left
+        ]
 
-        # only generate a new tile if the game state changed
-        if self.moved:
-            self.generate_tile()
+        return map[direction]
+            
+    def buildTraversals(self, vector):
+        traversals = Traversal();
+        
+        for pos in range(self.size):
+            traversals.x.append(pos)
+            traversals.y.append(pos)
+            
+        # Always traverse from the farthest cell in the chosen direction
+        if vector.x == 1:
+            traversals.x.reverse()
+        if vector.y == 1:
+            traversals.y.reverse()
+            
+        return traversals
 
-    def check_for_game_over(self):
-        # if np.any(self.game_state == 2048):
-            # return "WIN"
+    def findFarthestPosition(self, cell, vector):
+        # Progress towards the vector direction until an obstacle is found
+        while True:
+            previous = cell;
+            cell     = Coord(previous.x + vector.x, previous.y + vector.y)
+            if not (self.grid.withinBounds(cell) and self.grid.cellAvailable(cell)):
+                break
+            
 
-        if self.is_board_full() and self.check_for_valid_moves() == False:
-            return True
-        else:
-            return False
-
-    def check_for_valid_moves(self):
+        return {
+            "farthest": previous,
+            "next": cell # Used to check if a merge is required
+        }
+    
+    def movesAvailable(self):
+        return self.grid.cellsAvailable() or self.tileMatchesAvailable()
+        
+    def tileMatchesAvailable(self):
+        for x in range(self.size):
+            for y in range(self.size):
+                tile = self.grid.cellContent(Coord(x, y))
+                
+                if tile:
+                    for direction in range(4):
+                        vector = self.getVector(direction)
+                        cell = Coord(x + vector.x, y + vector.y)
+                        
+                        other = self.grid.cellContent(cell)
+                        
+                        if other and other.value == tile.value:
+                            return True
         return False
-        valid_moves = False
-        old_state = np.copy(self.game_state)
-        for move in ['up','down','left','right']:
-            self.swipe(move)
-            if not np.array_equal(old_state, self.game_state):
-                valid_moves = True
-                self.game_state = np.copy(old_state)
-                break
-            else:
-                self.game_state = np.copy(old_state)
-
-        return valid_moves
-
-    def is_board_full(self):
-        return np.all(self.game_state != 0)
-
-    def move_row(self, row, direction):
-        for i in range(self.n):
-            self.move_val(np.array([row, i]), np.array([direction, 0]))
-
-    def move_col(self, col, direction):
-        for i in range(self.n):
-            self.move_val(np.array([i, col]), np.array([0, direction]))
-
-    def move_val(self, idx, vec):
-        # move value at idx=[x,y] in direction of vec (i.e. [1,0])
-
-        val = self.game_state[idx[0], idx[1]]
-        blocked = False
-
-        while not blocked:
-            idx_new = idx + vec
-            #if np.any(moved_idx < 0) or np.any(moved_idx >= self.n):
-            if np.any(np.logical_or(idx_new < 0, idx_new >= self.n)):
-                break
-
-            adjacent_val = self.game_state[idx_new[0], idx_new[1]]
-            current_val = self.game_state[idx[0], idx[1]]
-            if adjacent_val == 0:
-                self.game_state[idx[0], idx[1]] = 0
-                self.game_state[idx_new[0], idx_new[1]] = val
-                idx = idx_new
-                self.moved = True
-            elif adjacent_val == current_val:
-                self.game_state[idx[0], idx[1]] = 0
-                self.game_state[idx_new[0], idx_new[1]] += val
-                self.score += self.game_state[idx_new[0], idx_new[1]]
-                self.moved = True
-                break
-            else:
-                break
-
-    def get_state(self, flat=False):
-        if flat:
-            return self.game_state.reshape(-1)
-        else:
-            return self.game_state
-
-    def get_score(self):
-        return self.score
-        # max_val = np.max(np.max(self.game_state))
-        # board_sum = np.sum(np.sum(self.game_state))
-        # score = MAX_SCORE_SCALE * max_val + SUM_SCORE_SCALE * board_sum
-        # return score
-
-
-if __name__ == '__main__':
-    mygame = game2048(4)
-    mygame.generate_tile()
-    mygame.generate_tile()
-    mygame.show_state()
-    print('====================')
-    mygame.swipe('right')
-    mygame.show_state()
-    print(mygame.get_state(True))
-    print(mygame.get_score())
+        
+    def positionsEqual(self, first, second):
+        return first.x == second.x and first.y == second.y
+        
+    

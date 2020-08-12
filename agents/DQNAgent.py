@@ -44,7 +44,7 @@ class DQNAgent(Agent):
         
         # Trainning
         self.weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + ".h5")
-        self.update_target_every = kwargs.get('update_target_every', 1000)
+        self.update_target_every = kwargs.get('update_target_every', 100)
         self.learning_rate = kwargs.get('learning_rate', .001)
         self.gamma = kwargs.get('gamma', 0.99)
         

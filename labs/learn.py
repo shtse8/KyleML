@@ -1,14 +1,15 @@
 import random
 import numpy as np
-
+import math
 
 class Tree:
     def __init__(self, capacity):
         self.capacity = capacity
         self.treeLenght = 2 * capacity - 1
         self.sumTree = np.zeros(self.treeLenght)
-        self.minTree = np.zeros(self.treeLenght)
-        self.maxTree = np.zeros(self.treeLenght)
+        self.minTree = np.full(self.treeLenght, math.inf)
+        self.minTree2 = np.full(self.treeLenght, -math.inf)
+        self.maxTree = np.full(self.treeLenght, -math.inf)
         self.data = np.zeros(capacity, dtype=object)
         self.n_entries = 0
 
@@ -17,6 +18,7 @@ class Tree:
         change = p - self.sumTree[tree_idx]
         self.sumTree[tree_idx] = p
         self.minTree[tree_idx] = p
+        self.minTree2[tree_idx] = p
         self.maxTree[tree_idx] = p
         
         # then propagate the change through tree
@@ -24,9 +26,8 @@ class Tree:
             tree_idx = self.getParentIndex(tree_idx)
             self.sumTree[tree_idx] += change
             self.minTree[tree_idx] = min(self.minTree[self.getLeftIndex(tree_idx)], self.minTree[self.getRightIndex(tree_idx)])
-            m = max(self.maxTree[self.getLeftIndex(tree_idx)], self.maxTree[self.getRightIndex(tree_idx)])
-            print("max", m, "sum", self.sumTree[tree_idx])
-            self.maxTree[tree_idx] = m
+            self.minTree2[tree_idx] = min(self.minTree2[self.getLeftIndex(tree_idx)], self.minTree2[self.getRightIndex(tree_idx)])
+            self.maxTree[tree_idx] = max(self.maxTree[self.getLeftIndex(tree_idx)], self.maxTree[self.getRightIndex(tree_idx)])
             
     def sum(self):
         return self.sumTree[0]
@@ -45,7 +46,7 @@ class Tree:
             if cl_idx >= self.treeLenght:        # reach bottom, end search
                 break
             else:
-                if self.minTree[cl_idx] <= self.minTree[idx]:
+                if self.minTree2[cl_idx] <= self.minTree2[idx]:
                     idx = cl_idx
                 else:
                     idx = cr_idx
@@ -53,61 +54,47 @@ class Tree:
         
     def add(self, p, data):
         tree_idx = self.getMinLeafIndex()
-        data_pointer = tree_idx + 1 - self.capacity
-        self.data[data_pointer] = data  # update data_frame
+        data_idx = self.getDataIndex(tree_idx)
+        self.data[data_idx] = data  # update data_frame
         self.update(tree_idx, p)  # update tree_frame
 
         if self.n_entries < self.capacity:
             self.n_entries += 1
             
-    def getParentIndex(self, idx):
-        return (idx - 1) // 2
+    def getParentIndex(self, tree_idx):
+        return (tree_idx - 1) // 2
     
-    def getLeftIndex(self, idx):
-        return 2 * idx + 1
+    def getLeftIndex(self, tree_idx):
+        return 2 * tree_idx + 1
         
-    def getRightIndex(self, idx):
-        return self.getLeftIndex(idx) + 1
+    def getRightIndex(self, tree_idx):
+        return self.getLeftIndex(tree_idx) + 1
+        
+    def getDataIndex(self, tree_idx):
+        return tree_idx + 1 - self.capacity
         
     def get(self, v):
-        """
-        Tree structure and array storage:
-        Tree index:
-             0         -> storing priority sum
-            / \
-          1     2
-         / \   / \
-        3   4 5   6    -> storing priority for transitions
-        Array type for storing:
-        [0,1,2,3,4,5,6]
-        """
-        parent_idx = 0
-        while True:     # the while loop is faster than the method in the reference code
-            cl_idx = self.getLeftIndex(parent_idx)        # this leaf's left and right kids
-            cr_idx = self.getRightIndex(parent_idx)
+        idx = 0
+        while True:
+            cl_idx = self.getLeftIndex(idx)
+            cr_idx = self.getRightIndex(idx)
             if cl_idx >= self.treeLenght:        # reach bottom, end search
-                print(parent_idx, "reach")
-                leaf_idx = parent_idx
                 break
             else:       # downward search, always search for a higher priority node
                 if v <= self.sumTree[cl_idx]:
-                    print(parent_idx, "left")
-                    parent_idx = cl_idx
+                    idx = cl_idx
                 else:
-                    print(parent_idx, "right")
                     v -= self.sumTree[cl_idx]
-                    parent_idx = cr_idx
+                    idx = cr_idx
 
-        data_idx = leaf_idx - self.capacity + 1
-        return data_idx, self.sumTree[leaf_idx], self.data[data_idx]
-
+        return idx, self.sumTree[idx], self.data[self.getDataIndex(idx)]
 # 10 + 10
 # [0, 10] [10, 20]
-tree = Tree(11)
+tree = Tree(20)
 
 
 # print(random.uniform(0, 55))
-tree.add(0.01, 0)
+# tree.add(0.01, 0)
 tree.add(1, 1)
 tree.add(2, 2)
 tree.add(3, 3)
@@ -135,3 +122,4 @@ print(tree.get(0))
 print(tree.sumTree)
 print(tree.maxTree)
 print(tree.minTree)
+print(tree.minTree2)

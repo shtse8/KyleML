@@ -1,5 +1,6 @@
 import random
 import numpy as np
+import math 
 
 class PrioritizedMemory(object):
     e = 0.01
@@ -18,7 +19,7 @@ class PrioritizedMemory(object):
     def add(self, sample):
         # print(self.tree.max(), self.tree.min(), self.tree.sum())
         max_p = self.tree.max()
-        if max_p == 0:
+        if max_p == -math.inf:
             max_p = 1
         # print(max_p)
         self.tree.add(max_p, sample)
@@ -26,6 +27,8 @@ class PrioritizedMemory(object):
     def sample(self, n):
         batch = []
         idxs = []
+        
+        # proportional prioritization
         # segmented for preventing duplicated item
         segment = self.tree.sum() / n 
         priorities = []
@@ -37,16 +40,22 @@ class PrioritizedMemory(object):
             b = segment * (i + 1)
 
             # s = random.uniform(a, b)
+            # We shouldn't use uniform because the margins will be overlapped.
             s = random.random() * ( b - a ) + a
             (idx, p, data) = self.tree.get(s)
             priorities.append(p)
             batch.append(data)
             idxs.append(idx)
 
+        # = (1 / N * 1 / P(i)) ^ beta = (N * P(i)) ^ -beta
         sampling_probabilities = priorities / self.tree.sum()
-        # = (1 / N * 1 / P(i)) & beta
         is_weight = np.power(self.tree.n_entries * sampling_probabilities, -self.beta)
-        is_weight /= is_weight.max()
+        
+        # Normalize to [0, 1]
+        min_probabilities = self.tree.min() / self.tree.sum()
+        max_is_weight = np.power(self.tree.n_entries * min_probabilities, -self.beta)
+        
+        is_weight /= max_is_weight
 
         return idxs, batch, is_weight
 
@@ -55,21 +64,26 @@ class PrioritizedMemory(object):
             p = self._get_priority(e)
             self.tree.update(ti, p)
 
+
+
 class Tree:
     def __init__(self, capacity):
         self.capacity = capacity
         self.treeLenght = 2 * capacity - 1
         self.sumTree = np.zeros(self.treeLenght)
-        self.minTree = np.zeros(self.treeLenght)
-        self.maxTree = np.zeros(self.treeLenght)
+        self.minTree = np.full(self.treeLenght, math.inf)
+        self.minTree2 = np.full(self.treeLenght, -math.inf)
+        self.maxTree = np.full(self.treeLenght, -math.inf)
         self.data = np.zeros(capacity, dtype=object)
         self.n_entries = 0
 
     def update(self, tree_idx, p):
         # update leaf node
+        
         change = p - self.sumTree[tree_idx]
         self.sumTree[tree_idx] = p
         self.minTree[tree_idx] = p
+        self.minTree2[tree_idx] = p
         self.maxTree[tree_idx] = p
         
         # then propagate the change through tree
@@ -77,6 +91,7 @@ class Tree:
             tree_idx = self.getParentIndex(tree_idx)
             self.sumTree[tree_idx] += change
             self.minTree[tree_idx] = min(self.minTree[self.getLeftIndex(tree_idx)], self.minTree[self.getRightIndex(tree_idx)])
+            self.minTree2[tree_idx] = min(self.minTree2[self.getLeftIndex(tree_idx)], self.minTree2[self.getRightIndex(tree_idx)])
             self.maxTree[tree_idx] = max(self.maxTree[self.getLeftIndex(tree_idx)], self.maxTree[self.getRightIndex(tree_idx)])
             
     def sum(self):
@@ -96,7 +111,7 @@ class Tree:
             if cl_idx >= self.treeLenght:        # reach bottom, end search
                 break
             else:
-                if self.minTree[cl_idx] <= self.minTree[idx]:
+                if self.minTree2[cl_idx] <= self.minTree2[idx]:
                     idx = cl_idx
                 else:
                     idx = cr_idx

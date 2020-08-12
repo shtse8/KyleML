@@ -36,13 +36,15 @@ class PrioritizedMemory(object):
             a = segment * i
             b = segment * (i + 1)
 
-            s = random.uniform(a, b)
+            # s = random.uniform(a, b)
+            s = random.random() * ( b - a ) + a
             (idx, p, data) = self.tree.get(s)
             priorities.append(p)
             batch.append(data)
             idxs.append(idx)
 
         sampling_probabilities = priorities / self.tree.sum()
+        # = (1 / N * 1 / P(i)) & beta
         is_weight = np.power(self.tree.n_entries * sampling_probabilities, -self.beta)
         is_weight /= is_weight.max()
 

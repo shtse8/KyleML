@@ -86,22 +86,28 @@ class Tree:
             cl_idx = self.getLeftIndex(parent_idx)        # this leaf's left and right kids
             cr_idx = self.getRightIndex(parent_idx)
             if cl_idx >= self.treeLenght:        # reach bottom, end search
+                print(parent_idx, "reach")
                 leaf_idx = parent_idx
                 break
             else:       # downward search, always search for a higher priority node
                 if v <= self.sumTree[cl_idx]:
+                    print(parent_idx, "left")
                     parent_idx = cl_idx
                 else:
+                    print(parent_idx, "right")
                     v -= self.sumTree[cl_idx]
                     parent_idx = cr_idx
 
         data_idx = leaf_idx - self.capacity + 1
-        return leaf_idx, self.sumTree[leaf_idx], self.data[data_idx]
+        return data_idx, self.sumTree[leaf_idx], self.data[data_idx]
+
+# 10 + 10
+# [0, 10] [10, 20]
+tree = Tree(11)
 
 
-print(np.random.random_integers(0, 5, 5))
-tree = Tree(5)
-
+# print(random.uniform(0, 55))
+tree.add(0.01, 0)
 tree.add(1, 1)
 tree.add(2, 2)
 tree.add(3, 3)
@@ -109,8 +115,23 @@ tree.add(4, 4)
 tree.add(5, 5)
 tree.add(6, 6)
 tree.add(7, 7)
+tree.add(8, 8)
+tree.add(9, 9)
+tree.add(10, 10)
 
-print(tree.get(100))
+
+n = 5
+segment = tree.sum() / n
+for i in range(n):
+    a = segment * i
+    b = segment * (i + 1)
+    print(a, b)
+    s = a + random.random() * (b - a)
+    print(s)
+    
+print(tree.get(0))
+# for i in range(55):
+    # print(i, tree.get(i))
 print(tree.sumTree)
 print(tree.maxTree)
 print(tree.minTree)

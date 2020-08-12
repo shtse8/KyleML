@@ -26,7 +26,7 @@ class Agent(object):
         
         # Trainning
         self.target_epochs = kwargs.get('target_epochs', 10000)
-        self.target_trains = kwargs.get('target_trains', 1000)
+        self.target_trains = kwargs.get('target_trains', 10000)
         self.target_tests = kwargs.get('target_tests', 100)
         
         self.target_episodes = 0

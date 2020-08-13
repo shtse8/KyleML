@@ -38,12 +38,16 @@ class Net(nn.Module):
         Q = value + adv - advAverage
         return Q
 
+    def loss(self, input, target, weight):
+        # weighted_mse_loss
+        return (weight * (input - target) ** 2).mean()
+
 class DQNAgent(Agent):
     def __init__(self, env, **kwargs):
         super().__init__(env, **kwargs)
+        self.name = "dqn"
         
         # Trainning
-        self.weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + ".h5")
         self.update_target_every = kwargs.get('update_target_every', 1000)
         self.learning_rate = kwargs.get('learning_rate', .001)
         self.gamma = kwargs.get('gamma', 0.99)
@@ -76,6 +80,8 @@ class DQNAgent(Agent):
         
         self.target_update_counter = 0
 
+        self.addModels(self.model)
+
     def beginPhrase(self):
         self.epsilon = self.epsilon_max
         self.stmemory.clear()
@@ -83,9 +89,6 @@ class DQNAgent(Agent):
         self.updateTarget()
         return super().beginPhrase()
     
-    def printSummary(self):
-        print(self.model)
-
     def commit(self, transition: Transition):
         if self.isTraining():
             # self.stmemory.add(transition)
@@ -97,13 +100,16 @@ class DQNAgent(Agent):
             self.epsilon -= self.epsilon_decay
             self.epsilon = max(self.epsilon_min, self.epsilon)
     
-    def getAction(self, state, actionMask = None):
+    def getPrediction(self, state):
         if self.isTraining() and np.random.uniform() < self.epsilon:
             prediction = np.random.rand(self.env.actionSpace)
         else:
             self.model.eval()
             stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
             prediction = self.model(stateTensor).detach().numpy()
+        return prediction
+
+    def getAction(self, prediction, actionMask = None):
         if actionMask is not None:
             prediction *= actionMask
         return np.argmax(prediction)
@@ -128,15 +134,15 @@ class DQNAgent(Agent):
         self.ltmemory.batch_update(idxs, error.detach().numpy())
         
         is_weights = torch.tensor(is_weights, dtype=torch.float)
-        loss = self.weighted_mse_loss(q_value, expected_q_value, is_weights)
+        loss = self.model.loss(q_value, expected_q_value, is_weights)
         
         self.optimizer.zero_grad()
         loss.backward()
         # If the divergence of loss value is caused by gradient explode, you can clip the gradient. In Deepmind's 2015 DQN, the author clipped the gradient by limiting the value within [-1, 1]. 
-        for param in self.model.parameters():
-            param.grad.data.clamp_(-1, 1)
+        # for param in self.model.parameters():
+        #     param.grad.data.clamp_(-1, 1)
         # In the other case, the author of Prioritized Experience Replay clip gradient by limiting the norm within 10.
-        # nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
+        nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
         self.optimizer.step()
         
         # Update target model counter every episode
@@ -147,9 +153,6 @@ class DQNAgent(Agent):
             self.updateTarget()
             
         self.total_loss += loss.item()
-    
-    def weighted_mse_loss(self, input, target, weight):
-        return (weight * (input - target) ** 2).mean()
 
     def prepareData(self, batch):
         self.model.train()
@@ -181,22 +184,7 @@ class DQNAgent(Agent):
         error = (q_value - expected_q_value).abs()
         
         return q_value, expected_q_value, error
-    
-    def save(self):
-        try:
-            torch.save(self.model.state_dict(), self.weights_path)
-            # print("Saved Weights.")
-        except:
-            print("Failed to save.")
-        
-    def load(self):
-        try:
-            # self.model.load_weights(self.weights_path)
-            self.model.load_state_dict(torch.load(self.weights_path))
-            print("Weights loaded.")
-        except:
-            print("Failed to load.")
-    
+
     def updateTarget(self):
         # print("Target is updated.")
         self.model_target.load_state_dict(self.model.state_dict())

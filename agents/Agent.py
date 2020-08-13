@@ -9,10 +9,12 @@ import sys
 import collections
 import math
 import time
+from pathlib import Path
 import matplotlib.pyplot as plt
 from memories.Transition import Transition
 from utils.errors import InvalidAction
 from enum import Enum
+import torch
 
 class Phrase(Enum):
     train = 1
@@ -21,6 +23,8 @@ class Phrase(Enum):
 
 class Agent(object):
     def __init__(self, env, **kwargs) -> None:
+        self.name = ""
+
         # Model
         self.env = env
         
@@ -30,8 +34,9 @@ class Agent(object):
         self.target_tests = kwargs.get('target_tests', 100)
         
         self.target_episodes = 0
+        
         # self.phrases = [Phrase.train, Phrase.test]
-        self.phrases = [Phrase.train]
+        self.phrases = []
         # self.phrases = [Phrase.play]
         self.phraseIndex = 0
         self.phrase = ""
@@ -50,31 +55,40 @@ class Agent(object):
         
         self.startTime = 0
 
+        # Save And Load
+        self.weightPath = kwargs.get('weightPath', "./weights/")
+        self.models = []
+
         # plt.ion()
         # plt.ylabel("Loss")
         # plt.xlabel("Episode")
         # plt.show(block=False)
 
-    def beginEpoch(self):
+
+    def addModels(self, model) -> None:
+        self.models.append(model)
+
+    def beginEpoch(self) -> None:
         self.epochs += 1
         self.phraseIndex = 0
         return self.epochs <= self.target_epochs
     
-    def endEpoch(self):
+    def endEpoch(self) -> None:
         pass
 
-    def printSummary(self):
-        pass
-       
-    def getAction(self, state, actionMask = None):
+    def getPrediction(self, state):
+        raise NotImplementedError()
+
+    def getAction(self, state, actionMask = None) -> int:
         raise NotImplementedError()
     
-    def commit(self, transition: Transition):
+    def commit(self, transition: Transition) -> None:
         self.steps += 1
         self.total_rewards += transition.reward
         # self.update()
     
-    def train(self):
+    def run(self, train = True) -> None:
+        self.phrases = [Phrase.train] if train else [Phrase.play]
         while self.beginEpoch():
             while self.beginPhrase():
                 while self.beginEpisode():
@@ -84,9 +98,10 @@ class Agent(object):
                         reward = 0
                         nextState = state
                         actionMask = np.ones(self.env.actionSpace)
+                        prediction = self.getPrediction(state)
                         while True:
                             try:
-                                action = self.getAction(state, actionMask)
+                                action = self.getAction(prediction, actionMask)
                                 nextState, reward, done = self.env.takeAction(action)
                                 self.commit(Transition(state, action, reward, nextState, done))
                                 break
@@ -102,19 +117,19 @@ class Agent(object):
                 self.endPhrase()
             self.endEpoch()
             
-    def getPhrase(self):
+    def getPhrase(self) -> Phrase:
         return self.phrases[self.phraseIndex]
         
-    def isTraining(self):
+    def isTraining(self) -> bool:
         return self.getPhrase() == Phrase.train
         
-    def isTesting(self):
+    def isTesting(self) -> bool:
         return self.getPhrase() == Phrase.test
         
-    def isPlaying(self):
+    def isPlaying(self) -> bool:
         return self.getPhrase() == Phrase.play
         
-    def beginPhrase(self):
+    def beginPhrase(self) -> None:
         if self.phraseIndex >= len(self.phrases):
             return False
         self.episodes = 0
@@ -131,7 +146,7 @@ class Agent(object):
             self.target_episodes = 1
         return True
     
-    def endPhrase(self):
+    def endPhrase(self) -> None:
         if self.isTraining():
             self.save()
 
@@ -142,14 +157,14 @@ class Agent(object):
         # plt.pause(0.00001)
         print()
         
-    def beginEpisode(self):
+    def beginEpisode(self) -> None:
         self.episodes += 1
         self.total_rewards = 0
         self.total_loss = 0
         self.episode_start_time = time.perf_counter()
         return self.episodes <= self.target_episodes
         
-    def endEpisode(self):
+    def endEpisode(self) -> None:
         self.lossHistory.append(self.total_loss)
         self.rewardHistory.append(self.total_rewards)
         # bestReward = np.max(self.rewardHistory)
@@ -157,24 +172,43 @@ class Agent(object):
             # self.bestReward = bestReward
         self.update()
       
-    def update(self):
+    def update(self) -> None:
         duration = time.perf_counter() - self.startTime
         avgLoss = np.mean(self.lossHistory) if len(self.lossHistory) > 0 else math.nan
         bestReward = np.max(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         avgReward = np.mean(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
+        stdReward = np.std(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         progress = self.episodes / self.target_episodes
         invalidMovesPerEpisode = self.invalidMoves / self.episodes
         durationPerEpisode = duration /  self.episodes
         estimateDuration = self.target_episodes * durationPerEpisode
         print(f"Epoch #{self.epochs:>3} {self.getPhrase().name:5} {progress:>4.0%} | " + \
-            f'Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, AVG: {avgReward:>5.2f} | Steps: {self.steps/duration:>7.2f}/s, {self.steps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\r\b")
+            f'Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {self.steps/duration:>7.2f}/s, {self.steps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\r\b")
     
-    def learn(self):
+    def learn(self) -> None:
         raise NotImplementedError()
 
-    def save(self):
-        raise NotImplementedError()
+    def save(self) -> None:
+        try:
+            for model in self.models:
+                path = self.getModelPath(model, True)
+                torch.save(model.state_dict(), path)
+            # print("Saved Weights.")
+        except Exception as e:
+            print("Failed to save.", e)
         
-    def load(self):
-        raise NotImplementedError()
+    def load(self) -> None:
+        try:
+            for model in self.models:
+                path = self.getModelPath(model)
+                print("Loading from path: ", path)
+                model.load_state_dict(torch.load(path))
+            print("Weights loaded.")
+        except Exception as e:
+            print("Failed to load.", e)
                 
+
+    def getModelPath(self, model, makeDir = False):
+        path = os.path.join(os.path.dirname(__main__.__file__), self.weightPath, self.name, self.env.name, model.name + ".h5")
+        Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
+        return path

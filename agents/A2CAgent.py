@@ -1,5 +1,4 @@
 import os
-import __main__
 import random
 import numpy as np
 import sys
@@ -24,8 +23,9 @@ def set_init(layers):
         nn.init.constant_(layer.bias, 0.)
 
 class Net(nn.Module):
-    def __init__(self, s_dim, a_dim):
+    def __init__(self, name, s_dim, a_dim):
         super(Net, self).__init__()
+        self.name = name
         self.s_dim = s_dim
         self.a_dim = a_dim
         self.pi1 = nn.Linear(s_dim, 128)
@@ -43,13 +43,6 @@ class Net(nn.Module):
         values = self.v2(v1)
         return logits, values
 
-    def choose_action(self, s):
-        self.eval()
-        logits, _ = self.forward(s)
-        prob = F.softmax(logits, dim=1).data
-        m = self.distribution(prob)
-        return m.sample().numpy()[0]
-
     def loss_func(self, s, a, v_t):
         self.train()
         logits, values = self.forward(s)
@@ -66,9 +59,9 @@ class Net(nn.Module):
 class A2CAgent(Agent):
     def __init__(self, env, **kwargs):
         super().__init__(env, **kwargs)
-        
+        self.name="a2c"
+
         # Trainning
-        self.weights_path = kwargs.get('weights_path', "./weights/" + os.path.basename(__main__.__file__) + ".h5")
         self.learning_rate = kwargs.get('learning_rate', .001)
         self.gamma = kwargs.get('gamma', 0.99)
         
@@ -79,50 +72,48 @@ class A2CAgent(Agent):
         self.memory = SimpleMemory(self.memory_size)
         
         # Prediction model (the main Model)
-        self.model = Net(np.product(self.env.observationSpace), self.env.actionSpace)
+        self.model = Net("model", np.product(self.env.observationSpace), self.env.actionSpace)
         # self.model.cuda()
         # self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         
-        self.target_update_counter = 0
+        self.addModels(self.model)
 
     def beginPhrase(self):
         self.memory.clear()
         return super().beginPhrase()
-    
-    def printSummary(self):
-        print(self.model)
 
     def commit(self, transition: Transition):
-        self.memory.add(transition)
         super().commit(transition)
+        self.memory.add(transition)
         
-    def update_epsilon(self):
-        if self.epsilon > self.epsilon_min:
-            self.epsilon -= self.epsilon_decay
-            self.epsilon = max(self.epsilon_min, self.epsilon)
-    
-    def getAction(self, state, actionMask = None):
+    def getPrediction(self, state):
         self.model.eval()
         stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
         # stateTensor = stateTensor.cuda()
         logits, _ = self.model(stateTensor)
         # logits = logits.detach().cpu()
-        prob = F.softmax(logits, dim=1).data
-        prob *= actionMask
-        m = self.model.distribution(prob)
-        # print(m, m.sample())
-        return m.sample().numpy()[0]
+        prediction = F.softmax(logits, dim=1).data
+        return prediction
+
+    def getAction(self, prediction, actionMask = None):
+        if actionMask is not None:
+            prediction *= actionMask
+        if self.isTraining():
+            action = self.model.distribution(prediction).sample().item()
+        else:
+            action = prediction.argmax()
+        return action
     
     def endEpisode(self):
         if self.isTraining():
             self.learn()
         super().endEpisode()
       
-    def v_wrap(np_array, dtype=np.float32):
-        if np_array.dtype != dtype:
-            np_array = np_array.astype(dtype)
-        return torch.from_numpy(np_array)
+    # def wrap(np_array, dtype=np.float32):
+    #     if np_array.dtype != dtype:
+    #         np_array = np_array.astype(dtype)
+    #     return torch.from_numpy(np_array)
 
     def learn(self):
         self.model.train()
@@ -164,23 +155,10 @@ class A2CAgent(Agent):
         
         self.optimizer.zero_grad()
         loss.backward()
+        nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
         self.optimizer.step()
         
         self.memory.clear()
             
         self.lossHistory.append(loss.item())
     
-    def save(self):
-        try:
-            torch.save(self.model.state_dict(), self.weights_path)
-            # print("Saved Weights.")
-        except:
-            print("Failed to save.")
-        
-    def load(self):
-        try:
-            # self.model.load_weights(self.weights_path)
-            self.model.load_state_dict(torch.load(self.weights_path))
-            print("Weights loaded.")
-        except:
-            print("Failed to load.")

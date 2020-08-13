@@ -42,7 +42,7 @@ class Agent(object):
         self.total_rewards = 0
         self.total_loss = 0
         self.highest_rewards = 0
-        
+        self.invalidMoves = 0
         # History
         self.rewardHistory = collections.deque(maxlen=max(self.target_trains, self.target_tests))
         self.lossHistory = collections.deque(maxlen=max(self.target_trains, self.target_tests))
@@ -61,8 +61,8 @@ class Agent(object):
         return self.epochs <= self.target_epochs
     
     def endEpoch(self):
-        self.save()
-    
+        pass
+
     def printSummary(self):
         pass
        
@@ -88,11 +88,13 @@ class Agent(object):
                             try:
                                 action = self.getAction(state, actionMask)
                                 nextState, reward, done = self.env.takeAction(action)
+                                self.commit(Transition(state, action, reward, nextState, done))
                                 break
                             except InvalidAction:
                                 actionMask[action] = 0
-                            finally:
-                                self.commit(Transition(state, action, reward, nextState, done))
+                                self.invalidMoves += 1
+                                # print(actionMask)
+                            # finally:
                         state = nextState
                         if self.isPlaying():
                             time.sleep(0.3)
@@ -117,6 +119,7 @@ class Agent(object):
             return False
         self.episodes = 0
         self.steps = 0
+        self.invalidMoves = 0
         self.rewardHistory.clear()
         self.lossHistory.clear()
         self.startTime = time.perf_counter()
@@ -129,6 +132,9 @@ class Agent(object):
         return True
     
     def endPhrase(self):
+        if self.isTraining():
+            self.save()
+
         self.phraseIndex += 1
         # plt.cla()
         # plt.plot(self.lossHistory)
@@ -157,10 +163,11 @@ class Agent(object):
         bestReward = np.max(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         avgReward = np.mean(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         progress = self.episodes / self.target_episodes
-        durectionPerEpisode = self.episodes/duration
-        estimateDuration = self.target_episodes / durectionPerEpisode
+        invalidMovesPerEpisode = self.invalidMoves / self.episodes
+        durationPerEpisode = duration /  self.episodes
+        estimateDuration = self.target_episodes * durationPerEpisode
         print(f"Epoch #{self.epochs:>3} {self.getPhrase().name:5} {progress:>4.0%} | " + \
-            f'Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, AVG: {avgReward:>5.2f} | Steps: {self.steps/duration:>7.2f}/s, {self.steps/self.episodes:>6.2f}/ep | Episodes: {self.episodes/duration:>6.2f}/s | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\r\b")
+            f'Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, AVG: {avgReward:>5.2f} | Steps: {self.steps/duration:>7.2f}/s, {self.steps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\r\b")
     
     def learn(self):
         raise NotImplementedError()

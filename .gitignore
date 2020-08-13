@@ -1,4 +1,4 @@
 bayesOpt.py
 *.idea
 __pycache__
-./weights
+weights/

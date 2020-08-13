@@ -20,8 +20,10 @@ import torchvision.transforms as T
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Net(nn.Module):
-    def __init__(self, input_size, output_size):
+    def __init__(self, input_size, output_size, name = "model"):
         super().__init__()
+        self.name = name
+
         self.linear = nn.Linear(input_size, 512)
         # self.linear2 = nn.Linear(2048, 2048)
         self.value = nn.Linear(512, 1)
@@ -71,16 +73,17 @@ class DQNAgent(Agent):
         self.stmemory = SimpleMemory(self.memory_size)
         
         # Prediction model (the main Model)
-        self.model = Net(np.product(self.env.observationSpace), self.env.actionSpace)
+        self.model = Net(np.product(self.env.observationSpace), self.env.actionSpace, "model")
         # self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         
         # Target model
-        self.model_target = Net(np.product(self.env.observationSpace), self.env.actionSpace)
+        self.model_target = Net(np.product(self.env.observationSpace), self.env.actionSpace, "target_model")
         
         self.target_update_counter = 0
 
         self.addModels(self.model)
+        self.addModels(self.model_target)
 
     def beginPhrase(self):
         self.epsilon = self.epsilon_max

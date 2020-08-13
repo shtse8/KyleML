@@ -23,7 +23,7 @@ def set_init(layers):
         nn.init.constant_(layer.bias, 0.)
 
 class Net(nn.Module):
-    def __init__(self, name, s_dim, a_dim):
+    def __init__(self, s_dim, a_dim, name = "model"):
         super(Net, self).__init__()
         self.name = name
         self.s_dim = s_dim
@@ -72,7 +72,7 @@ class A2CAgent(Agent):
         self.memory = SimpleMemory(self.memory_size)
         
         # Prediction model (the main Model)
-        self.model = Net("model", np.product(self.env.observationSpace), self.env.actionSpace)
+        self.model = Net(np.product(self.env.observationSpace), self.env.actionSpace)
         # self.model.cuda()
         # self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
@@ -155,7 +155,7 @@ class A2CAgent(Agent):
         
         self.optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
+        # nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
         self.optimizer.step()
         
         self.memory.clear()

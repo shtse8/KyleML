@@ -59,7 +59,7 @@ class DQNAgent(Agent):
         self.memory_size = kwargs.get('memory_size', 100000)
         
         # Mini Batch
-        self.minibatch_size = kwargs.get('minibatch_size', 64)
+        self.minibatch_size = kwargs.get('minibatch_size', 256)
         
         # self.ltmemory = collections.deque(maxlen=self.memory_size)
         self.ltmemory = PrioritizedMemory(self.memory_size)

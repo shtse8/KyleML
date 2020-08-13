@@ -57,6 +57,7 @@ class PrioritizedMemory(object):
         
         is_weight /= max_is_weight
 
+        # print(is_weight, priorities, self.tree.sum())
         return idxs, batch, is_weight
 
     def batch_update(self, tree_idx, abs_errors):
@@ -118,14 +119,12 @@ class Tree:
     def add(self, p, data):
         if self.entries < self.capacity:
             tree_idx = self.capacity + self.entries - 1
+            self.entries += 1
         else:
             tree_idx = self.getMinLeafIndex()
+        self.update(tree_idx, p)  # update tree_frame
         data_idx = self.getDataIndex(tree_idx)
         self.data[data_idx] = data  # update data_frame
-        self.update(tree_idx, p)  # update tree_frame
-
-        if self.entries < self.capacity:
-            self.entries += 1
             
     def getParentIndex(self, tree_idx):
         return (tree_idx - 1) // 2

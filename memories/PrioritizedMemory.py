@@ -6,12 +6,12 @@ class PrioritizedMemory(object):
     e = 0.01
     a = 0.6
     beta = 0.4
-    beta_increment_per_sampling = 0.001
     abs_err_upper = 1.  # clipped abs error
 
-    def __init__(self, capacity):
+    def __init__(self, capacity, beta_increment_per_sampling = 0.001):
         self.tree = Tree(capacity)
         self.capacity = capacity
+        self.beta_increment_per_sampling = beta_increment_per_sampling
 
     def _get_priority(self, error):
         return (np.abs(error) + self.e) ** self.a
@@ -21,8 +21,8 @@ class PrioritizedMemory(object):
         max_p = self.tree.max()
         if max_p == -math.inf:
             max_p = 1
-        # print(max_p)
-        self.tree.add(max_p, sample)
+
+        self.tree.add(max_p ** self.a, sample)
 
     def sample(self, n):
         batch = []
@@ -30,15 +30,16 @@ class PrioritizedMemory(object):
         
         # proportional prioritization
         # segmented for preventing duplicated item
-        segment = self.tree.sum() / n 
+        # segment = self.tree.sum() / n 
         priorities = []
 
         self.beta = np.min([1., self.beta + self.beta_increment_per_sampling])
 
         for i in range(n):
-            a = segment * i
-            b = segment * (i + 1)
-
+            # a = segment * i
+            # b = segment * (i + 1)
+            a = 0
+            b = self.tree.sum()
             # s = random.uniform(a, b)
             # We shouldn't use uniform because the margins will be overlapped.
             s = random.random() * ( b - a ) + a
@@ -63,6 +64,8 @@ class PrioritizedMemory(object):
     def batch_update(self, tree_idx, abs_errors):
         for ti, e in zip(tree_idx, abs_errors):
             p = self._get_priority(e)
+            # if p >= self.tree.max():
+            #     print("Max P:", p, e)
             self.tree.update(ti, p)
 
 
@@ -77,6 +80,7 @@ class Tree:
         self.maxTree = np.full(self.treeLength, -math.inf)
         self.data = np.zeros(capacity, dtype=object)
         self.entries = 0
+        self.writer = 0
 
     def update(self, tree_idx, p):
         # update leaf node
@@ -117,11 +121,20 @@ class Tree:
         return idx
         
     def add(self, p, data):
+        # if self.entries < self.capacity:
+        #     tree_idx = self.capacity + self.entries - 1
+        #     self.entries += 1
+        # else:
+        #     tree_idx = self.getMinLeafIndex()
+        tree_idx = self.capacity + self.writer - 1
+        self.writer += 1
+        if self.writer >= self.capacity:
+            self.writer = 0
+        
         if self.entries < self.capacity:
-            tree_idx = self.capacity + self.entries - 1
             self.entries += 1
-        else:
-            tree_idx = self.getMinLeafIndex()
+        
+        # print(self.entries, self.max(), self.min(), self.sum())
         self.update(tree_idx, p)  # update tree_frame
         data_idx = self.getDataIndex(tree_idx)
         self.data[data_idx] = data  # update data_frame

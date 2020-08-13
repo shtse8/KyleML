@@ -54,15 +54,16 @@ class DQNAgent(Agent):
         self.epsilon_phase_size = kwargs.get('epsilon_phase_size', 0.5)
         self.epsilon = self.epsilon_max
         self.epsilon_decay = ((self.epsilon_max - self.epsilon_min) / (self.target_trains * self.epsilon_phase_size))
-        
+        self.beta_increment_per_sampling = ((1 - 0.4) / self.target_trains)
+
         # Memory
-        self.memory_size = kwargs.get('memory_size', 100000)
+        self.memory_size = kwargs.get('memory_size', 10000)
         
         # Mini Batch
-        self.minibatch_size = kwargs.get('minibatch_size', 256)
+        self.minibatch_size = kwargs.get('minibatch_size', 64)
         
         # self.ltmemory = collections.deque(maxlen=self.memory_size)
-        self.ltmemory = PrioritizedMemory(self.memory_size)
+        self.ltmemory = PrioritizedMemory(self.memory_size, self.beta_increment_per_sampling)
         self.stmemory = SimpleMemory(self.memory_size)
         
         # Prediction model (the main Model)
@@ -78,7 +79,7 @@ class DQNAgent(Agent):
     def beginPhrase(self):
         self.epsilon = self.epsilon_max
         self.stmemory.clear()
-        self.ltmemory = PrioritizedMemory(self.memory_size)
+        self.ltmemory = PrioritizedMemory(self.memory_size, self.beta_increment_per_sampling)
         self.updateTarget()
         return super().beginPhrase()
     

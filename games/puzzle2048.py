@@ -26,7 +26,7 @@ class Puzzle2048(Game):
         state = np.zeros((self.size, self.size), dtype=int)
         for _, _, cell in self.game.grid.eachCell():
             if cell:
-                state[cell.x][cell.y] = cell.value
+                state[cell.x][cell.y] = math.log2(cell.value)
                 # state[cell.x][cell.y] = math.log2(cell.value)
         # print("score", self.game.score)
         # if self.game.score > 10000:

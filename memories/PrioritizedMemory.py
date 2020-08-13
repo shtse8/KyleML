@@ -49,11 +49,11 @@ class PrioritizedMemory(object):
 
         # = (1 / N * 1 / P(i)) ^ beta = (N * P(i)) ^ -beta
         sampling_probabilities = priorities / self.tree.sum()
-        is_weight = np.power(self.tree.n_entries * sampling_probabilities, -self.beta)
+        is_weight = np.power(self.tree.entries * sampling_probabilities, -self.beta)
         
         # Normalize to [0, 1]
         min_probabilities = self.tree.min() / self.tree.sum()
-        max_is_weight = np.power(self.tree.n_entries * min_probabilities, -self.beta)
+        max_is_weight = np.power(self.tree.entries * min_probabilities, -self.beta)
         
         is_weight /= max_is_weight
 
@@ -69,13 +69,13 @@ class PrioritizedMemory(object):
 class Tree:
     def __init__(self, capacity):
         self.capacity = capacity
-        self.treeLenght = 2 * capacity - 1
-        self.sumTree = np.zeros(self.treeLenght)
-        self.minTree = np.full(self.treeLenght, math.inf)
-        self.minTree2 = np.full(self.treeLenght, -math.inf)
-        self.maxTree = np.full(self.treeLenght, -math.inf)
+        self.treeLength = 2 * capacity - 1
+        self.sumTree = np.zeros(self.treeLength)
+        self.minTree = np.full(self.treeLength, math.inf)
+        #self.minTree2 = np.full(self.treeLenght, -math.inf)
+        self.maxTree = np.full(self.treeLength, -math.inf)
         self.data = np.zeros(capacity, dtype=object)
-        self.n_entries = 0
+        self.entries = 0
 
     def update(self, tree_idx, p):
         # update leaf node
@@ -83,7 +83,6 @@ class Tree:
         change = p - self.sumTree[tree_idx]
         self.sumTree[tree_idx] = p
         self.minTree[tree_idx] = p
-        self.minTree2[tree_idx] = p
         self.maxTree[tree_idx] = p
         
         # then propagate the change through tree
@@ -91,7 +90,6 @@ class Tree:
             tree_idx = self.getParentIndex(tree_idx)
             self.sumTree[tree_idx] += change
             self.minTree[tree_idx] = min(self.minTree[self.getLeftIndex(tree_idx)], self.minTree[self.getRightIndex(tree_idx)])
-            self.minTree2[tree_idx] = min(self.minTree2[self.getLeftIndex(tree_idx)], self.minTree2[self.getRightIndex(tree_idx)])
             self.maxTree[tree_idx] = max(self.maxTree[self.getLeftIndex(tree_idx)], self.maxTree[self.getRightIndex(tree_idx)])
             
     def sum(self):
@@ -108,23 +106,26 @@ class Tree:
         while True:
             cl_idx = self.getLeftIndex(idx)        # this leaf's left and right kids
             cr_idx = self.getRightIndex(idx)
-            if cl_idx >= self.treeLenght:        # reach bottom, end search
+            if cl_idx >= self.treeLength:        # reach bottom, end search
                 break
             else:
-                if self.minTree2[cl_idx] <= self.minTree2[idx]:
+                if self.minTree[cl_idx] <= self.minTree[idx]:
                     idx = cl_idx
                 else:
                     idx = cr_idx
         return idx
         
     def add(self, p, data):
-        tree_idx = self.getMinLeafIndex()
+        if self.entries < self.capacity:
+            tree_idx = self.capacity + self.entries - 1
+        else:
+            tree_idx = self.getMinLeafIndex()
         data_idx = self.getDataIndex(tree_idx)
         self.data[data_idx] = data  # update data_frame
         self.update(tree_idx, p)  # update tree_frame
 
-        if self.n_entries < self.capacity:
-            self.n_entries += 1
+        if self.entries < self.capacity:
+            self.entries += 1
             
     def getParentIndex(self, tree_idx):
         return (tree_idx - 1) // 2
@@ -143,7 +144,7 @@ class Tree:
         while True:
             cl_idx = self.getLeftIndex(idx)
             cr_idx = self.getRightIndex(idx)
-            if cl_idx >= self.treeLenght:        # reach bottom, end search
+            if cl_idx >= self.treeLength:        # reach bottom, end search
                 break
             else:       # downward search, always search for a higher priority node
                 if v <= self.sumTree[cl_idx]:

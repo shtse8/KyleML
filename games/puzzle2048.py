@@ -26,14 +26,18 @@ class Puzzle2048(Game):
         for _, _, cell in self.game.grid.eachCell():
             if cell:
                 state[cell.x][cell.y] = math.log2(cell.value)
+        # print("score", self.game.score)
+        # if self.game.score > 10000:
+        #     print(state)
         return state
         
     def takeAction(self, action):
         score = self.game.score
         moved = self.game.move(action)
-        self.reward = self.game.score - score
         if not moved:
             raise InvalidAction()
+        self.reward = self.game.score - score
+        # print("takeAction", self.reward)
         # self.game.update()
         return self.getState(), self.getReward(), self.getDone()
         

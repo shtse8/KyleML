@@ -11,7 +11,7 @@ from games.puzzle2048 import Puzzle2048
 # from games.CartPole import CartPole
 # from games.CartPole import CartPole
 from agents.DQNAgent import DQNAgent
-# from agents.A2CAgent import A2CAgent
+from agents.A2CAgent import A2CAgent
 
 def signal_handler(sig, frame):
     print()
@@ -25,7 +25,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     game = Puzzle2048()
     # game.render()
-    agent = DQNAgent(game)
+    agent = A2CAgent(game)
     # agent.load()
     # agent.printSummary()
     agent.train()

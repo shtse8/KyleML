@@ -14,6 +14,11 @@ COLOR_SWITCHER = {
     512: (236, 176, 77),
     1024: (235, 148, 55),
     2048: (234, 120, 33),
+    4096: (234, 120, 33),
+    8192: (234, 120, 33),
+    16384: (234, 120, 33),
+    32768: (234, 120, 33),
+    65536: (234, 120, 33),
 }
 
 class Game(object):
@@ -40,7 +45,7 @@ class Game(object):
         return self.__class__()
 
     def render(self):
-        if self.render:
+        if self.rendered:
             return
         self.rendered = True
         self.width = 500

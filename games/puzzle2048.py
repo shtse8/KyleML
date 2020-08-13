@@ -10,6 +10,7 @@ import gym
 
 class Puzzle2048(Game):
     def __init__(self):
+        super().__init__()
         self.name = "game2048"
         self.size = 4
         self.game = game2048(self.size)
@@ -25,7 +26,8 @@ class Puzzle2048(Game):
         state = np.zeros((self.size, self.size), dtype=int)
         for _, _, cell in self.game.grid.eachCell():
             if cell:
-                state[cell.x][cell.y] = math.log2(cell.value)
+                state[cell.x][cell.y] = cell.value
+                # state[cell.x][cell.y] = math.log2(cell.value)
         # print("score", self.game.score)
         # if self.game.score > 10000:
         #     print(state)
@@ -39,7 +41,7 @@ class Puzzle2048(Game):
         self.reward = self.game.score - score
         # print("takeAction", self.reward)
         # self.game.update()
-        return self.getState(), self.getReward(), self.getDone()
+        return super().takeAction(action)
         
     def getDone(self):
         return self.game.isGameTerminated()

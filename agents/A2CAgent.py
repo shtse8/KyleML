@@ -109,18 +109,10 @@ class A2CAgent(Agent):
         logits, _ = self.model(stateTensor)
         # logits = logits.detach().cpu()
         prob = F.softmax(logits, dim=1).data
+        prob *= actionMask
         m = self.model.distribution(prob)
         # print(m, m.sample())
         return m.sample().numpy()[0]
-
-        # if self.isTraining() and np.random.uniform() < self.epsilon:
-        #     action = random.randint(0, self.env.actionSpace - 1)
-        # else:
-        #     self.model.eval()
-        #     stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
-        #     prediction = self.model(stateTensor)
-        #     action = prediction.argmax().item()
-        # return action
     
     def endEpisode(self):
         if self.isTraining():

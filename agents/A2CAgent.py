@@ -137,7 +137,7 @@ class A2CAgent(Agent):
         self.critic.train()
         
         batch = self.memory
-        
+        self.steps += len(batch)
         states = np.array([x.state for x in batch])
         states = torch.tensor(states, dtype=torch.float).view(states.shape[0], -1) #.cuda()
         

@@ -30,7 +30,7 @@ class Agent(object):
         
         # Trainning
         self.target_epochs = kwargs.get('target_epochs', 10000)
-        self.target_trains = kwargs.get('target_trains', 1000)
+        self.target_trains = kwargs.get('target_trains', 10000)
         self.target_tests = kwargs.get('target_tests', 100)
         
         self.target_episodes = 0
@@ -60,8 +60,8 @@ class Agent(object):
         self.models = []
 
         # plt.ion()
-        # plt.ylabel("Loss")
-        # plt.xlabel("Episode")
+        plt.ylabel("Loss")
+        plt.xlabel("Episode")
         # plt.show(block=False)
 
 
@@ -83,10 +83,12 @@ class Agent(object):
         raise NotImplementedError()
     
     def commit(self, transition: Transition) -> None:
-        self.steps += 1
         self.total_rewards += transition.reward
         # self.update()
     
+    def applyMask(self, prediction, mask, replacedValue = 0):
+        return np.array([prediction[i] if mask else replacedValue for i, mask in enumerate(mask)])
+
     def run(self, train = True) -> None:
         self.phrases = [Phrase.train] if train else [Phrase.play]
         while self.beginEpoch():
@@ -152,7 +154,8 @@ class Agent(object):
 
         self.phraseIndex += 1
         # plt.cla()
-        # plt.plot(self.lossHistory)
+        plt.plot(self.lossHistory)
+        plt.show()
         # plt.draw()
         # plt.pause(0.00001)
         print()

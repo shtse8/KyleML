@@ -110,7 +110,7 @@ class A2CAgent(Agent):
 
     def getAction(self, prediction, actionMask = None):
         if actionMask is not None:
-            prediction *= actionMask
+            prediction = self.applyMask(prediction, actionMask)
         if self.isTraining():
             predictionSum = np.sum(prediction)
             prediction /= predictionSum

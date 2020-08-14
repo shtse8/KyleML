@@ -183,7 +183,7 @@ class Agent(object):
         durationPerEpisode = duration /  self.episodes
         estimateDuration = self.target_episodes * durationPerEpisode
         print(f"Epoch #{self.epochs:>3} {self.getPhrase().name:5} {progress:>4.0%} | " + \
-            f'Loss: {avgLoss:8.4f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {self.steps/duration:>7.2f}/s, {self.steps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\r\b")
+            f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {self.steps/duration:>7.2f}/s, {self.steps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
     
     def learn(self) -> None:
         raise NotImplementedError()

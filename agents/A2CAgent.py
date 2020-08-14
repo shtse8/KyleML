@@ -15,46 +15,54 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import torchvision.transforms as T
-
+from torch.autograd import Variable
 
 def set_init(layers):
     for layer in layers:
         nn.init.normal_(layer.weight, mean=0., std=0.1)
         nn.init.constant_(layer.bias, 0.)
 
-class Net(nn.Module):
-    def __init__(self, s_dim, a_dim, name = "model"):
-        super(Net, self).__init__()
+class ActorNetwork(nn.Module):
+    def __init__(self, s_dim, a_dim, name = "actor"):
+        super(ActorNetwork, self).__init__()
         self.name = name
-        self.s_dim = s_dim
-        self.a_dim = a_dim
-        self.pi1 = nn.Linear(s_dim, 128)
-        self.pi2 = nn.Linear(128, a_dim)
-        self.v1 = nn.Linear(s_dim, 128)
-        self.v2 = nn.Linear(128, 1)
-
-        set_init([self.pi1, self.pi2, self.v1, self.v2])
-        self.distribution = torch.distributions.Categorical
+        self.fc1 = nn.Linear(s_dim,128)
+        self.fc2 = nn.Linear(128,128)
+        self.fc3 = nn.Linear(128,a_dim)
         
     def forward(self, x):
-        pi1 = torch.tanh(self.pi1(x))
-        logits = self.pi2(pi1)
-        v1 = torch.tanh(self.v1(x))
-        values = self.v2(v1)
-        return logits, values
-
-    def loss_func(self, s, a, v_t):
-        self.train()
-        logits, values = self.forward(s)
-        td = v_t - values
-        c_loss = td.pow(2)
+        out = F.relu(self.fc1(x))
+        out = F.relu(self.fc2(out))
+        # out = F.log_softmax(self.fc3(out))
+        out = F.softmax(self.fc3(out), dim=1)
+        return out
         
-        probs = F.softmax(logits, dim=1)
-        m = self.distribution(probs)
-        exp_v = m.log_prob(a) * td.detach().squeeze()
-        a_loss = -exp_v
-        total_loss = (c_loss + a_loss).mean()
-        return total_loss
+class CriticNetwork(nn.Module):
+    def __init__(self, s_dim, a_dim, name = "critic"):
+        super(CriticNetwork, self).__init__()
+        self.name = name
+        self.fc1 = nn.Linear(s_dim,128)
+        self.fc2 = nn.Linear(128,128)
+        self.fc3 = nn.Linear(128,a_dim)
+        
+    def forward(self, x):
+        out = F.relu(self.fc1(x))
+        out = F.relu(self.fc2(out))
+        out = self.fc3(out)
+        return out
+        
+    # def loss_func(self, s, a, v_t):
+        # self.train()
+        # logits, values = self.forward(s)
+        # td = v_t - values
+        # c_loss = td.pow(2)
+        
+        # probs = F.softmax(logits, dim=1)
+        # m = self.distribution(probs)
+        # exp_v = m.log_prob(a) * td.detach().squeeze()
+        # a_loss = -exp_v
+        # total_loss = (c_loss + a_loss).mean()
+        # return total_loss
 
 class A2CAgent(Agent):
     def __init__(self, env, **kwargs):
@@ -72,12 +80,16 @@ class A2CAgent(Agent):
         self.memory = SimpleMemory(self.memory_size)
         
         # Prediction model (the main Model)
-        self.model = Net(np.product(self.env.observationSpace), self.env.actionSpace)
+        self.actor = ActorNetwork(np.product(self.env.observationSpace), self.env.actionSpace)
+        self.critic = CriticNetwork(np.product(self.env.observationSpace), 1)
+        
         # self.model.cuda()
         # self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.actorOptimizer = optim.Adam(self.actor.parameters(), lr=self.learning_rate)
+        self.criticOptimizer = optim.Adam(self.critic.parameters(), lr=self.learning_rate)
         
-        self.addModels(self.model)
+        self.addModels(self.actor)
+        self.addModels(self.critic)
 
     def beginPhrase(self):
         self.memory.clear()
@@ -88,19 +100,21 @@ class A2CAgent(Agent):
         self.memory.add(transition)
         
     def getPrediction(self, state):
-        self.model.eval()
+        self.actor.eval()
+        
         stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
-        # stateTensor = stateTensor.cuda()
-        logits, _ = self.model(stateTensor)
-        # logits = logits.detach().cpu()
-        prediction = F.softmax(logits, dim=1).data
-        return prediction
+        log_softmax_action = self.actor(stateTensor)
+        prediction = torch.exp(log_softmax_action).squeeze(0)
+        return prediction.detach().numpy()
+        
 
     def getAction(self, prediction, actionMask = None):
         if actionMask is not None:
             prediction *= actionMask
         if self.isTraining():
-            action = self.model.distribution(prediction).sample().item()
+            predictionSum = np.sum(prediction)
+            prediction /= predictionSum
+            action = np.random.choice(self.env.actionSpace, p=prediction)
         else:
             action = prediction.argmax()
         return action
@@ -110,13 +124,17 @@ class A2CAgent(Agent):
             self.learn()
         super().endEpisode()
       
-    # def wrap(np_array, dtype=np.float32):
-    #     if np_array.dtype != dtype:
-    #         np_array = np_array.astype(dtype)
-    #     return torch.from_numpy(np_array)
-
+    def discount_reward(self, r, gamma, final_r):
+        discounted_r = np.zeros_like(r)
+        running_add = final_r
+        for t in reversed(range(0, len(r))):
+            running_add = running_add * gamma + r[t]
+            discounted_r[t] = running_add
+        return discounted_r
+        
     def learn(self):
-        self.model.train()
+        self.actor.train()
+        self.critic.train()
         
         batch = self.memory
         
@@ -135,30 +153,36 @@ class A2CAgent(Agent):
         # nextStates = np.array([x.nextState for x in batch])
         # nextStates = torch.tensor(nextStates, dtype=torch.float).view(nextStates.shape[0], -1)
         
-
-        # if done:
-        #     v_s_ = 0.               # terminal
-        # else:
-        #     v_s_ = lnet.forward(v_wrap(s_[None, :]))[-1].data.numpy()[0, 0]
-        v_s_ = 0
-        buffer_v_target = []
-        # print(rewards, rewards[::-1])
-        for r in rewards[::-1]:    # reverse buffer r
-            v_s_ = r + self.gamma * v_s_
-            buffer_v_target.append(v_s_)
-        buffer_v_target.reverse()
-        buffer_v_target = torch.tensor(buffer_v_target, dtype=torch.float) #.cuda()
-        # print(buffer_v_target)
+        final_r = 0
+        # train actor network
+        self.actorOptimizer.zero_grad()
+        log_softmax_actions = self.actor(states)
+        vs = self.critic(states).detach()
+        # print("critic", vs)
+        # calculate qs
+        qs = torch.tensor(self.discount_reward(rewards, 0.99, final_r), dtype=torch.float)
+        # print("qs", qs)
+        advantages = qs - vs
+        q_value = log_softmax_actions.gather(1, actions.unsqueeze(1)).squeeze(1)
+        actorLoss = -torch.mean(q_value.sum() * advantages)
+        actorLoss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+        self.actorOptimizer.step()
         
         
-        loss = self.model.loss_func(states, actions, buffer_v_target)
+        # train value network
+        self.criticOptimizer.zero_grad()
+        target_values = qs.unsqueeze(1)
+        values = self.critic(states)
+        criterion = nn.MSELoss()
+        criticLoss = criterion(values, target_values)
+        criticLoss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(),0.5)
+        self.criticOptimizer.step()
         
-        self.optimizer.zero_grad()
-        loss.backward()
-        # nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
-        self.optimizer.step()
         
         self.memory.clear()
             
-        self.lossHistory.append(loss.item())
+        self.total_loss += actorLoss.item()
+        self.total_loss += criticLoss.item()
     

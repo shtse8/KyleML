@@ -35,6 +35,9 @@ class SimpleMemory(object):
     
     def clear(self) -> None:
         self.memory.clear()
+    
+    def __len__(self):
+        return len(self.memory)
         
     def __iter__(self):
         return self

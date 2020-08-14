@@ -7,7 +7,7 @@ import sys
 import signal
 import argparse
 
-# from games.SimpleSnake import SimpleSnake
+from games.SimpleSnake import SimpleSnake
 from games.Snake import Snake
 from games.puzzle2048 import Puzzle2048
 # from games.CartPole import CartPole
@@ -43,6 +43,8 @@ def main():
         game = Puzzle2048()
     elif args.game == "snake":
         game = Snake()
+    elif args.game == "simplesnake":
+        game = SimpleSnake()
     else:
         raise ValueError("Unknown Game " + args.game)
 

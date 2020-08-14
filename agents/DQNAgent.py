@@ -50,7 +50,7 @@ class DQNAgent(Agent):
         
         # Trainning
         self.update_target_every = kwargs.get('update_target_every', 1000)
-        self.learning_rate = kwargs.get('learning_rate', .01)
+        self.learning_rate = kwargs.get('learning_rate', .001)
         self.gamma = kwargs.get('gamma', 0.99)
         
         # Exploration

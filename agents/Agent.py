@@ -154,8 +154,8 @@ class Agent(object):
 
         self.phraseIndex += 1
         # plt.cla()
-        plt.plot(self.lossHistory)
-        plt.show()
+        # plt.plot(self.lossHistory)
+        # plt.show()
         # plt.draw()
         # plt.pause(0.00001)
         print()

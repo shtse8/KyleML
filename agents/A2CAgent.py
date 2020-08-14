@@ -33,17 +33,17 @@ class ActorNetwork(nn.Module):
     def forward(self, x):
         out = F.relu(self.fc1(x))
         out = F.relu(self.fc2(out))
-        # out = F.log_softmax(self.fc3(out))
-        out = F.softmax(self.fc3(out), dim=1)
-        return out
+        out2 = F.log_softmax(self.fc3(out), dim=1)
+        # out = F.softmax(self.fc3(out), dim=1).log()
+        return out2
         
 class CriticNetwork(nn.Module):
     def __init__(self, s_dim, a_dim, name = "critic"):
         super(CriticNetwork, self).__init__()
         self.name = name
-        self.fc1 = nn.Linear(s_dim,128)
+        self.fc1 = nn.Linear(s_dim, 128)
         self.fc2 = nn.Linear(128,128)
-        self.fc3 = nn.Linear(128,a_dim)
+        self.fc3 = nn.Linear(128, a_dim)
         
     def forward(self, x):
         out = F.relu(self.fc1(x))
@@ -124,20 +124,19 @@ class A2CAgent(Agent):
             self.learn()
         super().endEpisode()
       
-    def discount_reward(self, r, gamma, final_r):
-        discounted_r = np.zeros_like(r)
-        running_add = final_r
-        for t in reversed(range(0, len(r))):
-            running_add = running_add * gamma + r[t]
-            discounted_r[t] = running_add
-        return discounted_r
+    def getDiscountedRewards(self, rewards, gamma, final_reward):
+        discountRewards = np.zeros_like(rewards).astype(float)
+        running_reward = final_reward
+        for i in reversed(range(len(rewards))):
+            running_reward = running_reward * gamma + rewards[i]
+            discountRewards[i] = running_reward
+        return discountRewards
         
     def learn(self):
         self.actor.train()
         self.critic.train()
         
         batch = self.memory
-        self.steps += len(batch)
         states = np.array([x.state for x in batch])
         states = torch.tensor(states, dtype=torch.float).view(states.shape[0], -1) #.cuda()
         
@@ -153,20 +152,20 @@ class A2CAgent(Agent):
         # nextStates = np.array([x.nextState for x in batch])
         # nextStates = torch.tensor(nextStates, dtype=torch.float).view(nextStates.shape[0], -1)
         
-        final_r = 0
+        final_reward = 0
         # train actor network
         self.actorOptimizer.zero_grad()
         log_softmax_actions = self.actor(states)
-        vs = self.critic(states).detach()
+        vs = self.critic(states)
         # print("critic", vs)
         # calculate qs
-        qs = torch.tensor(self.discount_reward(rewards, 0.99, final_r), dtype=torch.float)
+        qs = torch.tensor(self.getDiscountedRewards(rewards, self.gamma, final_reward), dtype=torch.float)
         # print("qs", qs)
         advantages = qs - vs
         q_value = log_softmax_actions.gather(1, actions.unsqueeze(1)).squeeze(1)
         actorLoss = -torch.mean(q_value.sum() * advantages)
         actorLoss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+        # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
         self.actorOptimizer.step()
         
         
@@ -177,12 +176,15 @@ class A2CAgent(Agent):
         criterion = nn.MSELoss()
         criticLoss = criterion(values, target_values)
         criticLoss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(),0.5)
+        # torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
         self.criticOptimizer.step()
         
         
-        self.memory.clear()
-            
+        
+        # Stats
+        self.steps += len(batch)
         self.total_loss += actorLoss.item()
         self.total_loss += criticLoss.item()
+        
+        self.memory.clear()
     

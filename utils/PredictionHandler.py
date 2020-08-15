@@ -28,6 +28,6 @@ class PredictionHandler:
         if predictionSum != 0:
             prediction = prediction / predictionSum
         else:
-            prediction = mask / mask.sum()
+            prediction = self.mask / self.mask.sum()
         return np.random.choice(len(prediction), p=prediction)
     

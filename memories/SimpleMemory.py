@@ -43,8 +43,9 @@ class SimpleMemory(object):
         return self
 
     def __next__(self):
-        self.current += 1
         if self.current < len(self.memory):
-            return self.memory[self.current]
+            result = self.memory[self.current]
+            self.current += 1
+            return result
         self.current = 0
         raise StopIteration

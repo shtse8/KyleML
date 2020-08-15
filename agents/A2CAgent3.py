@@ -48,11 +48,8 @@ class Network(nn.Module):
 
             
         self.optimizer = optim.Adam(self.parameters(), lr = self.learningRate)
-                      
-        self.cuda()
 
     def predict(self, state):
-        state = state.cuda()
         body_output = self.get_body_output(state)
         probs = F.softmax(self.policy(body_output), dim=-1)
         return probs, self.value(body_output)
@@ -66,7 +63,6 @@ class Network(nn.Module):
         # return action
     
     def get_log_probs(self, state):
-        state = state.cuda()
         body_output = self.get_body_output(state)
         logprobs = F.log_softmax(self.policy(body_output), dim=-1)
         return logprobs    
@@ -97,7 +93,8 @@ class A2CAgent(Agent):
         self.n_steps = 5000
         self.beta = 0.001
         self.zeta = 0.001
-
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.network.to(self.device)
         self.addModels(self.network)
         
     def commit(self, transition: Transition):
@@ -110,9 +107,10 @@ class A2CAgent(Agent):
         
     def getPrediction(self, state):
         self.network.eval()
-        state = torch.FloatTensor(state).view(1, -1)
-        prediction = self.network.predict(state)[0].squeeze(0)
-        return prediction.cpu().detach().numpy()
+        with torch.no_grad():
+            state = torch.FloatTensor(state).view(1, -1).to(self.device)
+            prediction = self.network.predict(state)[0].squeeze(0)
+            return prediction.cpu().detach().numpy()
         
 
     def getAction(self, prediction, mask = None):
@@ -132,67 +130,72 @@ class A2CAgent(Agent):
             discountRewards[i] = running_reward
         return discountRewards
     
-    def calc_rewards(self, states, actions, rewards, dones, next_states):
+    def calc_rewards(self, states, rewards, dones, next_states):
         # rewards = np.array(rewards)
         total_steps = len(rewards)
         
-        state_values = self.network.predict(states)[1]
-        next_state_values = self.network.predict(next_states)[1]
-        next_state_values[dones] = 0.0
-        state_values = state_values.flatten()
-        next_state_values = next_state_values.flatten()
-        
-        G = torch.zeros_like(rewards, dtype=torch.float)
-        td_delta = torch.zeros_like(rewards, dtype=torch.float)
-        # dones = np.array(dones)
-        
+        G = np.zeros_like(rewards, dtype=float)
         for t in range(total_steps):
             last_step = min(self.n_steps, total_steps - t)
             # Look for end of episode
             check_episode_completion = dones[t:t+last_step]
+            # print(check_episode_completion)
             if len(check_episode_completion) > 0:
                 if True in check_episode_completion:
-                    next_ep_completion = torch.where(check_episode_completion == True)[0][0]
+                    next_ep_completion = np.where(check_episode_completion == True)[0][0]
                     last_step = next_ep_completion
             
             # Sum and discount rewards
-            G[t] = sum([rewards[t+n:t+n+1] * self.gamma ** n for 
-                        n in range(last_step)])
+            G[t] = sum([rewards[t+n:t+n+1] * self.gamma ** n for n in range(last_step)])
         
+        # print(rewards, G)
         # print("1", G)
         if total_steps > self.n_steps:
+            next_state_values = self.network.predict(next_states)[1]
+            next_state_values[dones] = 0.0
+            next_state_values = next_state_values.detach().numpy().flatten()
             G[:total_steps - self.n_steps] += next_state_values[self.n_steps:] \
                 * self.gamma ** self.n_steps
-        td_delta = G - state_values
-        # print("2", G)
-        return G, td_delta
+        # td_delta = G - state_values
+        # print(G, td_delta)
+        return G
         
     def learn(self):
         self.network.train()
         
-        self.network.optimizer.zero_grad()
         
         batch = self.memory
         
         
         states = np.array([x.state for x in batch])
-        states = torch.FloatTensor(states).view(states.shape[0], -1).cuda()
+        states = torch.FloatTensor(states).to(self.device).view(states.shape[0], -1)
         
         actions = np.array([x.action for x in batch])
-        actions = torch.LongTensor(actions).cuda()
+        actions = torch.LongTensor(actions).to(self.device)
         
         rewards = np.array([x.reward for x in batch])
-        rewards = torch.FloatTensor(rewards).cuda()
+        # rewards = torch.FloatTensor(rewards).to(self.device)
         
         dones = np.array([x.done for x in batch])
-        dones = torch.BoolTensor(dones).cuda()
+        # dones = torch.BoolTensor(dones).to(self.device)
                 
         nextStates = np.array([x.nextState for x in batch])
-        nextStates = torch.FloatTensor(nextStates).view(nextStates.shape[0], -1)
-        discountRewards, advantages = self.calc_rewards(states, actions, rewards, dones, nextStates)
+        # nextStates = torch.FloatTensor(nextStates).to(self.device).view(nextStates.shape[0], -1)
+
+        action_probs, values = self.network.predict(states)
+
+        with torch.no_grad():
+            discountRewards = self.getDiscountedRewards(rewards, self.gamma, 0)
+            # discountRewards = self.calc_rewards(states, rewards, dones, nextStates)
+            # print(discountRewards, discountRewards2)
+            advantages = discountRewards - values.detach().numpy().flatten()
+            discountRewards = torch.FloatTensor(discountRewards).to(self.device)
+            advantages = torch.FloatTensor(advantages).to(self.device)
+
+
         # print("calc_rewards", self.calc_rewards(states, actions, rewards, dones, nextStates))
-        # discountRewards = torch.FloatTensor(discountRewards).cuda()
-        # advantages = torch.FloatTensor(advantages).cuda()
+        # discountRewards = torch.FloatTensor(discountRewards).to(self.device)
+        # advantages = torch.FloatTensor(advantages).to(self.device)
         
         # final_reward = 0
         # state_values = self.network.predict(states)[1]
@@ -204,17 +207,15 @@ class A2CAgent(Agent):
         log_prob_actions = advantages * log_probs.gather(1, actions.unsqueeze(1)).squeeze(1).sum()
         policy_loss = -log_prob_actions.mean()
         
-        action_probs, values = self.network.predict(states)
         entropy_loss = -self.beta * (action_probs * log_probs).sum(dim=1).mean()
         
         value_loss = self.zeta * nn.MSELoss()(values.squeeze(-1), discountRewards)
-        
         total_policy_loss = policy_loss - entropy_loss
-        total_policy_loss.backward(retain_graph=True)
-        
-        value_loss.backward()
-        
         total_loss = policy_loss + value_loss + entropy_loss
+        
+        self.network.optimizer.zero_grad()
+        total_policy_loss.backward(retain_graph=True)
+        value_loss.backward()
         self.network.optimizer.step()
         
         # Stats

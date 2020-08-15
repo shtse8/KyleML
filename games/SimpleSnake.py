@@ -78,8 +78,8 @@ class SimpleSnake(Game):
         
     def getReward(self):
         reward = 0
-        if self.game.crash:
-            reward = -1
+        # if self.game.crash:
+        #     reward = -1
         if self.game.player.eaten:
             reward = 1
         return reward

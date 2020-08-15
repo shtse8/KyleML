@@ -1,7 +1,7 @@
 import os
 os.environ['TF_CPP_MIN_VLOG_LEVEL'] = '3'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 import sys
 import signal
@@ -15,6 +15,7 @@ from games.puzzle2048 import Puzzle2048
 from agents.DQNAgent import DQNAgent
 from agents.A2CAgent3 import A2CAgent
 
+import torch
 
 
 def signal_handler(sig, frame):
@@ -38,7 +39,7 @@ def main():
     args = parser.parse_args()
     print(args)
     signal.signal(signal.SIGINT, signal_handler)
-    
+    print("CUDA:", torch.cuda.is_available())
     if args.game == "2048":
         game = Puzzle2048()
     elif args.game == "snake":

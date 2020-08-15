@@ -169,9 +169,10 @@ class Agent(object):
         return self.episodes <= self.target_episodes
         
     def endEpisode(self) -> None:
-        self.lossHistory.append(self.loss / self.steps)
-        self.rewardHistory.append(self.rewards)
-        self.stepHistory.append(self.steps)
+        if self.isTraining():
+            self.lossHistory.append(self.loss / self.steps)
+            self.rewardHistory.append(self.rewards)
+            self.stepHistory.append(self.steps)
         self.update()
       
     def update(self) -> None:
@@ -185,7 +186,7 @@ class Agent(object):
         durationPerEpisode = duration /  self.episodes
         estimateDuration = self.target_episodes * durationPerEpisode
         totalSteps = np.sum(self.stepHistory)
-        print(f"{self.getPhrase().name:5} #{self.epochs:>3}  {progress:>4.0%} | " + \
+        print(f"{self.getPhrase().name:5} #{self.epochs} {progress:>4.0%} | " + \
             f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s, {totalSteps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
     
     def learn(self) -> None:

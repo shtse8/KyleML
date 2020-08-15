@@ -132,6 +132,9 @@ class A2CAgent(Agent):
             runningReward = runningReward * gamma + rewards[i]
             discountRewards[i] = runningReward
         return discountRewards
+
+
+
     
     def calc_rewards(self, states, rewards, dones, next_states):
         # rewards = np.array(rewards)
@@ -189,8 +192,17 @@ class A2CAgent(Agent):
         action_probs, values = self.network.predict(states)
 
         with torch.no_grad():
-            finalReward = 0 if dones[-1] else self.network.critic(nextStates[-1]).item()
-            discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
+            nextStateValues = self.network.critic(nextStates)
+            discountRewards = np.zeros_like(rewards).astype(float)
+            for i in range(len(discountRewards)):
+                lastIndex = min(self.n_steps, len(rewards) - i) - 1
+                elements = np.array([rewards[i + n] * self.gamma ** n for n in range(lastIndex + 1)])
+                r = elements.sum()
+                if not dones[lastIndex]: 
+                    r += nextStateValues[lastIndex].item() * self.gamma ** (lastIndex + 1)
+                discountRewards[i] = r
+            # finalReward = 0 if dones[-1] else self.network.critic(nextStates[-1]).item()
+            # discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
             # discountRewards = self.calc_rewards(states, rewards, dones, nextStates)
             # print(discountRewards, discountRewards2)
             advantages = discountRewards - values.detach().numpy().flatten()

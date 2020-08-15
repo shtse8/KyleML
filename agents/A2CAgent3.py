@@ -78,7 +78,7 @@ class A2CAgent(Agent):
 
         # Trainning
         self.learningRate = kwargs.get('learningRate', .001)
-        self.gamma = kwargs.get('gamma', 0.99)
+        self.gamma = kwargs.get('gamma', 0.9)
         
         # Memory
         self.memory_size = kwargs.get('memory_size', 10000)
@@ -93,7 +93,7 @@ class A2CAgent(Agent):
             learingRate=self.learningRate)
         
         self.n_commits = 0
-        self.n_steps = 10
+        self.n_steps = 1000
         self.beta = 0.001
         self.zeta = 0.001
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -118,7 +118,7 @@ class A2CAgent(Agent):
 
     def getAction(self, prediction, mask = None):
         handler = PredictionHandler(prediction, mask)
-        return handler.getRandomAction() if self.isTraining else handler.getBestAction()
+        return handler.getRandomAction() if self.isTraining() else handler.getBestAction()
     
     def beginEpisode(self):
         self.memory.clear()
@@ -192,17 +192,21 @@ class A2CAgent(Agent):
         action_probs, values = self.network.predict(states)
 
         with torch.no_grad():
+            """ 
             nextStateValues = self.network.critic(nextStates)
             discountRewards = np.zeros_like(rewards).astype(float)
             for i in range(len(discountRewards)):
                 lastIndex = min(self.n_steps, len(rewards) - i) - 1
                 elements = np.array([rewards[i + n] * self.gamma ** n for n in range(lastIndex + 1)])
-                r = elements.sum()
-                if not dones[lastIndex]: 
-                    r += nextStateValues[lastIndex].item() * self.gamma ** (lastIndex + 1)
-                discountRewards[i] = r
-            # finalReward = 0 if dones[-1] else self.network.critic(nextStates[-1]).item()
-            # discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
+                futureValue = 0
+                if not dones[i + lastIndex]: 
+                    futureValue = nextStateValues[i + lastIndex].item() * self.gamma ** (lastIndex + 1)
+                discountRewards[i] = elements.sum() + futureValue
+             """
+             # print(discountRewards)
+            finalReward = 0 if dones[-1] else self.network.critic(nextStates[-1]).item()
+            discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
+            # print(discountRewards)
             # discountRewards = self.calc_rewards(states, rewards, dones, nextStates)
             # print(discountRewards, discountRewards2)
             advantages = discountRewards - values.detach().numpy().flatten()
@@ -233,6 +237,7 @@ class A2CAgent(Agent):
         self.network.optimizer.zero_grad()
         total_policy_loss.backward(retain_graph=True)
         value_loss.backward()
+        # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
         self.network.optimizer.step()
         
         # Stats

@@ -24,12 +24,12 @@ def set_init(layers):
         nn.init.constant_(layer.bias, 0.)
 
 class Network(nn.Module):
-    def __init__(self, n_inputs, n_outputs, learingRate = 0.001, name = "default"):
+    def __init__(self, n_inputs, n_outputs, learingRate = 0.0001, name = "default"):
         super(Network, self).__init__()
         self.name = name
         self.learningRate = learingRate
 
-        hidden_nodes = 32
+        hidden_nodes = 128
         self.body = nn.Sequential(
             nn.Linear(n_inputs, hidden_nodes),
             nn.ReLU())
@@ -77,7 +77,7 @@ class A2CAgent(Agent):
         self.name="a2c"
 
         # Trainning
-        self.learningRate = kwargs.get('learningRate', .001)
+        self.learningRate = kwargs.get('learningRate', .0001)
         self.gamma = kwargs.get('gamma', 0.9)
         
         # Memory
@@ -166,8 +166,8 @@ class A2CAgent(Agent):
         # entropy_loss = -self.beta * (action_probs * log_probs).sum(dim=1).mean()
 
         dist = torch.distributions.Categorical(probs = action_probs)
-        action = dist.sample()
-        actor_loss = -dist.log_prob(action) * advantages.detach()
+        # action = dist.sample()
+        actor_loss = -dist.log_prob(actions) * advantages.detach()
         value_loss = self.zeta * advantages.pow(2) # nn.MSELoss()(values.squeeze(-1), discountRewards)
         # total_policy_loss = policy_loss - entropy_loss
         total_loss = (actor_loss + value_loss).mean()

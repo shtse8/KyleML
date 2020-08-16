@@ -36,6 +36,9 @@ class SimpleMemory(object):
     def clear(self) -> None:
         self.memory.clear()
     
+    def getLast(self, num):
+        return np.array(self.memory)[-num:]
+
     def __len__(self):
         return len(self.memory)
 

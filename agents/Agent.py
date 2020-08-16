@@ -184,10 +184,10 @@ class Agent(object):
         return self.episodes <= self.target_episodes
         
     def endEpisode(self) -> None:
+        self.rewardHistory.append(self.rewards)
+        self.stepHistory.append(self.steps)
         if self.isTraining():
             self.lossHistory.append(self.loss / self.samples)
-            self.rewardHistory.append(self.rewards)
-            self.stepHistory.append(self.steps)
         self.update()
       
     def update(self) -> None:

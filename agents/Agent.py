@@ -79,16 +79,13 @@ class Agent(object):
     def getPrediction(self, state):
         raise NotImplementedError()
 
-    def getAction(self, state, actionMask = None) -> int:
+    def getAction(self, state, mask = None) -> int:
         raise NotImplementedError()
     
     def commit(self, transition: Transition) -> None:
         self.rewards += transition.reward
         # self.update()
-    
-    def applyMask(self, prediction, mask, replacedValue = 0):
-        return np.array([prediction[i] if mask else replacedValue for i, mask in enumerate(mask)])
-
+        
     def run(self, train = True) -> None:
         self.phrases = [Phrase.train] if train else [Phrase.play]
         while self.beginEpoch():
@@ -194,25 +191,30 @@ class Agent(object):
 
     def save(self) -> None:
         try:
+            path = self.getSavePath(True)
+            data = {
+                "epochs": self.epochs
+            }
             for model in self.models:
-                path = self.getModelPath(model, True)
-                torch.save(model.state_dict(), path)
+                data[model.name] = model.state_dict()
+            torch.save(data, path)
             # print("Saved Weights.")
         except Exception as e:
             print("Failed to save.", e)
         
     def load(self) -> None:
         try:
+            path = self.getSavePath()
+            print("Loading from path: ", path)
+            data = torch.load(path)
+            self.epochs = int(data["epochs"])
             for model in self.models:
-                path = self.getModelPath(model)
-                print("Loading from path: ", path)
-                model.load_state_dict(torch.load(path))
+                model.load_state_dict(data[model.name])
             print("Weights loaded.")
         except Exception as e:
             print("Failed to load.", e)
-                
-
-    def getModelPath(self, model, makeDir = False):
-        path = os.path.join(os.path.dirname(__main__.__file__), self.weightPath, self.name, self.env.name, model.name + ".h5")
+    
+    def getSavePath(self, makeDir = False):
+        path = os.path.join(os.path.dirname(__main__.__file__), self.weightPath, self.name, self.env.name + ".h5")
         Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
         return path

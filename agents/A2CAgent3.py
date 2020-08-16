@@ -29,7 +29,7 @@ class Network(nn.Module):
         self.name = name
         self.learningRate = learingRate
 
-        hidden_nodes = 128
+        hidden_nodes = 32
         self.body = nn.Sequential(
             nn.Linear(n_inputs, hidden_nodes),
             nn.ReLU())
@@ -132,39 +132,6 @@ class A2CAgent(Agent):
             runningReward = runningReward * gamma + rewards[i]
             discountRewards[i] = runningReward
         return discountRewards
-
-
-
-    
-    def calc_rewards(self, states, rewards, dones, next_states):
-        # rewards = np.array(rewards)
-        total_steps = len(rewards)
-        
-        G = np.zeros_like(rewards, dtype=float)
-        for t in range(total_steps):
-            last_step = min(self.n_steps, total_steps - t)
-            # Look for end of episode
-            check_episode_completion = dones[t:t+last_step]
-            # print(check_episode_completion)
-            if len(check_episode_completion) > 0:
-                if True in check_episode_completion:
-                    next_ep_completion = np.where(check_episode_completion == True)[0][0]
-                    last_step = next_ep_completion
-            
-            # Sum and discount rewards
-            G[t] = sum([rewards[t+n:t+n+1] * self.gamma ** n for n in range(last_step)])
-        
-        # print(rewards, G)
-        # print("1", G)
-        if total_steps > self.n_steps:
-            next_state_values = self.network.predict(next_states)[1]
-            next_state_values[dones] = 0.0
-            next_state_values = next_state_values.detach().numpy().flatten()
-            G[:total_steps - self.n_steps] += next_state_values[self.n_steps:] \
-                * self.gamma ** self.n_steps
-        # td_delta = G - state_values
-        # print(G, td_delta)
-        return G
         
     def learn(self):
         self.network.train()
@@ -180,39 +147,19 @@ class A2CAgent(Agent):
         actions = np.array([x.action for x in batch])
         actions = torch.LongTensor(actions).to(self.device)
         
-        rewards = np.array([x.reward for x in batch])
-        # rewards = torch.FloatTensor(rewards).to(self.device)
-        
-        dones = np.array([x.done for x in batch])
-        # dones = torch.BoolTensor(dones).to(self.device)
-                
-        nextStates = np.array([x.nextState for x in batch])
-        nextStates = torch.FloatTensor(nextStates).to(self.device).view(nextStates.shape[0], -1)
-
         action_probs, values = self.network.predict(states)
 
         with torch.no_grad():
-            """ 
-            nextStateValues = self.network.critic(nextStates)
-            discountRewards = np.zeros_like(rewards).astype(float)
-            for i in range(len(discountRewards)):
-                lastIndex = min(self.n_steps, len(rewards) - i) - 1
-                elements = np.array([rewards[i + n] * self.gamma ** n for n in range(lastIndex + 1)])
-                futureValue = 0
-                if not dones[i + lastIndex]: 
-                    futureValue = nextStateValues[i + lastIndex].item() * self.gamma ** (lastIndex + 1)
-                discountRewards[i] = elements.sum() + futureValue
-             """
-             # print(discountRewards)
-            finalReward = 0 if dones[-1] else self.network.critic(nextStates[-1]).item()
+            rewards = np.array([x.reward for x in batch])
+            finalReward = 0
+            if not batch[-1].done:
+                nextState = torch.FloatTensor(batch[-1].nextState).to(self.device).view(1, -1)
+                finalReward = self.network.critic(nextState).item()
             discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
-            # print(discountRewards)
-            # discountRewards = self.calc_rewards(states, rewards, dones, nextStates)
-            # print(discountRewards, discountRewards2)
             advantages = discountRewards - values.detach().numpy().flatten()
-            discountRewards = torch.FloatTensor(discountRewards).to(self.device)
-            advantages = torch.FloatTensor(advantages).to(self.device)
 
+        discountRewards = torch.FloatTensor(discountRewards).to(self.device)
+        advantages = torch.FloatTensor(advantages).to(self.device)
 
         # print("calc_rewards", self.calc_rewards(states, actions, rewards, dones, nextStates))
         # discountRewards = torch.FloatTensor(discountRewards).to(self.device)

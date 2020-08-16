@@ -1,7 +1,7 @@
-import random
 import numpy as np
 import collections
 from memories.Transition import Transition
+
 
 class SimpleMemory(object):
     def __init__(self, capacity: int) -> None:
@@ -12,7 +12,7 @@ class SimpleMemory(object):
     def add(self, transition: Transition) -> None:
         self.memory.append(transition)
 
-    def get(self, size = 0):
+    def get(self, size: int = 0):
         return self.memory
         # states = []
         # actions = []
@@ -36,13 +36,13 @@ class SimpleMemory(object):
     def clear(self) -> None:
         self.memory.clear()
     
-    def getLast(self, num):
+    def getLast(self, num: int):
         return np.array(self.memory)[-num:]
 
     def __len__(self):
         return len(self.memory)
 
-    def __getitem__(self, i):
+    def __getitem__(self, i: int):
         return self.memory[i]
 
     def __iter__(self):

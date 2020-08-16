@@ -1,6 +1,3 @@
-import os
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
-
 class Game(object):
     def __init__(self):
         self.rendered = False
@@ -11,22 +8,22 @@ class Game(object):
     def getState(self):
         return []
 
-    def takeAction(self, action):
+    def takeAction(self, action) -> tuple:
         self.update()
         return self.getState(), self.getReward(), self.getDone()
 
-    def getReward(self):
+    def getReward(self) -> float:
         return 0
 
-    def isDone(self):
+    def isDone(self) -> bool:
         return False
-        
+
     def getNew(self):
         return self.__class__()
 
-    def render(self):
-        pass
+    def render(self) -> None:
+        raise NotImplementedError()
 
-    def update(self):
-        pass
+    def update(self) -> None:
+        raise NotImplementedError()
 

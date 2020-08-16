@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 
 class Network(nn.Module):
-    def __init__(self, n_inputs, n_outputs, learingRate=0.001, name="default"):
+    def __init__(self, n_inputs, n_outputs, learingRate: float = 0.001, name="default"):
         super(Network, self).__init__()
         self.name = name
         self.learningRate = learingRate
@@ -49,30 +49,29 @@ class Network(nn.Module):
 
 class A2CAgent(Agent):
     def __init__(self, env, **kwargs):
-        super().__init__(env, **kwargs)
-        self.name = "a2c"
+        super().__init__("a2c", env, **kwargs)
 
         # Trainning
-        self.learningRate = kwargs.get('learningRate', .001)
-        self.gamma = kwargs.get('gamma', 0.9)
-        
+        self.learningRate: float = kwargs.get('learningRate', .001)
+        self.gamma: float = kwargs.get('gamma', 0.9)
+
         # Memory
-        self.memory_size = kwargs.get('memory_size', 10000)
-        
+        self.memory_size: int = kwargs.get('memory_size', 10000)
+
         # self.ltmemory = collections.deque(maxlen=self.memory_size)
-        self.memory = SimpleMemory(self.memory_size)
-        
+        self.memory: SimpleMemory = SimpleMemory(self.memory_size)
+
         # Prediction model (the main Model)
-        self.network = Network(
+        self.network: Network = Network(
             np.product(self.env.observationSpace),
             self.env.actionSpace,
             learingRate=self.learningRate)
-        
-        self.n_steps = 50
+
+        self.n_steps: int = 50
 
         self.network.to(self.device)
         self.addModels(self.network)
-        
+  
     def commit(self, transition: Transition):
         super().commit(transition)
         if self.isTraining():
@@ -87,13 +86,12 @@ class A2CAgent(Agent):
             prediction = self.network.predict(state)[0].squeeze(0)
             return prediction.cpu().detach().numpy()
 
-    def getAction(self, prediction, mask=None):
+    def getAction(self, prediction, mask = None):
         handler = PredictionHandler(prediction, mask)
         return handler.getRandomAction() if self.isTraining() else handler.getBestAction()
 
-    def beginEpisode(self):
+    def beginEpisode(self) -> None:
         self.memory.clear()
-        self.n_commits = 0
         return super().beginEpisode()
 
     def getDiscountedRewards(self, rewards, gamma, finalReward):
@@ -104,7 +102,7 @@ class A2CAgent(Agent):
             discountRewards[i] = runningReward
         return discountRewards
 
-    def learn(self):
+    def learn(self) -> None:
         self.network.train()
         self.network.optimizer.zero_grad()
 

@@ -15,49 +15,52 @@ from memories.Transition import Transition
 from utils.errors import InvalidAction
 from enum import Enum
 import torch
+import torch.nn as nn
+from games.Game import Game
 
 class Phrase(Enum):
     train = 1
     test = 2
     play = 3
 
+
 class Agent(object):
-    def __init__(self, env, **kwargs) -> None:
-        self.name = ""
+    def __init__(self, name: str, env: Game, **kwargs) -> None:
+        self.name: str = name
 
         # Model
-        self.env = env
+        self.env: Game = env
         
         # Trainning
-        self.target_epochs = kwargs.get('target_epochs', 10000)
-        self.target_trains = kwargs.get('target_trains', 1000)
-        self.target_tests = kwargs.get('target_tests', 100)
+        self.target_epochs: int = kwargs.get('target_epochs', 10000)
+        self.target_trains: int = kwargs.get('target_trains', 1000)
+        self.target_tests: int = kwargs.get('target_tests', 100)
         
-        self.target_episodes = 0
+        self.target_episodes: int = 0
         
         # self.phrases = [Phrase.train, Phrase.test]
         self.phrases = []
         # self.phrases = [Phrase.play]
 
         # episode stats
-        self.steps = 0
-        self.rewards = 0
-        self.loss = 0
-        self.samples = 0
-        self.invalidMoves = 0
+        self.steps: int = 0
+        self.rewards: float = 0
+        self.loss: float = 0
+        self.samples: int = 0
+        self.invalidMoves: int = 0
         self.episode_start_time = 0
 
         # phrase stats
-        self.episodes = 0
+        self.episodes: int = 0
         
         # epoch stats
-        self.phraseIndex = 0
+        self.phraseIndex: int = 0
 
         # training stats
-        self.epochs = 0
-        self.totalSteps = 0
-        self.totalRewards = 0
-        self.totalSamples = 0
+        self.epochs: int = 0
+        self.totalSteps: int = 0
+        self.totalRewards: float = 0
+        self.totalSamples: int = 0
 
 
         # History
@@ -78,14 +81,14 @@ class Agent(object):
         plt.xlabel("Episode")
         # plt.show(block=False)
 
-    def addModels(self, model) -> None:
+    def addModels(self, model: nn.Module) -> None:
         self.models.append(model)
 
     def beginEpoch(self) -> None:
         self.epochs += 1
         self.phraseIndex = 0
         return self.epochs <= self.target_epochs
-    
+
     def endEpoch(self) -> None:
         pass
 
@@ -94,21 +97,21 @@ class Agent(object):
 
     def getAction(self, state, mask = None) -> int:
         raise NotImplementedError()
-    
+
     def commit(self, transition: Transition) -> None:
         self.rewards += transition.reward
         self.steps += 1
         # self.update()
-        
-    def run(self, train = True) -> None:
+
+    def run(self, train: bool = True) -> None:
         self.phrases = [Phrase.train] if train else [Phrase.play]
         while self.beginEpoch():
             while self.beginPhrase():
                 while self.beginEpisode():
                     state = self.env.reset()
-                    done = False
+                    done: bool = False
                     while not done:
-                        reward = 0
+                        reward: float = 0.
                         nextState = state
                         actionMask = np.ones(self.env.actionSpace)
                         prediction = self.getPrediction(state)
@@ -125,23 +128,23 @@ class Agent(object):
                             # finally:
                         state = nextState
                         if self.isPlaying():
-                            time.sleep(0.3)
+                            time.sleep(0.25)
                     self.endEpisode()
                 self.endPhrase()
             self.endEpoch()
-            
+
     def getPhrase(self) -> Phrase:
         return self.phrases[self.phraseIndex]
-        
+
     def isTraining(self) -> bool:
         return self.getPhrase() == Phrase.train
-        
+
     def isTesting(self) -> bool:
         return self.getPhrase() == Phrase.test
-        
+
     def isPlaying(self) -> bool:
         return self.getPhrase() == Phrase.play
-        
+
     def beginPhrase(self) -> None:
         if self.phraseIndex >= len(self.phrases):
             return False
@@ -161,7 +164,7 @@ class Agent(object):
         self.stepHistory = collections.deque(maxlen=self.target_episodes)
 
         return True
-    
+
     def endPhrase(self) -> None:
         if self.isTraining():
             self.save()
@@ -173,7 +176,7 @@ class Agent(object):
         # plt.draw()
         # plt.pause(0.00001)
         print()
-        
+
     def beginEpisode(self) -> None:
         self.episodes += 1
         self.episode_start_time = time.perf_counter()
@@ -182,14 +185,14 @@ class Agent(object):
         self.loss = 0
         self.samples = 0
         return self.episodes <= self.target_episodes
-        
+
     def endEpisode(self) -> None:
         self.rewardHistory.append(self.rewards)
         self.stepHistory.append(self.steps)
         if self.isTraining():
             self.lossHistory.append(self.loss / self.samples)
         self.update()
-      
+
     def update(self) -> None:
         duration = time.perf_counter() - self.startTime
         avgLoss = np.mean(self.lossHistory) if len(self.lossHistory) > 0 else math.nan
@@ -203,7 +206,7 @@ class Agent(object):
         totalSteps = np.sum(self.stepHistory)
         print(f"{self.getPhrase().name:5} #{self.epochs} {progress:>4.0%} | " + \
             f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s, {totalSteps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
-    
+
     def learn(self) -> None:
         raise NotImplementedError()
 
@@ -236,7 +239,8 @@ class Agent(object):
         except Exception as e:
             print("Failed to load.", e)
     
-    def getSavePath(self, makeDir = False):
+    def getSavePath(self, makeDir: bool = False) -> str:
         path = os.path.join(os.path.dirname(__main__.__file__), self.weightPath, self.name, self.env.name + ".h5")
-        Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
+        if makeDir:
+            Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
         return path

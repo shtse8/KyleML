@@ -95,7 +95,7 @@ class Grid:
     def withinBounds(self, position):
         return position.x >= 0 and position.x < self.size and position.y >= 0 and position.y < self.size
     
-class game2048:
+class Game2048:
 
     def __init__(self, size):
         #create a new game and initialize two tiles
@@ -134,9 +134,9 @@ class game2048:
     def isGameTerminated(self):
         return self.over or (self.won and not self.keepPlaying)
         
-    def move(self, direction):
+    def move(self, direction: int) -> bool:
         if self.isGameTerminated():
-            return # Don't do anything if the game's over
+            raise Exception("Game is over.")  # Don't do anything if the game's over
 
         vector = self.getVector(direction)
         traversals = self.buildTraversals(vector)
@@ -186,10 +186,10 @@ class game2048:
 
         return moved
        
-    def getVector(self, direction):
+    def getVector(self, direction: int):
         # Coords representing tile movement
         map = [
-            Vector(0, -1), # Up
+            Vector(0, -1),  # Up
             Vector(1, 0),  # Right
             Vector(0, 1),  # Down
             Vector(-1, 0)  # Left

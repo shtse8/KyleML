@@ -45,16 +45,6 @@ class Network(nn.Module):
     
     def critic(self, state):
         return self.value(self.get_body_output(state))
-
-    # def get_action(self, state):
-        # probs = self.predict(state)[0].detach().numpy()
-        # action = np.random.choice(self.action_space, p=probs)
-        # return action
-    
-    def get_log_probs(self, state):
-        body_output = self.get_body_output(state)
-        logprobs = F.log_softmax(self.policy(body_output), dim=-1)
-        return logprobs    
         
 
 class A2CAgent(Agent):
@@ -78,7 +68,7 @@ class A2CAgent(Agent):
             self.env.actionSpace,
             learingRate=self.learningRate)
         
-        self.n_steps = 10
+        self.n_steps = 50
         self.beta = 0.001
         self.zeta = 1
 
@@ -118,6 +108,7 @@ class A2CAgent(Agent):
 
     def learn(self):
         self.network.train()
+        self.network.optimizer.zero_grad()
 
         batch = self.memory.getLast(self.n_steps)
         if len(batch) == 0:
@@ -137,19 +128,20 @@ class A2CAgent(Agent):
         if not batch[-1].done:
             nextState = torch.FloatTensor(batch[-1].nextState).to(self.device).view(1, -1)
             finalReward = self.network.critic(nextState).item()
-        discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
-        discountRewards = torch.FloatTensor(discountRewards).to(self.device)
-        advantages = discountRewards - values
+        targetValues = self.getDiscountedRewards(rewards, self.gamma, finalReward)
+        targetValues = torch.FloatTensor(targetValues).to(self.device).unsqueeze(1)
+        advantages = targetValues - values
         
         dist = torch.distributions.Categorical(probs=action_probs)
         entropy_loss = dist.entropy()
-        actor_loss = -(dist.log_prob(actions) * advantages.detach() + entropy_loss * 0.01)
-        value_loss = self.zeta * nn.MSELoss()(values.squeeze(-1), discountRewards)
+        actor_loss = -(dist.log_prob(actions) * advantages.detach() + entropy_loss * 0.005)
+        # print("1", values, values.squeeze(-1), targetValues)
+        # print("2", nn.MSELoss()(values.squeeze(-1), targetValues), nn.MSELoss()(values, targetValues), advantages.pow(2).mean())
+        value_loss = self.zeta * advantages.pow(2).mean()
         # value_loss = self.zeta * advantages.pow(2)  # nn.MSELoss()(values.squeeze(-1), discountRewards)
         
         total_loss = (actor_loss + value_loss).mean()
         
-        self.network.optimizer.zero_grad()
         total_loss.backward()
         # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
         self.network.optimizer.step()

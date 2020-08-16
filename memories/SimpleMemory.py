@@ -38,7 +38,10 @@ class SimpleMemory(object):
     
     def __len__(self):
         return len(self.memory)
-        
+
+    def __getitem__(self, i):
+        return self.memory[i]
+
     def __iter__(self):
         return self
 

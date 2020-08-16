@@ -69,8 +69,6 @@ class A2CAgent(Agent):
             learingRate=self.learningRate)
         
         self.n_steps = 50
-        self.beta = 0.001
-        self.zeta = 1
 
         self.network.to(self.device)
         self.addModels(self.network)
@@ -121,6 +119,7 @@ class A2CAgent(Agent):
         actions = torch.LongTensor(actions).to(self.device)
         
         action_probs, values = self.network.predict(states)
+        values = values.squeeze(1)
 
         # with torch.no_grad():
         rewards = np.array([x.reward for x in batch])
@@ -129,16 +128,14 @@ class A2CAgent(Agent):
             nextState = torch.FloatTensor(batch[-1].nextState).to(self.device).view(1, -1)
             finalReward = self.network.critic(nextState).item()
         targetValues = self.getDiscountedRewards(rewards, self.gamma, finalReward)
-        targetValues = torch.FloatTensor(targetValues).to(self.device).unsqueeze(1)
+        targetValues = torch.FloatTensor(targetValues).to(self.device)
         advantages = targetValues - values
         
         dist = torch.distributions.Categorical(probs=action_probs)
         entropy_loss = dist.entropy()
         actor_loss = -(dist.log_prob(actions) * advantages.detach() + entropy_loss * 0.005)
-        # print("1", values, values.squeeze(-1), targetValues)
-        # print("2", nn.MSELoss()(values.squeeze(-1), targetValues), nn.MSELoss()(values, targetValues), advantages.pow(2).mean())
-        value_loss = self.zeta * advantages.pow(2).mean()
-        # value_loss = self.zeta * advantages.pow(2)  # nn.MSELoss()(values.squeeze(-1), discountRewards)
+        value_loss = advantages.pow(2).mean()
+        # value_loss = nn.MSELoss()(values, discountRewards)
         
         total_loss = (actor_loss + value_loss).mean()
         

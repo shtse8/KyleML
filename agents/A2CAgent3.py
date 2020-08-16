@@ -94,8 +94,8 @@ class A2CAgent(Agent):
         
         self.n_commits = 0
         self.n_steps = 50
-        self.beta = 0.001
-        self.zeta = 0.001
+        self.beta = 0
+        self.zeta = 1
 
         self.network.to(self.device)
         self.addModels(self.network)
@@ -156,25 +156,13 @@ class A2CAgent(Agent):
             nextState = torch.FloatTensor(batch[-1].nextState).to(self.device).view(1, -1)
             finalReward = self.network.critic(nextState).item()
         discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
-        advantages = discountRewards - values.detach().numpy().flatten()
-
         discountRewards = torch.FloatTensor(discountRewards).to(self.device)
-        advantages = torch.FloatTensor(advantages).to(self.device)
-
-        # print("calc_rewards", self.calc_rewards(states, actions, rewards, dones, nextStates))
-        # discountRewards = torch.FloatTensor(discountRewards).to(self.device)
-        # advantages = torch.FloatTensor(advantages).to(self.device)
+        advantages = discountRewards - values
         
-        # final_reward = 0
-        # state_values = self.network.predict(states)[1]
-        # next_state_values = self.network.predict(next_states)[1]
-        # discountRewards = torch.tensor(self.getDiscountedRewards(rewards, self.gamma, final_reward), dtype=torch.float)
-        # print("discountRewards", discountRewards)
-        # advantages = discountRewards - state_values
         log_probs = self.network.get_log_probs(states)
-        log_prob_actions = advantages * log_probs.gather(1, actions.unsqueeze(1)).squeeze(1).sum()
+        log_prob_actions = advantages * log_probs.gather(1, actions.unsqueeze(1)).squeeze(1)
         policy_loss = -log_prob_actions.mean()
-        
+        # print(action_probs, log_probs)
         entropy_loss = -self.beta * (action_probs * log_probs).sum(dim=1).mean()
         
         value_loss = self.zeta * nn.MSELoss()(values.squeeze(-1), discountRewards)

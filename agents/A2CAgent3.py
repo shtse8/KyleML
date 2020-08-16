@@ -93,10 +93,10 @@ class A2CAgent(Agent):
             learingRate=self.learningRate)
         
         self.n_commits = 0
-        self.n_steps = 1000
+        self.n_steps = 50
         self.beta = 0.001
         self.zeta = 0.001
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
         self.network.to(self.device)
         self.addModels(self.network)
         
@@ -137,7 +137,7 @@ class A2CAgent(Agent):
         self.network.train()
         
         
-        batch = self.memory
+        batch = self.memory.getLast(self.n_steps)
         if len(batch) == 0:
             return
 
@@ -149,14 +149,14 @@ class A2CAgent(Agent):
         
         action_probs, values = self.network.predict(states)
 
-        with torch.no_grad():
-            rewards = np.array([x.reward for x in batch])
-            finalReward = 0
-            if not batch[-1].done:
-                nextState = torch.FloatTensor(batch[-1].nextState).to(self.device).view(1, -1)
-                finalReward = self.network.critic(nextState).item()
-            discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
-            advantages = discountRewards - values.detach().numpy().flatten()
+        # with torch.no_grad():
+        rewards = np.array([x.reward for x in batch])
+        finalReward = 0
+        if not batch[-1].done:
+            nextState = torch.FloatTensor(batch[-1].nextState).to(self.device).view(1, -1)
+            finalReward = self.network.critic(nextState).item()
+        discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
+        advantages = discountRewards - values.detach().numpy().flatten()
 
         discountRewards = torch.FloatTensor(discountRewards).to(self.device)
         advantages = torch.FloatTensor(advantages).to(self.device)
@@ -184,7 +184,7 @@ class A2CAgent(Agent):
         self.network.optimizer.zero_grad()
         total_policy_loss.backward(retain_graph=True)
         value_loss.backward()
-        # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
+        nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
         self.network.optimizer.step()
         
         # Stats
@@ -192,6 +192,5 @@ class A2CAgent(Agent):
         self.loss += total_loss.item() * steps
         self.steps += steps
         
-        self.memory.clear()
         
     

@@ -157,18 +157,11 @@ class A2CAgent(Agent):
         discountRewards = torch.FloatTensor(discountRewards).to(self.device)
         advantages = discountRewards - values
         
-        # log_probs = self.network.get_log_probs(states)
-        # log_prob_actions = advantages * log_probs.gather(1, actions.unsqueeze(1)).squeeze(1)
-        # policy_loss = -log_prob_actions.mean()
-        # print(action_probs, log_probs)
-        # entropy_loss = -self.beta * (action_probs * log_probs).sum(dim=1).mean()
-
         dist = torch.distributions.Categorical(probs = action_probs)
-        # action = dist.sample()
         entropy_loss = dist.entropy()
-        actor_loss = -(dist.log_prob(actions) * advantages + entropy_loss * 0.01)
+        actor_loss = -(dist.log_prob(actions) * advantages.detach() + entropy_loss * 0.01)
         value_loss = self.zeta * advantages.pow(2) # nn.MSELoss()(values.squeeze(-1), discountRewards)
-        # total_policy_loss = policy_loss - entropy_loss
+        
         total_loss = (actor_loss + value_loss).mean()
         
         self.network.optimizer.zero_grad()

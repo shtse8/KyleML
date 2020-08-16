@@ -24,7 +24,7 @@ def set_init(layers):
         nn.init.constant_(layer.bias, 0.)
 
 class Network(nn.Module):
-    def __init__(self, n_inputs, n_outputs, learingRate = 0.0001, name = "default"):
+    def __init__(self, n_inputs, n_outputs, learingRate = 0.001, name = "default"):
         super(Network, self).__init__()
         self.name = name
         self.learningRate = learingRate
@@ -77,7 +77,7 @@ class A2CAgent(Agent):
         self.name="a2c"
 
         # Trainning
-        self.learningRate = kwargs.get('learningRate', .0001)
+        self.learningRate = kwargs.get('learningRate', .001)
         self.gamma = kwargs.get('gamma', 0.9)
         
         # Memory
@@ -92,8 +92,7 @@ class A2CAgent(Agent):
             self.env.actionSpace, 
             learingRate=self.learningRate)
         
-        self.n_commits = 0
-        self.n_steps = 50
+        self.n_steps = 10
         self.beta = 0.001
         self.zeta = 1
 
@@ -104,8 +103,7 @@ class A2CAgent(Agent):
         super().commit(transition)
         if self.isTraining():
             self.memory.add(transition)
-            self.n_commits += 1
-            if transition.done or self.n_commits % self.n_steps == 0:
+            if transition.done or self.steps % self.n_steps == 0:
                 self.learn()
         
     def getPrediction(self, state):
@@ -167,20 +165,21 @@ class A2CAgent(Agent):
 
         dist = torch.distributions.Categorical(probs = action_probs)
         # action = dist.sample()
-        actor_loss = -dist.log_prob(actions) * advantages.detach()
+        entropy_loss = dist.entropy()
+        actor_loss = -(dist.log_prob(actions) * advantages + entropy_loss * 0.01)
         value_loss = self.zeta * advantages.pow(2) # nn.MSELoss()(values.squeeze(-1), discountRewards)
         # total_policy_loss = policy_loss - entropy_loss
         total_loss = (actor_loss + value_loss).mean()
         
         self.network.optimizer.zero_grad()
         total_loss.backward()
-        nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
+        # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
         self.network.optimizer.step()
         
         # Stats
-        steps = len(batch)
-        self.loss += total_loss.item() * steps
-        self.steps += steps
+        n_sample = len(batch)
+        self.loss += total_loss.item() * n_sample
+        self.samples += n_sample
         
         
     

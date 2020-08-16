@@ -38,21 +38,32 @@ class Agent(object):
         # self.phrases = [Phrase.train, Phrase.test]
         self.phrases = []
         # self.phrases = [Phrase.play]
-        self.phraseIndex = 0
-        self.phrase = ""
-        self.epochs = 0
-        self.episodes = 0
-        self.episode_start_time = 0
 
+        # episode stats
         self.steps = 0
         self.rewards = 0
         self.loss = 0
-
+        self.samples = 0
         self.invalidMoves = 0
+        self.episode_start_time = 0
+
+        # phrase stats
+        self.episodes = 0
+        
+        # epoch stats
+        self.phraseIndex = 0
+
+        # training stats
+        self.epochs = 0
+        self.totalSteps = 0
+        self.totalRewards = 0
+        self.totalSamples = 0
+
+
         # History
-        self.rewardHistory = collections.deque(maxlen=max(self.target_trains, self.target_tests))
-        self.lossHistory = collections.deque(maxlen=max(self.target_trains, self.target_tests))
-        self.stepHistory = collections.deque(maxlen=max(self.target_trains, self.target_tests))
+        self.rewardHistory = None
+        self.lossHistory = None
+        self.stepHistory = None
         
         self.startTime = 0
 
@@ -86,6 +97,7 @@ class Agent(object):
     
     def commit(self, transition: Transition) -> None:
         self.rewards += transition.reward
+        self.steps += 1
         # self.update()
         
     def run(self, train = True) -> None:
@@ -135,9 +147,7 @@ class Agent(object):
             return False
         self.episodes = 0
         self.invalidMoves = 0
-        self.rewardHistory.clear()
-        self.lossHistory.clear()
-        self.stepHistory.clear()
+
         self.startTime = time.perf_counter()
         if self.isTraining():
             self.target_episodes = self.target_trains
@@ -145,6 +155,11 @@ class Agent(object):
             self.target_episodes = self.target_tests
         elif self.isPlaying():
             self.target_episodes = 1
+        
+        self.rewardHistory = collections.deque(maxlen=self.target_episodes)
+        self.lossHistory = collections.deque(maxlen=self.target_episodes)
+        self.stepHistory = collections.deque(maxlen=self.target_episodes)
+
         return True
     
     def endPhrase(self) -> None:
@@ -163,13 +178,14 @@ class Agent(object):
         self.episodes += 1
         self.episode_start_time = time.perf_counter()
         self.rewards = 0
-        self.loss = 0
         self.steps = 0
+        self.loss = 0
+        self.samples = 0
         return self.episodes <= self.target_episodes
         
     def endEpisode(self) -> None:
         if self.isTraining():
-            self.lossHistory.append(self.loss / self.steps)
+            self.lossHistory.append(self.loss / self.samples)
             self.rewardHistory.append(self.rewards)
             self.stepHistory.append(self.steps)
         self.update()
@@ -195,7 +211,9 @@ class Agent(object):
         try:
             path = self.getSavePath(True)
             data = {
-                "epochs": self.epochs
+                "totalRewards": self.totalRewards,
+                "totalSamples": self.totalSamples,
+                "totalSteps": self.totalSteps
             }
             for model in self.models:
                 data[model.name] = model.state_dict()
@@ -209,7 +227,9 @@ class Agent(object):
             path = self.getSavePath()
             print("Loading from path: ", path)
             data = torch.load(path, map_location=self.device)
-            self.epochs = int(data["epochs"])
+            self.totalRewards = float(data["totalRewards"]) if "totalRewards" in data else 0
+            self.totalSamples = int(data["totalSamples"]) if "totalSamples" in data else 0
+            self.totalSteps = int(data["totalSteps"]) if "totalSteps" in data else 0
             for model in self.models:
                 model.load_state_dict(data[model.name])
             print("Weights loaded.")

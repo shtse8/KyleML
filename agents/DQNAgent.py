@@ -179,9 +179,9 @@ class DQNAgent(Agent):
             self.updateTarget()
         
         # Stats
-        steps = len(batch)
-        self.loss += loss.item() * steps
-        self.steps += steps
+        n_sample = len(batch)
+        self.loss += loss.item() * n_sample
+        self.samples += n_sample
 
     def updateTarget(self):
         # print("Target is updated.")

@@ -1,190 +1,160 @@
-import os
-import random
 import numpy as np
-import sys
-import collections
-import math
-import time
-from memories.PrioritizedMemory import PrioritizedMemory
 from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
 from .Agent import Agent
+from utils.PredictionHandler import PredictionHandler
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import torchvision.transforms as T
-from torch.autograd import Variable
 
-def set_init(layers):
-    for layer in layers:
-        nn.init.normal_(layer.weight, mean=0., std=0.1)
-        nn.init.constant_(layer.bias, 0.)
 
-class ActorNetwork(nn.Module):
-    def __init__(self, s_dim, a_dim, name = "actor"):
-        super(ActorNetwork, self).__init__()
+class Network(nn.Module):
+    def __init__(self, n_inputs, n_outputs, learingRate=0.001, name="default"):
+        super(Network, self).__init__()
         self.name = name
-        self.fc1 = nn.Linear(s_dim,128)
-        self.fc2 = nn.Linear(128,128)
-        self.fc3 = nn.Linear(128,a_dim)
+        self.learningRate = learingRate
+
+        hidden_nodes = 128
+        self.body = nn.Sequential(
+            nn.Linear(n_inputs, hidden_nodes),
+            nn.ReLU())
+            
+        # Define policy head
+        self.policy = nn.Sequential(
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, n_outputs))
+            
+        # Define value head
+        self.value = nn.Sequential(
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, 1))
+
+        self.optimizer = optim.Adam(self.parameters(), lr=self.learningRate)
+
+    def predict(self, state):
+        body_output = self.get_body_output(state)
+        probs = F.softmax(self.policy(body_output), dim=-1)
+        return probs, self.value(body_output)
+
+    def get_body_output(self, state):
+        return self.body(state)
+    
+    def critic(self, state):
+        return self.value(self.get_body_output(state))
+
+    # def get_action(self, state):
+        # probs = self.predict(state)[0].detach().numpy()
+        # action = np.random.choice(self.action_space, p=probs)
+        # return action
+    
+    def get_log_probs(self, state):
+        body_output = self.get_body_output(state)
+        logprobs = F.log_softmax(self.policy(body_output), dim=-1)
+        return logprobs    
         
-    def forward(self, x):
-        out = F.relu(self.fc1(x))
-        out = F.relu(self.fc2(out))
-        out2 = F.log_softmax(self.fc3(out), dim=1)
-        # out = F.softmax(self.fc3(out), dim=1).log()
-        return out2
-        
-class CriticNetwork(nn.Module):
-    def __init__(self, s_dim, a_dim, name = "critic"):
-        super(CriticNetwork, self).__init__()
-        self.name = name
-        self.fc1 = nn.Linear(s_dim, 128)
-        self.fc2 = nn.Linear(128,128)
-        self.fc3 = nn.Linear(128, a_dim)
-        
-    def forward(self, x):
-        out = F.relu(self.fc1(x))
-        out = F.relu(self.fc2(out))
-        out = self.fc3(out)
-        return out
-        
-    # def loss_func(self, s, a, v_t):
-        # self.train()
-        # logits, values = self.forward(s)
-        # td = v_t - values
-        # c_loss = td.pow(2)
-        
-        # probs = F.softmax(logits, dim=1)
-        # m = self.distribution(probs)
-        # exp_v = m.log_prob(a) * td.detach().squeeze()
-        # a_loss = -exp_v
-        # total_loss = (c_loss + a_loss).mean()
-        # return total_loss
 
 class A2CAgent(Agent):
     def __init__(self, env, **kwargs):
         super().__init__(env, **kwargs)
-        self.name="a2c"
+        self.name = "a2c"
 
         # Trainning
-        self.learning_rate = kwargs.get('learning_rate', .001)
-        self.gamma = kwargs.get('gamma', 0.99)
+        self.learningRate = kwargs.get('learningRate', .001)
+        self.gamma = kwargs.get('gamma', 0.9)
         
         # Memory
-        self.memory_size = kwargs.get('memory_size', 100000)
+        self.memory_size = kwargs.get('memory_size', 10000)
         
         # self.ltmemory = collections.deque(maxlen=self.memory_size)
         self.memory = SimpleMemory(self.memory_size)
         
         # Prediction model (the main Model)
-        self.actor = ActorNetwork(np.product(self.env.observationSpace), self.env.actionSpace)
-        self.critic = CriticNetwork(np.product(self.env.observationSpace), 1)
+        self.network = Network(
+            np.product(self.env.observationSpace),
+            self.env.actionSpace,
+            learingRate=self.learningRate)
         
-        # self.model.cuda()
-        # self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
-        self.actorOptimizer = optim.Adam(self.actor.parameters(), lr=self.learning_rate)
-        self.criticOptimizer = optim.Adam(self.critic.parameters(), lr=self.learning_rate)
+        self.n_steps = 10
+        self.beta = 0.001
+        self.zeta = 1
+
+        self.network.to(self.device)
+        self.addModels(self.network)
         
-        self.addModels(self.actor)
-        self.addModels(self.critic)
-
-    def beginPhrase(self):
-        self.memory.clear()
-        return super().beginPhrase()
-
     def commit(self, transition: Transition):
         super().commit(transition)
-        self.memory.add(transition)
-        
-    def getPrediction(self, state):
-        self.actor.eval()
-        
-        stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
-        log_softmax_action = self.actor(stateTensor)
-        prediction = torch.exp(log_softmax_action).squeeze(0)
-        return prediction.detach().numpy()
-        
+        if self.isTraining():
+            self.memory.add(transition)
+            if transition.done or self.steps % self.n_steps == 0:
+                self.learn()
 
-    def getAction(self, prediction, actionMask = None):
-        if actionMask is not None:
-            prediction = self.applyMask(prediction, actionMask)
-        if self.isTraining():
-            predictionSum = np.sum(prediction)
-            prediction /= predictionSum
-            action = np.random.choice(self.env.actionSpace, p=prediction)
-        else:
-            action = prediction.argmax()
-        return action
-    
-    def endEpisode(self):
-        if self.isTraining():
-            self.learn()
-        super().endEpisode()
-      
-    def getDiscountedRewards(self, rewards, gamma, final_reward):
+    def getPrediction(self, state):
+        self.network.eval()
+        with torch.no_grad():
+            state = torch.FloatTensor(state).view(1, -1).to(self.device)
+            prediction = self.network.predict(state)[0].squeeze(0)
+            return prediction.cpu().detach().numpy()
+
+    def getAction(self, prediction, mask=None):
+        handler = PredictionHandler(prediction, mask)
+        return handler.getRandomAction() if self.isTraining() else handler.getBestAction()
+
+    def beginEpisode(self):
+        self.memory.clear()
+        self.n_commits = 0
+        return super().beginEpisode()
+
+    def getDiscountedRewards(self, rewards, gamma, finalReward):
         discountRewards = np.zeros_like(rewards).astype(float)
-        running_reward = final_reward
+        runningReward = finalReward
         for i in reversed(range(len(rewards))):
-            running_reward = running_reward * gamma + rewards[i]
-            discountRewards[i] = running_reward
+            runningReward = runningReward * gamma + rewards[i]
+            discountRewards[i] = runningReward
         return discountRewards
-        
+
     def learn(self):
-        self.actor.train()
-        self.critic.train()
-        
-        batch = self.memory
+        self.network.train()
+
+        batch = self.memory.getLast(self.n_steps)
+        if len(batch) == 0:
+            return
+
         states = np.array([x.state for x in batch])
-        states = torch.tensor(states, dtype=torch.float).view(states.shape[0], -1) #.cuda()
+        states = torch.FloatTensor(states).to(self.device).view(states.shape[0], -1)
         
         actions = np.array([x.action for x in batch])
-        actions = torch.tensor(actions, dtype=torch.long) #.cuda()
+        actions = torch.LongTensor(actions).to(self.device)
         
+        action_probs, values = self.network.predict(states)
+
+        # with torch.no_grad():
         rewards = np.array([x.reward for x in batch])
-        # rewards = torch.tensor(rewards, dtype=torch.float)
+        finalReward = 0
+        if not batch[-1].done:
+            nextState = torch.FloatTensor(batch[-1].nextState).to(self.device).view(1, -1)
+            finalReward = self.network.critic(nextState).item()
+        discountRewards = self.getDiscountedRewards(rewards, self.gamma, finalReward)
+        discountRewards = torch.FloatTensor(discountRewards).to(self.device)
+        advantages = discountRewards - values
         
-        # dones = np.array([x.done for x in batch])
-        # dones = torch.tensor(dones, dtype=torch.float)
-                
-        # nextStates = np.array([x.nextState for x in batch])
-        # nextStates = torch.tensor(nextStates, dtype=torch.float).view(nextStates.shape[0], -1)
+        dist = torch.distributions.Categorical(probs=action_probs)
+        entropy_loss = dist.entropy()
+        actor_loss = -(dist.log_prob(actions) * advantages.detach() + entropy_loss * 0.01)
+        value_loss = self.zeta * nn.MSELoss()(values.squeeze(-1), discountRewards)
+        # value_loss = self.zeta * advantages.pow(2)  # nn.MSELoss()(values.squeeze(-1), discountRewards)
         
-        final_reward = 0
-        # train actor network
-        self.actorOptimizer.zero_grad()
-        log_softmax_actions = self.actor(states)
-        vs = self.critic(states)
-        # print("critic", vs)
-        # calculate qs
-        qs = torch.tensor(self.getDiscountedRewards(rewards, self.gamma, final_reward), dtype=torch.float)
-        # print("qs", qs)
-        advantages = qs - vs
-        q_value = log_softmax_actions.gather(1, actions.unsqueeze(1)).squeeze(1)
-        actorLoss = -torch.mean(q_value.sum() * advantages)
-        actorLoss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
-        self.actorOptimizer.step()
+        total_loss = (actor_loss + value_loss).mean()
         
-        
-        # train value network
-        self.criticOptimizer.zero_grad()
-        target_values = qs.unsqueeze(1)
-        values = self.critic(states)
-        criterion = nn.MSELoss()
-        criticLoss = criterion(values, target_values)
-        criticLoss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
-        self.criticOptimizer.step()
-        
-        
+        self.network.optimizer.zero_grad()
+        total_loss.backward()
+        # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
+        self.network.optimizer.step()
         
         # Stats
-        self.steps += len(batch)
-        self.total_loss += actorLoss.item()
-        self.total_loss += criticLoss.item()
-        
-        self.memory.clear()
-    
+        n_sample = len(batch)
+        self.loss += total_loss.item() * n_sample
+        self.samples += n_sample

@@ -6,6 +6,7 @@ from .Game import Game
 
 class CartPole(Game):
     def __init__(self):
+        super().__init__()
         self.name = "CartPole-v0"
         self.game = gym.make('CartPole-v0')
         self.game._max_episode_steps = 10000

@@ -10,6 +10,7 @@ from memories.PrioritizedMemory import PrioritizedMemory
 from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
 from .Agent import Agent
+from utils.PredictionHandler import PredictionHandler
 
 import torch
 import torch.nn as nn
@@ -72,17 +73,17 @@ class DQNAgent(Agent):
         self.stmemory = SimpleMemory(self.memory_size)
         
         # Prediction model (the main Model)
-        self.model = Net(np.product(self.env.observationSpace), self.env.actionSpace, "model")
+        self.network = Net(np.product(self.env.observationSpace), self.env.actionSpace, "model")
         # self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.optimizer = optim.Adam(self.network.parameters(), lr=self.learning_rate)
         
         # Target model
-        self.model_target = Net(np.product(self.env.observationSpace), self.env.actionSpace, "target_model")
+        self.network_target = Net(np.product(self.env.observationSpace), self.env.actionSpace, "target_model")
         
         self.target_update_counter = 0
 
-        self.addModels(self.model)
-        self.addModels(self.model_target)
+        self.addModels(self.network)
+        self.addModels(self.network_target)
 
     def beginPhrase(self):
         self.epsilon = self.epsilon_max
@@ -106,16 +107,16 @@ class DQNAgent(Agent):
         if self.isTraining() and np.random.uniform() < self.epsilon:
             prediction = np.random.rand(self.env.actionSpace)
         else:
-            self.model.eval()
-            stateTensor = torch.tensor(state, dtype=torch.float).view(1, -1)
-            prediction = self.model(stateTensor).squeeze(0).detach().numpy()
+            self.network.eval()
+            with torch.no_grad():
+                stateTensor = torch.FloatTensor(state).view(1, -1)
+                prediction = self.network(stateTensor).squeeze(0).detach().numpy()
         return prediction
 
-    def getAction(self, prediction, actionMask = None):
-        if actionMask is not None:
-            prediction = self.applyMask(prediction, actionMask, -math.inf)
-        return np.argmax(prediction)
-    
+    def getAction(self, prediction, mask = None):
+        handler = PredictionHandler(prediction, mask)
+        return handler.getBestAction()
+
     def endEpisode(self):
         if self.isTraining():
             self.learn()
@@ -124,31 +125,30 @@ class DQNAgent(Agent):
         super().endEpisode()
       
     def learn(self):
-        self.model.train()
+        self.network.train()
         
         idxs, batch, is_weights = self.ltmemory.sample(self.minibatch_size)
         
-        self.steps += len(batch)
         # print(idxs, batch, is_weight)
         
         states = np.array([x.state for x in batch])
-        states = torch.tensor(states, dtype=torch.float).view(states.shape[0], -1)
+        states = torch.FloatTensor(states).view(states.shape[0], -1)
         
         actions = np.array([x.action for x in batch])
-        actions = torch.tensor(actions, dtype=torch.long)
+        actions = torch.LongTensor(actions)
         
         rewards = np.array([x.reward for x in batch])
-        rewards = torch.tensor(rewards, dtype=torch.float)
+        rewards = torch.FloatTensor(rewards)
         
         dones = np.array([x.done for x in batch])
-        dones = torch.tensor(dones, dtype=torch.float)
+        dones = torch.FloatTensor(dones)
                 
         nextStates = np.array([x.nextState for x in batch])
-        nextStates = torch.tensor(nextStates, dtype=torch.float).view(nextStates.shape[0], -1)
+        nextStates = torch.FloatTensor(nextStates).view(nextStates.shape[0], -1)
         
-        target_next_q_values = self.model_target(nextStates)
+        target_next_q_values = self.network_target(nextStates)
         
-        results = self.model(torch.cat((states, nextStates), 0))
+        results = self.network(torch.cat((states, nextStates), 0))
         q_values = results[0:len(states)]
         next_q_values = results[len(states):]
         
@@ -159,8 +159,8 @@ class DQNAgent(Agent):
 
         self.ltmemory.batch_update(idxs, error.detach().numpy())
         
-        is_weights = torch.tensor(is_weights, dtype=torch.float)
-        loss = self.model.loss(q_value, expected_q_value, is_weights)
+        is_weights = torch.FloatTensor(is_weights)
+        loss = self.network.loss(q_value, expected_q_value, is_weights)
         
         self.optimizer.zero_grad()
         loss.backward()
@@ -177,11 +177,14 @@ class DQNAgent(Agent):
         # If counter reaches set value, update target model with weights of main model
         if self.target_update_counter >= self.update_target_every:
             self.updateTarget()
-            
-        self.total_loss += loss.item()
+        
+        # Stats
+        steps = len(batch)
+        self.loss += loss.item() * steps
+        self.steps += steps
 
     def updateTarget(self):
         # print("Target is updated.")
-        self.model_target.load_state_dict(self.model.state_dict())
+        self.network_target.load_state_dict(self.network.state_dict())
         self.target_update_counter = 0
                 

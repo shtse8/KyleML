@@ -56,6 +56,8 @@ class Agent(object):
         
         self.startTime = 0
 
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
         # Save And Load
         self.weightPath = kwargs.get('weightPath', "./weights/")
         self.models = []
@@ -206,7 +208,7 @@ class Agent(object):
         try:
             path = self.getSavePath()
             print("Loading from path: ", path)
-            data = torch.load(path)
+            data = torch.load(path, map_location=self.device)
             self.epochs = int(data["epochs"])
             for model in self.models:
                 model.load_state_dict(data[model.name])

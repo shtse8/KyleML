@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 class Network(nn.Module):
     def __init__(self, n_inputs, n_outputs, learingRate: float = 0.001, name="default"):
-        super(Network, self).__init__()
+        super().__init__()
         self.name = name
         self.learningRate = learingRate
 

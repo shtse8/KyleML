@@ -1,10 +1,12 @@
 import numpy as np
 import time
+import traceback
 from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
 from .Agent import Agent
 from utils.PredictionHandler import PredictionHandler
 from utils.errors import InvalidAction
+from optimizers.sharedadam import SharedAdam
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -72,68 +74,79 @@ class A3CAgent(Agent):
         # workers = [Worker(i, self) for i in range(1)]
         while self.beginPhrase():
             processes = []
-            for i in range(mp.cpu_count() //     2):
+            conns = []
+            for i in range(mp.cpu_count() // 2):
             # for i in range(4):
-                p = mp.Process(target=self.startWorker, args=(i,))
+                parent_conn, child_conn = mp.Pipe(True)
+                p = mp.Process(target=self.startWorker, args=(i, child_conn))
                 p.start()
+                conns.append(parent_conn)
                 processes.append(p)
                 # time.sleep(1)
             while True:
-                r = self.queue.get()
-                if r is not None:
-                    self.episodes += 1
-                    self.rewardHistory.append(r)
-                    self.update()
-                    # print(self.episodes.value, r)
-                else:
-                    # termination
-                    break
+                # Process messages
+                for conn in conns:
+                    if conn.poll():
+                        message = conn.recv()
+                        if message is not None:
+                            if isinstance(message, EpisodeReport):
+                                self.episodes += 1
+                                self.rewardHistory.append(message.rewards)
+                                self.stepHistory.append(message.steps)
+                                self.lossHistory.append(message.loss)
+                                self.invalidMovesHistory.append(message.invalidMoves)
+                                self.update()
+                            elif isinstance(message, LocalNetworkMessage):
+                                parameters = message.parameters
+                                self.optimizer.zero_grad()
+                                for network, managerNetwork in zip(parameters, self.network.parameters()):
+                                    managerNetwork._grad = network.grad
+                                # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
+                                self.optimizer.step()
+                                parent_conn.send(GlobalNetworkMessage(self.network.state_dict()))
+                        else:
+                            # termination
+                            break
             for p in processes:
                 p.join()
             self.endPhrase()
 
-    def startWorker(self, i):
+    def startWorker(self, i, conn):
         try:
-            worker = Worker(i, self)
+            worker = A3CWorker(i, self, conn)
             worker.run()
         except Exception as e:
             print("Worker {0} is failed to start: {1}".format(i, e))
-
-    def report(self, loss: float, samples: int):
-        self.loss += loss * samples
-        self.samples += samples
+            traceback.print_tb(e.__traceback__)
 
 
 class Worker():
-    def __init__(self, name: str, manager, **kwargs):
-        super(Worker, self).__init__()
+    def __init__(self, manager: Agent, name: str, conn):
         self.name: str = str(name)
         self.manager = manager
-
-        # Trainning
-        self.gamma: float = kwargs.get('gamma', 0.9)
+        self.conn = conn
         self.env = self.manager.env.getNew()
-        self.network: Network = Network(
-            np.product(self.env.observationSpace),
-            self.env.actionSpace)
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.network.to(self.device)
 
-        # Memory
-        self.memory_size: int = kwargs.get('memory_size', 10000)
-        self.memory: SimpleMemory = SimpleMemory(self.memory_size)
-        self.n_steps: int = 50
-        self.target_episodes: int = 10000
-
-        self.episodes = 0
         self.rewards = 0
         self.steps = 0
-        self.invalidMoves: int = 0
+        self.loss = 0
+        self.samples = 0
+        self.invalidMoves = 0
+        self.episode_start_time = 0
 
-        print("Worker", self.name)
+    def beginEpisode(self) -> None:
+        self.episode_start_time = time.perf_counter()
+        self.rewards = 0
+        self.steps = 0
+        self.loss = 0
+        self.samples = 0
+        self.invalidMoves = 0
+        return True # self.episodes <= self.target_episodes
 
-    def isTraining(self):
-        return True
+    def endEpisode(self) -> None:
+        duration = time.perf_counter() - self.episode_start_time
+        loss = self.loss / self.samples
+        self.conn.send(EpisodeReport(self.rewards, loss, self.steps, duration, self.invalidMoves))
 
     def run(self):
         while self.beginEpisode():
@@ -158,6 +171,41 @@ class Worker():
                 state = nextState
             self.endEpisode()
 
+    def commit(self, transition: Transition):
+        self.rewards += transition.reward
+        self.steps += 1
+
+    def report(self, loss: float, samples: int):
+        self.loss += loss * samples
+        self.samples += samples
+
+    def isTraining(self):
+        return True
+
+
+class A3CWorker(Worker):
+    def __init__(self, name: str, manager: Agent, conn, **kwargs):
+        super().__init__(manager, name, conn)
+        
+        # Trainning
+        self.gamma: float = kwargs.get('gamma', 0.9)
+        self.network: Network = Network(
+            np.product(self.env.observationSpace),
+            self.env.actionSpace)
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.network.to(self.device)
+
+        # Memory
+        self.memory_size: int = kwargs.get('memory_size', 10000)
+        self.memory: SimpleMemory = SimpleMemory(self.memory_size)
+        self.n_steps: int = 50
+        self.target_episodes: int = 10000
+
+
+    def beginEpisode(self) -> None:
+        self.memory.clear()
+        return super().beginEpisode()
+
     def getPrediction(self, state):
         self.network.eval()
         with torch.no_grad():
@@ -169,29 +217,8 @@ class Worker():
         handler = PredictionHandler(prediction, mask)
         return handler.getRandomAction() if self.isTraining() else handler.getBestAction()
 
-    def beginEpisode(self) -> None:
-        self.memory.clear()
-        self.episodes += 1
-        self.episode_start_time = time.perf_counter()
-        self.rewards = 0
-        self.steps = 0
-        self.loss = 0
-        self.samples = 0
-        return self.episodes <= self.target_episodes
-
-    def endEpisode(self) -> None:
-        self.manager.queue.put(self.rewards)
-        # print(self.name, self.rewards)
-        # self.rewardHistory.append(self.rewards)
-        # self.stepHistory.append(self.steps)
-        # if self.isTraining():
-        #     self.lossHistory.append(self.loss / self.samples)
-        # self.update()
-        pass
-
-    def commit(self, transition: Transition):
-        self.rewards += transition.reward
-        self.steps += 1
+    def commit(self, transition: Transition) -> None:
+        super().commit(transition)
         if self.isTraining():
             self.memory.add(transition)
             if transition.done or self.steps % self.n_steps == 0:
@@ -232,38 +259,47 @@ class Worker():
         advantages = targetValues - values
         
         dist = torch.distributions.Categorical(probs=action_probs)
-        entropy_loss = dist.entropy()
-        actor_loss = -(dist.log_prob(actions) * advantages.detach() + entropy_loss * 0.005).mean()
+        entropy_loss = -dist.entropy().mean()
+        actor_loss = -(dist.log_prob(actions) * advantages.detach()).mean()
         value_loss = advantages.pow(2).mean()
         # value_loss = nn.MSELoss()(values, discountRewards)
         
-        total_loss = actor_loss + value_loss
+        total_loss = actor_loss + entropy_loss + value_loss
         
-        self.manager.optimizer.zero_grad()
         total_loss.backward()
-        for network, managerNetwork in zip(self.network.parameters(), self.manager.network.parameters()):
-            managerNetwork._grad = network.grad.cpu()
-        # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
-        self.manager.optimizer.step()
-        
+        # parameters = self.network.parameters()
+        parameters = [p.cpu().detach() for p in self.network.parameters()]
+        self.conn.send(LocalNetworkMessage(parameters))
+
+        message = self.conn.recv()
+
         # pull global parameters
-        self.network.load_state_dict(self.manager.network.state_dict())
+        stateDict = message.stateDict
+        self.network.load_state_dict(stateDict)
 
         # Stats
-        self.manager.report(total_loss.item(), len(batch))
+        self.report(total_loss.item(), len(batch))
 
 
-class SharedAdam(torch.optim.Adam):
-    def __init__(self, params, lr=1e-3):
-        super().__init__(params, lr=lr)
-        # State initialization
-        for group in self.param_groups:
-            for p in group['params']:
-                state = self.state[p]
-                state['step'] = 0
-                state['exp_avg'] = torch.zeros_like(p.data)
-                state['exp_avg_sq'] = torch.zeros_like(p.data)
+class Message:
+    def __init__(self):
+        pass
 
-                # share in memory
-                state['exp_avg'].share_memory_()
-                state['exp_avg_sq'].share_memory_()
+
+class LocalNetworkMessage(Message):
+    def __init__(self, parameters):
+        self.parameters = parameters
+
+
+class GlobalNetworkMessage(Message):
+    def __init__(self, stateDict):
+        self.stateDict = stateDict
+
+
+class EpisodeReport(Message):
+    def __init__(self, rewards, loss, steps, duration, invalidMoves):
+        self.rewards = rewards
+        self.loss = loss
+        self.steps = steps
+        self.duration = duration
+        self.invalidMoves = invalidMoves

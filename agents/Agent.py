@@ -165,7 +165,7 @@ class Agent(object):
         self.rewardHistory = collections.deque(maxlen=self.target_episodes)
         self.lossHistory = collections.deque(maxlen=self.target_episodes)
         self.stepHistory = collections.deque(maxlen=self.target_episodes)
-
+        self.invalidMovesHistory = collections.deque(maxlen=self.target_episodes)
         return True
 
     def endPhrase(self) -> None:
@@ -203,7 +203,7 @@ class Agent(object):
         avgReward = np.mean(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         stdReward = np.std(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         progress = self.episodes / self.target_episodes
-        invalidMovesPerEpisode = self.invalidMoves / self.episodes
+        invalidMovesPerEpisode = np.mean(self.invalidMovesHistory)
         durationPerEpisode = duration /  self.episodes
         estimateDuration = self.target_episodes * durationPerEpisode
         totalSteps = np.sum(self.stepHistory)

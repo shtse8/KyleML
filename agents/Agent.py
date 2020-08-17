@@ -151,7 +151,7 @@ class Agent(object):
     def beginPhrase(self) -> None:
         if self.phraseIndex >= len(self.phrases):
             return False
-        # self.episodes = 0
+        self.episodes = 0
         self.invalidMoves = 0
 
         self.startTime = time.perf_counter()
@@ -202,13 +202,13 @@ class Agent(object):
         bestReward = np.max(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         avgReward = np.mean(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
         stdReward = np.std(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
-        progress = self.episodes.value / self.target_episodes
-        invalidMovesPerEpisode = self.invalidMoves / self.episodes.value
-        durationPerEpisode = duration / self.episodes.value
+        progress = self.episodes / self.target_episodes
+        invalidMovesPerEpisode = self.invalidMoves / self.episodes
+        durationPerEpisode = duration /  self.episodes
         estimateDuration = self.target_episodes * durationPerEpisode
         totalSteps = np.sum(self.stepHistory)
         print(f"{self.getPhrase().name:5} #{self.epochs} {progress:>4.0%} | " + \
-            f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s, {totalSteps/self.episodes.value:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
+            f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s, {totalSteps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
 
     def learn(self) -> None:
         raise NotImplementedError()

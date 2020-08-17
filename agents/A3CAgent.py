@@ -81,6 +81,7 @@ class A3CAgent(Agent):
             while True:
                 r = self.queue.get()
                 if r is not None:
+                    self.episodes += 1
                     self.rewardHistory.append(r)
                     self.update()
                     # print(self.episodes.value, r)
@@ -179,9 +180,6 @@ class Worker():
         return self.episodes <= self.target_episodes
 
     def endEpisode(self) -> None:
-        
-        with self.manager.episodes.get_lock():
-            self.manager.episodes.value += 1
         self.manager.queue.put(self.rewards)
         # print(self.name, self.rewards)
         # self.rewardHistory.append(self.rewards)
@@ -235,20 +233,18 @@ class Worker():
         
         dist = torch.distributions.Categorical(probs=action_probs)
         entropy_loss = dist.entropy()
-        actor_loss = -(dist.log_prob(actions) * advantages.detach() + entropy_loss * 0.005)
+        actor_loss = -(dist.log_prob(actions) * advantages.detach() + entropy_loss * 0.005).mean()
         value_loss = advantages.pow(2).mean()
         # value_loss = nn.MSELoss()(values, discountRewards)
         
-        total_loss = (actor_loss + value_loss).mean()
+        total_loss = actor_loss + value_loss
         
         self.manager.optimizer.zero_grad()
         total_loss.backward()
-        self.network.cpu()
         for network, managerNetwork in zip(self.network.parameters(), self.manager.network.parameters()):
-            managerNetwork._grad = network.grad
+            managerNetwork._grad = network.grad.cpu()
         # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
         self.manager.optimizer.step()
-        self.network.to(self.device)
         
         # pull global parameters
         self.network.load_state_dict(self.manager.network.state_dict())

@@ -35,7 +35,7 @@ class Network(nn.Module):
 
         self.optimizer = optim.Adam(self.parameters(), lr=self.learningRate)
 
-    def predict(self, state):
+    def forward(self, state):
         body_output = self.get_body_output(state)
         probs = F.softmax(self.policy(body_output), dim=-1)
         return probs, self.value(body_output)
@@ -43,6 +43,10 @@ class Network(nn.Module):
     def get_body_output(self, state):
         return self.body(state)
     
+    def actor(self, state):
+        body_output = self.get_body_output(state)
+        return F.softmax(self.policy(body_output), dim=-1)
+
     def critic(self, state):
         return self.value(self.get_body_output(state))
         
@@ -83,7 +87,7 @@ class A2CAgent(Agent):
         self.network.eval()
         with torch.no_grad():
             state = torch.FloatTensor(state).view(1, -1).to(self.device)
-            prediction = self.network.predict(state)[0].squeeze(0)
+            prediction = self.network.actor(state).squeeze(0)
             return prediction.cpu().detach().numpy()
 
     def getAction(self, prediction, mask = None):

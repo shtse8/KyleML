@@ -17,6 +17,7 @@ from enum import Enum
 import torch
 import torch.nn as nn
 from games.Game import Game
+import torch.multiprocessing as mp
 
 class Phrase(Enum):
     train = 1
@@ -46,7 +47,7 @@ class Agent(object):
         self.report = EpisodeReport()
 
         # phrase stats
-        self.episodes: int = 0
+        self.episodes = mp.Value('i', 0)
         
         # epoch stats
         self.phraseIndex: int = 0
@@ -141,7 +142,7 @@ class Agent(object):
     def beginPhrase(self) -> None:
         if self.phraseIndex >= len(self.phrases):
             return False
-        self.episodes = 0
+        self.episodes.value = 0
 
         self.startTime = time.perf_counter()
         if self.isTraining():
@@ -167,9 +168,9 @@ class Agent(object):
         print()
 
     def beginEpisode(self) -> None:
-        self.episodes += 1
+        self.episodes.value += 1
         self.report = EpisodeReport()
-        return self.episodes <= self.target_episodes
+        return self.episodes.value <= self.target_episodes
 
     def endEpisode(self) -> None:
         self.history.append(self.report)
@@ -181,13 +182,13 @@ class Agent(object):
         bestReward = np.max([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
         avgReward = np.mean([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
         stdReward = np.std([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
-        progress = self.episodes / self.target_episodes
+        progress = self.episodes.value / self.target_episodes
         invalidMovesPerEpisode = np.mean([x.invalidMoves for x in self.history])
-        durationPerEpisode = duration / self.episodes
+        durationPerEpisode = duration / self.episodes.value
         estimateDuration = self.target_episodes * durationPerEpisode
         totalSteps = np.sum([x.steps for x in self.history])
         print(f"{self.getPhrase().name:5} #{self.epochs} {progress:>4.0%} | " + \
-            f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s, {totalSteps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
+            f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s, {totalSteps/self.episodes.value:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
 
     def learn(self) -> None:
         raise NotImplementedError()

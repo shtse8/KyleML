@@ -13,7 +13,7 @@ from agents.DQNAgent import DQNAgent
 from agents.A2CAgent import A2CAgent
 from agents.A3CAgent import A3CAgent
 import torch
-# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 
 def signal_handler(sig, frame):

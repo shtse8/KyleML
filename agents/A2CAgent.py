@@ -76,7 +76,7 @@ class A2CAgent(Agent):
         super().commit(transition)
         if self.isTraining():
             self.memory.add(transition)
-            if transition.done: # or self.steps % self.n_steps == 0:
+            if transition.done:  # or self.steps % self.n_steps == 0:
                 self.learn()
 
     def getPrediction(self, state):

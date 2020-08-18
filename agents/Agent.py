@@ -43,12 +43,7 @@ class Agent(object):
         # self.phrases = [Phrase.play]
 
         # episode stats
-        self.steps: int = 0
-        self.rewards: float = 0
-        self.loss: float = 0
-        self.samples: int = 0
-        self.invalidMoves: int = 0
-        self.episode_start_time = 0
+        self.report = EpisodeReport()
 
         # phrase stats
         self.episodes: int = 0
@@ -59,14 +54,9 @@ class Agent(object):
         # training stats
         self.epochs: int = 0
         self.totalSteps: int = 0
-        self.totalRewards: float = 0
-        self.totalSamples: int = 0
-
 
         # History
-        self.rewardHistory = None
-        self.lossHistory = None
-        self.stepHistory = None
+        self.history = None
         
         self.startTime = 0
 
@@ -99,8 +89,8 @@ class Agent(object):
         raise NotImplementedError()
 
     def commit(self, transition: Transition) -> None:
-        self.rewards += transition.reward
-        self.steps += 1
+        self.report.rewards += transition.reward
+        self.report.steps += 1
         # self.update()
 
     def run(self, train: bool = True) -> None:
@@ -126,7 +116,7 @@ class Agent(object):
                                 break
                             except InvalidAction:
                                 actionMask[action] = 0
-                                self.invalidMoves += 1
+                                self.report.invalidMoves += 1
                                 # print(actionMask)
                             # finally:
                         state = nextState
@@ -152,7 +142,6 @@ class Agent(object):
         if self.phraseIndex >= len(self.phrases):
             return False
         self.episodes = 0
-        self.invalidMoves = 0
 
         self.startTime = time.perf_counter()
         if self.isTraining():
@@ -162,10 +151,7 @@ class Agent(object):
         elif self.isPlaying():
             self.target_episodes = 1
         
-        self.rewardHistory = collections.deque(maxlen=self.target_episodes)
-        self.lossHistory = collections.deque(maxlen=self.target_episodes)
-        self.stepHistory = collections.deque(maxlen=self.target_episodes)
-        self.invalidMovesHistory = collections.deque(maxlen=self.target_episodes)
+        self.history = collections.deque(maxlen=self.target_episodes)
         return True
 
     def endPhrase(self) -> None:
@@ -182,31 +168,24 @@ class Agent(object):
 
     def beginEpisode(self) -> None:
         self.episodes += 1
-        self.episode_start_time = time.perf_counter()
-        self.rewards = 0
-        self.steps = 0
-        self.loss = 0
-        self.samples = 0
+        self.report = EpisodeReport()
         return self.episodes <= self.target_episodes
 
     def endEpisode(self) -> None:
-        self.rewardHistory.append(self.rewards)
-        self.stepHistory.append(self.steps)
-        if self.isTraining():
-            self.lossHistory.append(self.loss / self.samples)
+        self.history.append(self.report)
         self.update()
 
     def update(self) -> None:
         duration = time.perf_counter() - self.startTime
-        avgLoss = np.mean(self.lossHistory) if len(self.lossHistory) > 0 else math.nan
-        bestReward = np.max(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
-        avgReward = np.mean(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
-        stdReward = np.std(self.rewardHistory) if len(self.rewardHistory) > 0 else math.nan
+        avgLoss = np.mean([x.loss for x in self.history]) if len(self.history) > 0 else math.nan
+        bestReward = np.max([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
+        avgReward = np.mean([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
+        stdReward = np.std([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
         progress = self.episodes / self.target_episodes
-        invalidMovesPerEpisode = np.mean(self.invalidMovesHistory)
-        durationPerEpisode = duration /  self.episodes
+        invalidMovesPerEpisode = np.mean([x.invalidMoves for x in self.history])
+        durationPerEpisode = duration / self.episodes
         estimateDuration = self.target_episodes * durationPerEpisode
-        totalSteps = np.sum(self.stepHistory)
+        totalSteps = np.sum([x.steps for x in self.history])
         print(f"{self.getPhrase().name:5} #{self.epochs} {progress:>4.0%} | " + \
             f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s, {totalSteps/self.episodes:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
 
@@ -217,8 +196,6 @@ class Agent(object):
         try:
             path = self.getSavePath(True)
             data = {
-                "totalRewards": self.totalRewards,
-                "totalSamples": self.totalSamples,
                 "totalSteps": self.totalSteps
             }
             for model in self.models:
@@ -233,8 +210,6 @@ class Agent(object):
             path = self.getSavePath()
             print("Loading from path: ", path)
             data = torch.load(path, map_location=self.device)
-            self.totalRewards = float(data["totalRewards"]) if "totalRewards" in data else 0
-            self.totalSamples = int(data["totalSamples"]) if "totalSamples" in data else 0
             self.totalSteps = int(data["totalSteps"]) if "totalSteps" in data else 0
             for model in self.models:
                 model.load_state_dict(data[model.name])
@@ -248,3 +223,37 @@ class Agent(object):
             Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
         return path
 
+
+class Message:
+    def __init__(self):
+        pass
+
+
+class EpisodeReport(Message):
+    def __init__(self):
+        self.steps: int = 0
+        self.rewards: float = 0
+        self.total_loss: float = 0
+        self.samples: int = 0
+        self.invalidMoves: int = 0
+        self.episode_start_time: int = 0
+        self.episode_end_time: int = 0
+
+    def start(self):
+        self.episode_start_time = time.perf_counter()
+
+    def end(self):
+        self.episode_end_time = time.perf_counter()
+
+    @property
+    def duration(self):
+        return (self.episode_end_time if self.episode_end_time > 0 else time.perf_counter()) - self.episode_start_time
+
+    @property
+    def loss(self):
+        return self.total_loss / self.samples if self.samples > 0 else math.nan
+
+    def trained(self, loss, samples):
+        self.total_loss += loss * samples
+        self.samples += samples
+        

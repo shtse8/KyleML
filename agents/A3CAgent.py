@@ -3,7 +3,7 @@ import time
 import traceback
 from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
-from .Agent import Agent
+from .Agent import Agent, EpisodeReport
 from utils.PredictionHandler import PredictionHandler
 from utils.errors import InvalidAction
 from optimizers.sharedadam import SharedAdam
@@ -61,6 +61,7 @@ class A3CAgent(Agent):
             self.env.actionSpace)
         self.network.share_memory()
         self.optimizer = SharedAdam(self.network.parameters(), lr=self.learningRate)
+        self.optimizer.share_memory()
         
         # multiprocessing
         self.queue = mp.Queue()
@@ -75,38 +76,50 @@ class A3CAgent(Agent):
         while self.beginPhrase():
             processes = []
             conns = []
-            for i in range(mp.cpu_count() // 2):
-            # for i in range(4):
+            for i in range(mp.cpu_count() - 1):  # one for main thread
+            # for i in range(1):
                 parent_conn, child_conn = mp.Pipe(True)
                 p = mp.Process(target=self.startWorker, args=(i, child_conn))
                 p.start()
                 conns.append(parent_conn)
                 processes.append(p)
                 # time.sleep(1)
+                
+            # self.network.to(self.device)
             while True:
                 # Process messages
-                for conn in conns:
+                for i, conn in enumerate(conns):
                     if conn.poll():
                         message = conn.recv()
                         if message is not None:
                             if isinstance(message, EpisodeReport):
                                 self.episodes += 1
-                                self.rewardHistory.append(message.rewards)
-                                self.stepHistory.append(message.steps)
-                                self.lossHistory.append(message.loss)
-                                self.invalidMovesHistory.append(message.invalidMoves)
+                                self.history.append(message)
+                                # self.rewardHistory.append(message.rewards)
+                                # self.stepHistory.append(message.steps)
+                                # self.lossHistory.append(message.loss)
+                                # self.invalidMovesHistory.append(message.invalidMoves)
                                 self.update()
+                                if self.episodes % 100 == 0:
+                                    self.save()
                             elif isinstance(message, LocalNetworkMessage):
+                                # print(i, "LocalNetworkMessage")
                                 parameters = message.parameters
                                 self.optimizer.zero_grad()
                                 for network, managerNetwork in zip(parameters, self.network.parameters()):
                                     managerNetwork._grad = network.grad
                                 # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
                                 self.optimizer.step()
-                                parent_conn.send(GlobalNetworkMessage(self.network.state_dict()))
+                                state_dict = self.network.state_dict()
+                                for key, value in state_dict.items():
+                                    state_dict[key] = value.cpu()
+                                # print(i, state_dict)
+                                parent_conn.send(GlobalNetworkMessage(state_dict))
                         else:
                             # termination
                             break
+                # print(self.network.state_dict()["body.0.weight"][0])
+                time.sleep(0.001)
             for p in processes:
                 p.join()
             self.endPhrase()
@@ -127,26 +140,30 @@ class Worker():
         self.conn = conn
         self.env = self.manager.env.getNew()
 
-        self.rewards = 0
-        self.steps = 0
-        self.loss = 0
-        self.samples = 0
-        self.invalidMoves = 0
-        self.episode_start_time = 0
+        self.report = EpisodeReport()
+        # self.rewards = 0
+        # self.steps = 0
+        # self.loss = 0
+        # self.samples = 0
+        # self.invalidMoves = 0
+        # self.episode_start_time = 0
 
     def beginEpisode(self) -> None:
-        self.episode_start_time = time.perf_counter()
-        self.rewards = 0
-        self.steps = 0
-        self.loss = 0
-        self.samples = 0
-        self.invalidMoves = 0
-        return True # self.episodes <= self.target_episodes
+        self.report = EpisodeReport()
+        self.report.start()
+        # self.episode_start_time = time.perf_counter()
+        # self.rewards = 0
+        # self.steps = 0
+        # self.loss = 0
+        # self.samples = 0
+        # self.invalidMoves = 0
+        return True  # self.episodes <= self.target_episodes
 
     def endEpisode(self) -> None:
-        duration = time.perf_counter() - self.episode_start_time
-        loss = self.loss / self.samples
-        self.conn.send(EpisodeReport(self.rewards, loss, self.steps, duration, self.invalidMoves))
+        # duration = time.perf_counter() - self.episode_start_time
+        # loss = self.loss / self.samples
+        self.report.end()
+        self.conn.send(self.report)
 
     def run(self):
         while self.beginEpisode():
@@ -165,19 +182,15 @@ class Worker():
                         break
                     except InvalidAction:
                         actionMask[action] = 0
-                        self.invalidMoves += 1
+                        self.report.invalidMoves += 1
                         # print(actionMask)
                     # finally:
                 state = nextState
             self.endEpisode()
 
     def commit(self, transition: Transition):
-        self.rewards += transition.reward
-        self.steps += 1
-
-    def report(self, loss: float, samples: int):
-        self.loss += loss * samples
-        self.samples += samples
+        self.report.rewards += transition.reward
+        self.report.steps += 1
 
     def isTraining(self):
         return True
@@ -195,12 +208,14 @@ class A3CWorker(Worker):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.network.to(self.device)
 
+        # self.manager.network.to(self.device)
+        # self.optimizer = SharedAdam(self.network.parameters(), lr=0.001)
+
         # Memory
         self.memory_size: int = kwargs.get('memory_size', 10000)
         self.memory: SimpleMemory = SimpleMemory(self.memory_size)
-        self.n_steps: int = 50
+        self.n_steps: int = 1000
         self.target_episodes: int = 10000
-
 
     def beginEpisode(self) -> None:
         self.memory.clear()
@@ -221,7 +236,7 @@ class A3CWorker(Worker):
         super().commit(transition)
         if self.isTraining():
             self.memory.add(transition)
-            if transition.done or self.steps % self.n_steps == 0:
+            if transition.done: # or self.steps % self.n_steps == 0:
                 self.learn()
 
     def getDiscountedRewards(self, rewards, gamma, finalReward):
@@ -235,7 +250,7 @@ class A3CWorker(Worker):
     def learn(self) -> None:
         self.network.train()
 
-        batch = self.memory.getLast(self.n_steps)
+        batch = self.memory
         if len(batch) == 0:
             return
 
@@ -261,45 +276,31 @@ class A3CWorker(Worker):
         dist = torch.distributions.Categorical(probs=action_probs)
         entropy_loss = -dist.entropy().mean()
         actor_loss = -(dist.log_prob(actions) * advantages.detach()).mean()
-        value_loss = advantages.pow(2).mean()
+        value_loss = advantages.pow(2).mean()  # MSE Loss
         # value_loss = nn.MSELoss()(values, discountRewards)
         
-        total_loss = actor_loss + entropy_loss + value_loss
+        total_loss = actor_loss + 0.01 * entropy_loss + value_loss
         
+        self.manager.optimizer.zero_grad()
         total_loss.backward()
-        # parameters = self.network.parameters()
+        for network, managerNetwork in zip(self.network.parameters(), self.manager.network.parameters()):
+            managerNetwork._grad = network.grad.cpu()
+        self.manager.optimizer.step()
+        self.network.load_state_dict(self.manager.network.state_dict())
+
+
+        """
         parameters = [p.cpu().detach() for p in self.network.parameters()]
         self.conn.send(LocalNetworkMessage(parameters))
 
         message = self.conn.recv()
-
         # pull global parameters
         stateDict = message.stateDict
         self.network.load_state_dict(stateDict)
+        """
 
         # Stats
-        self.report(total_loss.item(), len(batch))
+        self.report.trained(total_loss.item(), len(batch))
 
-
-class Message:
-    def __init__(self):
-        pass
-
-
-class LocalNetworkMessage(Message):
-    def __init__(self, parameters):
-        self.parameters = parameters
-
-
-class GlobalNetworkMessage(Message):
-    def __init__(self, stateDict):
-        self.stateDict = stateDict
-
-
-class EpisodeReport(Message):
-    def __init__(self, rewards, loss, steps, duration, invalidMoves):
-        self.rewards = rewards
-        self.loss = loss
-        self.steps = steps
-        self.duration = duration
-        self.invalidMoves = invalidMoves
+        # clear memory
+        self.memory.clear()

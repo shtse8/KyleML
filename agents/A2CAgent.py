@@ -76,7 +76,7 @@ class A2CAgent(Agent):
         super().commit(transition)
         if self.isTraining():
             self.memory.add(transition)
-            if transition.done or self.steps % self.n_steps == 0:
+            if transition.done: # or self.steps % self.n_steps == 0:
                 self.learn()
 
     def getPrediction(self, state):
@@ -104,9 +104,8 @@ class A2CAgent(Agent):
 
     def learn(self) -> None:
         self.network.train()
-        self.network.optimizer.zero_grad()
 
-        batch = self.memory.getLast(self.n_steps)
+        batch = self.memory
         if len(batch) == 0:
             return
 
@@ -130,18 +129,18 @@ class A2CAgent(Agent):
         advantages = targetValues - values
         
         dist = torch.distributions.Categorical(probs=action_probs)
-        entropy_loss = dist.entropy()
-        actor_loss = -(dist.log_prob(actions) * advantages.detach() + entropy_loss * 0.005)
+        entropy_loss = -dist.entropy().mean()
+        actor_loss = -(dist.log_prob(actions) * advantages.detach()).mean()
         value_loss = advantages.pow(2).mean()
         # value_loss = nn.MSELoss()(values, discountRewards)
         
-        total_loss = (actor_loss + value_loss).mean()
+        total_loss = actor_loss + 0.01 * entropy_loss + value_loss
         
+        self.network.optimizer.zero_grad()
         total_loss.backward()
         # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
         self.network.optimizer.step()
         
         # Stats
-        n_sample = len(batch)
-        self.loss += total_loss.item() * n_sample
-        self.samples += n_sample
+        self.report.trained(total_loss.item(), len(batch))
+        self.memory.clear()

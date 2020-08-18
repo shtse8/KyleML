@@ -11,10 +11,9 @@ import torch.nn.functional as F
 
 
 class Network(nn.Module):
-    def __init__(self, n_inputs, n_outputs, learingRate: float = 0.001, name="default"):
+    def __init__(self, n_inputs, n_outputs, name="default"):
         super().__init__()
         self.name = name
-        self.learningRate = learingRate
 
         hidden_nodes = 128
         self.body = nn.Sequential(
@@ -33,7 +32,6 @@ class Network(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_nodes, 1))
 
-        self.optimizer = optim.Adam(self.parameters(), lr=self.learningRate)
 
     def forward(self, state):
         body_output = self.get_body_output(state)
@@ -68,8 +66,8 @@ class A2CAgent(Agent):
         # Prediction model (the main Model)
         self.network: Network = Network(
             np.product(self.env.observationSpace),
-            self.env.actionSpace,
-            learingRate=self.learningRate)
+            self.env.actionSpace)
+        self.optimizer = optim.Adam(self.network.parameters(), lr=self.learningRate)
 
         self.n_steps: int = 50
 
@@ -121,7 +119,7 @@ class A2CAgent(Agent):
         actions = np.array([x.action for x in batch])
         actions = torch.LongTensor(actions).to(self.device)
         
-        action_probs, values = self.network.predict(states)
+        action_probs, values = self.network(states)
         values = values.squeeze(1)
 
         # with torch.no_grad():
@@ -142,10 +140,10 @@ class A2CAgent(Agent):
         
         total_loss = actor_loss + 0.01 * entropy_loss + value_loss
         
-        self.network.optimizer.zero_grad()
+        self.optimizer.zero_grad()
         total_loss.backward()
-        # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
-        self.network.optimizer.step()
+        nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
+        self.optimizer.step()
         
         # Stats
         self.report.trained(total_loss.item(), len(batch))

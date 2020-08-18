@@ -1,10 +1,11 @@
 class Transition(object):
-    def __init__(self, state, action: int, reward: float, nextState, done: bool) -> None:
+    def __init__(self, state, action: int, reward: float, nextState, done: bool, prediction = None) -> None:
         self.state = state
         self.action: int = action
         self.reward: float = reward
         self.nextState = nextState
         self.done: bool = done
+        self.prediction = prediction
         
     # @property
     # def done(self) -> bool:

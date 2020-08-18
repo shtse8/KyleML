@@ -113,7 +113,7 @@ class Agent(object):
                             try:
                                 action = self.getAction(prediction, actionMask)
                                 nextState, reward, done = self.env.takeAction(action)
-                                self.commit(Transition(state, action, reward, nextState, done))
+                                self.commit(Transition(state, action, reward, nextState, done, prediction))
                                 break
                             except InvalidAction:
                                 actionMask[action] = 0

@@ -12,6 +12,7 @@ from games.CartPole import CartPole
 from agents.DQNAgent import DQNAgent
 from agents.A2CAgent import A2CAgent
 from agents.A3CAgent import A3CAgent
+from agents.PPOAgent import PPOAgent
 import torch
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
@@ -27,7 +28,7 @@ def signal_handler(sig, frame):
 def main():
     parser = argparse.ArgumentParser(description='Kyle RL Playground')
     parser.add_argument('--game', default='2048', type=str)
-    parser.add_argument('--agent', default='a3c', type=str)
+    parser.add_argument('--agent', default='ppo', type=str)
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--load', action='store_true')
     parser.add_argument('--train', default=True, action='store_true', dest="train")
@@ -56,6 +57,8 @@ def main():
         agent = A2CAgent(game)
     elif args.agent == "dqn":
         agent = DQNAgent(game)
+    elif args.agent == "ppo":
+        agent = PPOAgent(game)
     else:
         raise ValueError("Unknown Agent " + args.agent)
 

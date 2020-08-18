@@ -100,6 +100,8 @@ class A2CAgent(Agent):
         for i in reversed(range(len(rewards))):
             runningReward = runningReward * gamma + rewards[i]
             discountRewards[i] = runningReward
+
+        discountRewards = (discountRewards - discountRewards.mean()) / (discountRewards.std() + 1e-5)
         return discountRewards
 
     def learn(self) -> None:

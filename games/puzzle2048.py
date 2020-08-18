@@ -53,7 +53,7 @@ class Puzzle2048(Game):
         if not moved:
             raise InvalidAction()
         self.reward = self.game.score - score
-        self.reward = max(-1, min(1, self.reward))
+        # self.reward = max(-1, min(1, self.reward))
         return super().takeAction(action)
 
     def getDone(self) -> bool:

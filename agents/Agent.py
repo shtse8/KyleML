@@ -18,6 +18,8 @@ import torch
 import torch.nn as nn
 from games.Game import Game
 import torch.multiprocessing as mp
+import humanize
+
 
 class Phrase(Enum):
     train = 1
@@ -91,7 +93,6 @@ class Agent(object):
 
     def commit(self, transition: Transition) -> None:
         self.report.rewards += transition.reward
-        self.report.steps += 1
         # self.update()
 
     def run(self, train: bool = True) -> None:
@@ -101,31 +102,44 @@ class Agent(object):
     def start(self):
         while self.beginEpoch():
             while self.beginPhrase():
+                gen = self.getSample()
                 while self.beginEpisode():
-                    state = self.env.reset()
-                    done: bool = False
-                    while not done:
-                        reward: float = 0.
-                        nextState = state
-                        actionMask = np.ones(self.env.actionSpace)
-                        prediction = self.getPrediction(state)
-                        while True:
-                            try:
-                                action = self.getAction(prediction, actionMask)
-                                nextState, reward, done = self.env.takeAction(action)
-                                self.commit(Transition(state, action, reward, nextState, done, prediction))
-                                break
-                            except InvalidAction:
-                                actionMask[action] = 0
-                                self.report.invalidMoves += 1
-                                # print(actionMask)
-                            # finally:
-                        state = nextState
-                        if self.isPlaying():
-                            time.sleep(0.25)
+                    while True:
+                        transition = next(gen)
+                        self.commit(transition)
+                        if transition.done:
+                            break
                     self.endEpisode()
                 self.endPhrase()
             self.endEpoch()
+    
+    def getSample(self):
+        # samples = collections.deque(maxlen=num)
+        while True:
+            state = self.env.reset()
+            done: bool = False
+            while not done:
+                reward: float = 0.
+                nextState = state
+                actionMask = np.ones(self.env.actionSpace)
+                prediction = self.getPrediction(state)
+                while True:
+                    try:
+                        action = self.getAction(prediction, actionMask)
+                        nextState, reward, done = self.env.takeAction(action)
+                        transition = Transition(state, action, reward, nextState, done, prediction)
+                        yield transition
+                        # samples.append(transition)
+                        # if len(samples) >= num or (endOnDone and done):
+                        #     yield samples
+                        #     samples.clear()
+                        break
+                    except InvalidAction:
+                        actionMask[action] = 0
+                        self.report.invalidMoves += 1
+                        # print(actionMask)
+                    # finally:
+                state = nextState
 
     def getPhrase(self) -> Phrase:
         return self.phrases[self.phraseIndex]
@@ -139,7 +153,7 @@ class Agent(object):
     def isPlaying(self) -> bool:
         return self.getPhrase() == Phrase.play
 
-    def beginPhrase(self) -> None:
+    def beginPhrase(self) -> bool:
         if self.phraseIndex >= len(self.phrases):
             return False
         self.episodes.value = 0
@@ -173,6 +187,7 @@ class Agent(object):
         return self.episodes.value <= self.target_episodes
 
     def endEpisode(self) -> None:
+        self.totalSteps += self.report.steps
         self.history.append(self.report)
         self.update()
 
@@ -187,8 +202,8 @@ class Agent(object):
         durationPerEpisode = duration / self.episodes.value
         estimateDuration = self.target_episodes * durationPerEpisode
         totalSteps = np.sum([x.steps for x in self.history])
-        print(f"{self.getPhrase().name:5} #{self.epochs} {progress:>4.0%} | " + \
-            f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f}, Std: {stdReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s, {totalSteps/self.episodes.value:>6.2f}/ep | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f} | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
+        print(f"{self.getPhrase().name:5} #{self.epochs} {progress:>4.0%} {humanize.intword(self.totalSteps)} | " + \
+            f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f}/ep | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
 
     def learn(self) -> None:
         raise NotImplementedError()
@@ -225,6 +240,23 @@ class Agent(object):
         return path
 
 
+class EpisodeManager:
+    def __init__(self, target):
+        self.count = 0
+        self.target = target
+
+    def next(self):
+        if self.count > 0:
+            self.end()
+        self.start()
+        return self.count < self.self.target
+
+    def end(self):
+        pass
+
+    def start(self):
+        self.count += 1
+
 class Message:
     def __init__(self):
         pass
@@ -235,7 +267,6 @@ class EpisodeReport(Message):
         self.steps: int = 0
         self.rewards: float = 0
         self.total_loss: float = 0
-        self.samples: int = 0
         self.invalidMoves: int = 0
         self.episode_start_time: int = 0
         self.episode_end_time: int = 0
@@ -252,9 +283,9 @@ class EpisodeReport(Message):
 
     @property
     def loss(self):
-        return self.total_loss / self.samples if self.samples > 0 else math.nan
+        return self.total_loss / self.steps if self.steps > 0 else math.nan
 
-    def trained(self, loss, samples):
-        self.total_loss += loss * samples
-        self.samples += samples
+    def trained(self, loss, steps):
+        self.total_loss += loss * steps
+        self.steps += steps
         

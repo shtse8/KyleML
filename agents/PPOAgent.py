@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import torch.optim.lr_scheduler as schedular
 
 # def init_layer(m):
 #     weight = m.weight.data
@@ -16,7 +17,7 @@ import torch.nn.functional as F
 #     weight *= 1.0 / torch.sqrt(weight.pow(2).sum(1, keepdim=True))
 #     nn.init.constant_(m.bias.data, 0)
 #     return m
-    
+
 class Network(nn.Module):
     def __init__(self, n_inputs, n_outputs, name="default"):
         super().__init__()
@@ -24,20 +25,22 @@ class Network(nn.Module):
 
         hidden_nodes = 128
         self.body = nn.Sequential(
-            nn.Linear(n_inputs, hidden_nodes),
-            nn.Tanh())
+            nn.Linear(n_inputs, hidden_nodes * 2),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes * 2, hidden_nodes),
+            nn.ReLU())
             
         # Define policy head
         self.policy = nn.Sequential(
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_nodes, n_outputs),
             nn.Softmax(dim=-1))
             
         # Define value head
         self.value = nn.Sequential(
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_nodes, 1))
 
     def forward(self, state):
@@ -58,7 +61,7 @@ class PPOAgent(Agent):
         super().__init__("ppo", env, **kwargs)
 
         # Trainning
-        self.learningRate: float = kwargs.get('learningRate', .001)
+        self.learningRate: float = kwargs.get('learningRate', .0001)
         self.gamma: float = kwargs.get('gamma', 0.9)
 
         # Memory
@@ -72,6 +75,7 @@ class PPOAgent(Agent):
             np.product(self.env.observationSpace),
             self.env.actionSpace)
         self.optimizer = optim.Adam(self.network.parameters(), lr=self.learningRate)
+        # self.schedular = schedular.StepLR(self.optimizer, step_size=1, gamma=0.999)
         
         self.network.to(self.device)
         self.addModels(self.network)
@@ -94,7 +98,7 @@ class PPOAgent(Agent):
         handler = PredictionHandler(prediction, mask)
         return handler.getRandomAction() if self.isTraining() else handler.getBestAction()
 
-    def beginEpisode(self) -> None:
+    def beginEpisode(self) -> bool:
         self.memory.clear()
         return super().beginEpisode()
 
@@ -109,13 +113,14 @@ class PPOAgent(Agent):
 
     def getAdvantages(self, rewards, dones, values):
         advantages = np.zeros_like(rewards).astype(float)
-        runningReward = 0
-        runningValue = 0
+        gae = 0
+        lastValue = 0
         for i in reversed(range(len(rewards))):
-            detlas = rewards[i] + self.gamma * runningValue * (1 - dones[i]) - values[i]
-            runningValue = values[i]
-            runningReward = detlas + self.gamma * 0.95 * runningReward * (1 - dones[i])
-            advantages[i] = runningReward
+            value = values[i].item()
+            detlas = rewards[i] + self.gamma * lastValue * (1 - dones[i]) - value
+            gae = detlas + self.gamma * 0.95 * gae * (1 - dones[i])
+            advantages[i] = gae
+            lastValue = value
         return advantages
 
     def learn(self) -> None:
@@ -148,7 +153,7 @@ class PPOAgent(Agent):
         # with torch.no_grad():
         
         eps_clip = 0.2
-        for _ in range(1):
+        for _ in range(4):
             action_probs, values = self.network(states)
             values = values.squeeze(1)
 

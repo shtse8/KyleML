@@ -1,10 +1,9 @@
 import sys
 import torch
 
-"""
-    數組為正態分佈
-    計算出最後每個數值的標準差
-"""
+
+#   數組為正態分佈
+#   計算出最後每個數值的標準差
 def normalize(value):
     # print(sys.float_info.min, torch.finfo(torch.float).eps)
     eps = sys.float_info.min

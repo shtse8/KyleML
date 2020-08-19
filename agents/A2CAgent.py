@@ -25,7 +25,8 @@ class Network(nn.Module):
         self.policy = nn.Sequential(
             nn.Linear(hidden_nodes, hidden_nodes),
             nn.ReLU(),
-            nn.Linear(hidden_nodes, n_outputs))
+            nn.Linear(hidden_nodes, n_outputs),
+            nn.Softmax(dim=-1))
             
         # Define value head
         self.value = nn.Sequential(

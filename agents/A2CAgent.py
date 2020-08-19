@@ -3,6 +3,7 @@ from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
 from .Agent import Agent
 from utils.PredictionHandler import PredictionHandler
+import utils.Function as Function
 
 import torch
 import torch.nn as nn
@@ -32,21 +33,17 @@ class Network(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_nodes, 1))
 
-
     def forward(self, state):
-        body_output = self.get_body_output(state)
-        probs = F.softmax(self.policy(body_output), dim=-1)
-        return probs, self.value(body_output)
+        output = self.body(state)
+        return self.policy(output), self.value(output)
 
-    def get_body_output(self, state):
-        return self.body(state)
-    
-    def actor(self, state):
-        body_output = self.get_body_output(state)
-        return F.softmax(self.policy(body_output), dim=-1)
+    def getPolicy(self, state):
+        output = self.body(state)
+        return self.policy(output)
 
-    def critic(self, state):
-        return self.value(self.get_body_output(state))
+    def getValue(self, state):
+        output = self.body(state)
+        return self.value(output)
         
 
 class A2CAgent(Agent):
@@ -85,7 +82,7 @@ class A2CAgent(Agent):
         self.network.eval()
         with torch.no_grad():
             state = torch.FloatTensor(state).view(1, -1).to(self.device)
-            prediction = self.network.actor(state).squeeze(0)
+            prediction = self.network.getPolicy(state).squeeze(0)
             return prediction.cpu().detach().numpy()
 
     def getAction(self, prediction, mask = None):
@@ -96,7 +93,27 @@ class A2CAgent(Agent):
         self.memory.clear()
         return super().beginEpisode()
 
-    def getDiscountedRewards(self, rewards, gamma, finalReward):
+    # Discounted Rewards (N-steps)
+    def getDiscountedRewards(self, rewards, dones):
+        discountedRewards = np.zeros_like(rewards).astype(float)
+        runningDiscountedRewards = 0
+        for i in reversed(range(len(rewards))):
+            runningDiscountedRewards = rewards[i] + self.gamma * runningDiscountedRewards * (1 - dones[i])
+            discountedRewards[i] = runningDiscountedRewards
+        return discountedRewards
+
+    def getAdvantages(self, rewards, dones, values):
+        advantages = np.zeros_like(rewards).astype(float)
+        runningReward = 0
+        runningValue = 0
+        for i in reversed(range(len(rewards))):
+            detlas = rewards[i] + self.gamma * runningValue * (1 - dones[i]) - values[i]
+            runningValue = values[i]
+            runningReward = detlas + self.gamma * 0.95 * runningReward * (1 - dones[i])
+            advantages[i] = runningReward
+        return advantages
+
+    def getDiscountedRewards2(self, rewards, gamma, finalReward):
         discountRewards = np.zeros_like(rewards).astype(float)
         runningReward = finalReward
         for i in reversed(range(len(rewards))):
@@ -122,29 +139,37 @@ class A2CAgent(Agent):
         action_probs, values = self.network(states)
         values = values.squeeze(1)
 
-        # with torch.no_grad():
+        dones = np.array([x.done for x in batch])
         rewards = np.array([x.reward for x in batch])
-        finalReward = 0
-        if not batch[-1].done:
-            nextState = torch.FloatTensor(batch[-1].nextState).to(self.device).view(1, -1)
-            finalReward = self.network.critic(nextState).item()
-        targetValues = self.getDiscountedRewards(rewards, self.gamma, finalReward)
+        
+        targetValues = self.getDiscountedRewards(rewards, dones)
         targetValues = torch.FloatTensor(targetValues).to(self.device)
-        advantages = targetValues - values
+
+        advantages = self.getAdvantages(rewards, dones, values)
+        advantages = torch.FloatTensor(advantages).to(self.device)
+        advantages = Function.normalize(advantages)
+        
+        # finalReward = 0
+        # if not batch[-1].done:
+        #     nextState = torch.FloatTensor(batch[-1].nextState).to(self.device).view(1, -1)
+        #     finalReward = self.network.critic(nextState).item()
+        # targetValues = self.getDiscountedRewards2(rewards, self.gamma, finalReward)
+        # targetValues = torch.FloatTensor(targetValues).to(self.device)
+        # advantages = targetValues - values
         
         dist = torch.distributions.Categorical(probs=action_probs)
-        entropy_loss = -dist.entropy().mean()
-        actor_loss = -(dist.log_prob(actions) * advantages.detach()).mean()
-        value_loss = advantages.pow(2).mean()
+        policy_loss = -(dist.log_prob(actions) * advantages.detach()).mean()
+        entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
+        value_loss = F.mse_loss(values, targetValues)  # Minimize Value Loss
         # value_loss = nn.MSELoss()(values, discountRewards)
         
-        total_loss = actor_loss + 0.01 * entropy_loss + value_loss
+        loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
         
         self.optimizer.zero_grad()
-        total_loss.backward()
+        loss.backward()
         nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
         self.optimizer.step()
         
         # Stats
-        self.report.trained(total_loss.item(), len(batch))
+        self.report.trained(loss.item(), len(batch))
         self.memory.clear()

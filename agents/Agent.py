@@ -110,6 +110,8 @@ class Agent(object):
                         self.commit(transition)
                         if transition.done:
                             break
+                        if self.isPlaying():
+                            time.sleep(0.25)
                     self.endEpisode()
                 self.endPhrase()
             self.endEpoch()

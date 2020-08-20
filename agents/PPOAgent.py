@@ -25,9 +25,10 @@ class Network(nn.Module):
 
         hidden_nodes = 64
         self.body = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=1),
-            nn.Conv2d(32, 64, kernel_size=2, stride=1),
-            nn.Conv2d(64, 64, kernel_size=1, stride=1))
+            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True))
             # nn.Linear(n_inputs, hidden_nodes * 2),
             # nn.ReLU(),
             # nn.Linear(hidden_nodes * 2, hidden_nodes),
@@ -35,14 +36,14 @@ class Network(nn.Module):
             
         # Define policy head
         self.policy = nn.Sequential(
-            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.Linear(hidden_nodes * 16, hidden_nodes),
             nn.ReLU(),
             nn.Linear(hidden_nodes, n_outputs),
             nn.Softmax(dim=-1))
             
         # Define value head
         self.value = nn.Sequential(
-            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.Linear(hidden_nodes * 16, hidden_nodes),
             nn.ReLU(),
             nn.Linear(hidden_nodes, 1))
 

@@ -82,7 +82,7 @@ class A2CAgent(Agent):
     def getPrediction(self, state):
         self.network.eval()
         with torch.no_grad():
-            state = torch.FloatTensor(state).view(1, -1).to(self.device)
+            state = torch.FloatTensor([state.flatten()]).to(self.device)
             prediction = self.network.getPolicy(state).squeeze(0)
             return prediction.cpu().detach().numpy()
 
@@ -131,8 +131,8 @@ class A2CAgent(Agent):
         if len(batch) == 0:
             return
 
-        states = np.array([x.state for x in batch])
-        states = torch.FloatTensor(states).to(self.device).view(states.shape[0], -1)
+        states = np.array([x.state.flatten() for x in batch])
+        states = torch.FloatTensor(states).to(self.device)
         
         actions = np.array([x.action for x in batch])
         actions = torch.LongTensor(actions).to(self.device)

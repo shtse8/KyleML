@@ -122,14 +122,15 @@ class Agent(object):
             while not done:
                 reward: float = 0.
                 nextState = state
-                actionMask = self.env.getActionMask(state)
-                prediction = self.getPrediction(state, actionMask)
+                # actionMask = self.env.getActionMask(state)
+                actionMask = np.ones(self.env.actionSpace)
+                prediction = self.getPrediction(state)
                 while True:
                     try:
                         # print(actionMask)
                         # print(state, self.env.getActionMask(), actionMask)
-                        # if prediction.max() > 0.95:  # and actionMask[prediction.argmax()] == 0:
-                            # print(state, prediction, actionMask)
+                        # if prediction.max() > 0.95 and actionMask[prediction.argmax()] == 0:
+                        #     print(state, prediction, actionMask)
                         action = self.getAction(prediction, actionMask)
                         nextState, reward, done = self.env.takeAction(action)
                         transition = Transition(state, action, reward, nextState, done, prediction)
@@ -143,7 +144,7 @@ class Agent(object):
                         # print(prediction, state, action, "Failed")
                         actionMask[action] = 0
                         self.report.invalidMoves += 1
-                        # yield Transition(state, action, 0, state, False, prediction)
+                        yield Transition(state, action, 0, state, False, prediction)
                         # print(actionMask)
                     # finally:
                 state = nextState

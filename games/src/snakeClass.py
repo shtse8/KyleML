@@ -5,17 +5,13 @@ os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 
 import pygame
 import math
-import argparse
 import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
 import time
 from collections import deque
 from random import randint
 import atexit
 import signal
 import sys
-from operator import add
 
 PIXEL_SIZE = 20
 

@@ -21,11 +21,20 @@ class PredictionHandler:
     def getBestAction(self):
         prediction = self.applyMask(-math.inf)
         return prediction.argmax()
-        
+    
+    def getMaskedPrediction(self):
+        prediction = self.applyMask(0)
+        predictionSum = prediction.sum()
+        if not predictionSum == 0:
+            prediction = prediction / predictionSum
+        else:
+            prediction = self.mask / self.mask.sum()
+        return prediction
+
     def getRandomAction(self):
         prediction = self.applyMask(0)
         predictionSum = prediction.sum()
-        if predictionSum != 0:
+        if not predictionSum == 0:
             prediction = prediction / predictionSum
         else:
             prediction = self.mask / self.mask.sum()

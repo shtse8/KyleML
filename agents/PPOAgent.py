@@ -43,13 +43,22 @@ class Network(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_nodes, 1))
 
-    def forward(self, state):
+    def forward(self, state, mask):
         output = self.body(state)
-        return self.policy(output), self.value(output)
+        
+        policy = self.policy(output)
+        if mask is not None:
+            policy = policy * mask
+        policy /= policy.sum(1).unsqueeze(1)
+        return policy, self.value(output)
 
-    def getPolicy(self, state):
+    def getPolicy(self, state, mask):
         output = self.body(state)
-        return self.policy(output)
+        output = self.policy(output)
+        if mask is not None:
+            output = output * mask
+        output /= output.sum(1).unsqueeze(1)
+        return output
 
     def getValue(self, state):
         output = self.body(state)
@@ -87,16 +96,20 @@ class PPOAgent(Agent):
             if transition.done:
                 self.learn()
 
-    def getPrediction(self, state):
+    def getPrediction(self, state, mask=None):
         self.network.eval()
         with torch.no_grad():
-            state = torch.FloatTensor(state).view(1, -1).to(self.device)
-            prediction = self.network.getPolicy(state).squeeze(0)
+            state = torch.FloatTensor([state.flatten()]).to(self.device)
+            mask = torch.FloatTensor([mask.flatten()]).to(self.device)
+            prediction = self.network.getPolicy(state, mask).squeeze(0)
             return prediction.cpu().detach().numpy()
 
-    def getAction(self, prediction, mask = None):
+    def getAction(self, prediction, mask=None):
         handler = PredictionHandler(prediction, mask)
-        return handler.getRandomAction() if self.isTraining() else handler.getBestAction()
+        if self.isTraining():
+            return handler.getRandomAction()
+        else:
+            return handler.getBestAction()
 
     def beginEpisode(self) -> bool:
         self.memory.clear()
@@ -130,8 +143,8 @@ class PPOAgent(Agent):
         if len(batch) == 0:
             return
 
-        states = np.array([x.state for x in batch])
-        states = torch.FloatTensor(states).to(self.device).view(states.shape[0], -1)
+        states = np.array([x.state.flatten() for x in batch])
+        states = torch.FloatTensor(states).to(self.device)
         
         actions = np.array([x.action for x in batch])
         actions = torch.LongTensor(actions).to(self.device)
@@ -152,16 +165,20 @@ class PPOAgent(Agent):
         # print(rewards, targetValues)
         # with torch.no_grad():
         
+        masks = np.array([self.env.getActionMask(x.state) for x in batch])
+        masks = torch.FloatTensor(masks).to(self.device)
+        # print(masks)
+
         eps_clip = 0.2
         for _ in range(4):
-            action_probs, values = self.network(states)
+            action_probs, values = self.network(states, masks)
             values = values.squeeze(1)
 
             advantages = self.getAdvantages(rewards, dones, values)
             advantages = torch.FloatTensor(advantages).to(self.device)
             advantages = Function.normalize(advantages)
             # print(advantages)
-            
+
             dist = torch.distributions.Categorical(probs=action_probs)
             # print(predictions)
             ratios = torch.exp(dist.log_prob(actions) - real_probs)  # porb1 / porb2 = exp(log(prob1) - log(prob2))

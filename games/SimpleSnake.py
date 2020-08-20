@@ -66,6 +66,10 @@ class SimpleSnake(Game):
         # state = np.pad(state, (0, self.observationSpace - len(state)))
         return state
         
+
+    def getActionMask(self, state):
+        return np.ones(self.actionSpace)
+
     def takeAction(self, action):
         action_array = np.zeros(self.actionSpace)
         action_array[action] = 1

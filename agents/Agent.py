@@ -19,6 +19,7 @@ import torch.nn as nn
 from games.Game import Game
 import torch.multiprocessing as mp
 import humanize
+from utils.PredictionHandler import PredictionHandler
 
 
 class Phrase(Enum):
@@ -121,10 +122,14 @@ class Agent(object):
             while not done:
                 reward: float = 0.
                 nextState = state
-                actionMask = np.ones(self.env.actionSpace)
-                prediction = self.getPrediction(state)
+                actionMask = self.env.getActionMask(state)
+                prediction = self.getPrediction(state, actionMask)
                 while True:
                     try:
+                        # print(actionMask)
+                        # print(state, self.env.getActionMask(), actionMask)
+                        # if prediction.max() > 0.95:  # and actionMask[prediction.argmax()] == 0:
+                            # print(state, prediction, actionMask)
                         action = self.getAction(prediction, actionMask)
                         nextState, reward, done = self.env.takeAction(action)
                         transition = Transition(state, action, reward, nextState, done, prediction)
@@ -135,8 +140,10 @@ class Agent(object):
                         #     samples.clear()
                         break
                     except InvalidAction:
+                        # print(prediction, state, action, "Failed")
                         actionMask[action] = 0
                         self.report.invalidMoves += 1
+                        # yield Transition(state, action, 0, state, False, prediction)
                         # print(actionMask)
                     # finally:
                 state = nextState
@@ -164,7 +171,7 @@ class Agent(object):
         elif self.isTesting():
             self.target_episodes = self.target_tests
         elif self.isPlaying():
-            self.target_episodes = 1
+            self.target_episodes = 100
         
         self.history = collections.deque(maxlen=self.target_episodes)
         return True

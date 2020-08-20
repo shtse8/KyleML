@@ -47,7 +47,7 @@ class Puzzle2048(Game):
                 state[cell.x][cell.y] = math.log2(cell.value)
         return state
 
-    def getActionMask(self):
+    def getActionMask(self, state):
         actions = [
             (0, -1),  # Up
             (1, 0),  # Right
@@ -56,14 +56,15 @@ class Puzzle2048(Game):
         ]
         mask = np.zeros(self.actionSpace, dtype=int)
         for i, vector in enumerate(actions):
-            for _, _, cell in self.game.grid.eachCell():
-                if cell:
-                    if cell.x + vector[0] >= 0 and cell.x + vector[0] < self.size and \
-                        cell.y + vector[1] >= 0 and cell.y + vector[1] < self.size:
-                        next = self.game.grid.cells[cell.x + vector[0]][cell.y + vector[1]]
-                        if next is None or next.value == cell.value:
-                            mask[i] = 1
-                            break
+            for x, col in enumerate(state):
+                for y, cell in enumerate(col):
+                    if not cell == 0:
+                        if x + vector[0] >= 0 and x + vector[0] < self.size and \
+                            y + vector[1] >= 0 and y + vector[1] < self.size:
+                            next = state[x + vector[0]][y + vector[1]]
+                            if next == 0 or next == cell:
+                                mask[i] = 1
+                                break
         return mask
 
     def takeAction(self, action):
@@ -108,8 +109,8 @@ class Puzzle2048(Game):
         text_rect.center = score_rect.center
         self.display.blit(text, text_rect)
 
-        for y, row in enumerate(state):
-            for x, cell in enumerate(row):
+        for x, col in enumerate(state):
+            for y, cell in enumerate(col):
                 block_size = ((self.height - scoreHeight) / self.observationSpace[0], self.width / self.observationSpace[1])
                 block_rect = pygame.Rect(x * block_size[1], scoreHeight + y * block_size[0], block_size[1], block_size[0])
                 pygame.draw.rect(self.display, self.tileColors[2 ** cell], block_rect)

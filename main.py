@@ -29,43 +29,46 @@ def main():
     parser = argparse.ArgumentParser(description='Kyle RL Playground')
     parser.add_argument('--game', default='2048', type=str)
     parser.add_argument('--agent', default='ppo', type=str)
-    parser.add_argument('--render', action='store_true')
+    parser.add_argument('--render', default=0, type=float)
     parser.add_argument('--load', action='store_true')
     parser.add_argument('--train', default=True, action='store_true', dest="train")
-    parser.add_argument('--play', action='store_false', dest="train")
+    parser.add_argument('--eval', action='store_false', dest="train")
     args = parser.parse_args()
     print(args)
     signal.signal(signal.SIGINT, signal_handler)
     print("CUDA:", torch.cuda.is_available())
-    if args.game == "2048":
-        game = Puzzle2048()
-    elif args.game == "snake":
-        game = Snake()
-    elif args.game == "simplesnake":
-        game = SimpleSnake()
-    elif args.game == "cartpole":
-        game = CartPole()
+        
+    agents = {
+        "dqn": DQNAgent,
+        "a2c": A2CAgent,
+        "a3c": A3CAgent,
+        "ppo": PPOAgent
+    }
+
+    games = {
+        "snake": Snake,
+        "simeplesnake": SimpleSnake,
+        "cartpole": CartPole,
+        "2048": Puzzle2048
+    }
+
+    if args.game in games:
+        game = games[args.game]()
     else:
         raise ValueError("Unknown Game " + args.game)
 
-    if args.render:
+    if args.render > 0:
         game.render()
 
-    if args.agent == "a3c":
-        agent = A3CAgent(game)
-    elif args.agent == "a2c":
-        agent = A2CAgent(game)
-    elif args.agent == "dqn":
-        agent = DQNAgent(game)
-    elif args.agent == "ppo":
-        agent = PPOAgent(game)
+    if args.agent in agents:
+        agent = agents[args.agent](game)
     else:
         raise ValueError("Unknown Agent " + args.agent)
 
     if args.load or not args.train:
         agent.load()
 
-    agent.run(train=args.train)
+    agent.run(train=args.train, stepSleep=args.render)
 
 
 if __name__ == "__main__":

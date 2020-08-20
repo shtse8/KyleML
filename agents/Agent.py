@@ -21,12 +21,9 @@ import torch.multiprocessing as mp
 import humanize
 from utils.PredictionHandler import PredictionHandler
 
-
-class Phrase(Enum):
+class Mode(Enum):
     train = 1
-    test = 2
-    play = 3
-
+    eval = 1
 
 class Agent(object):
     def __init__(self, name: str, env: Game, **kwargs) -> None:
@@ -36,29 +33,17 @@ class Agent(object):
         self.env: Game = env
         
         # Trainning
-        self.target_epochs: int = kwargs.get('target_epochs', 10000)
-        self.target_trains: int = kwargs.get('target_trains', 1000)
-        self.target_tests: int = kwargs.get('target_tests', 100)
-        
+        self.mode = Mode.train
+        self.stepSleep: int = 0
+        self.target_epochs: int = 0
         self.target_episodes: int = 0
         
-        # self.phrases = [Phrase.train, Phrase.test]
-        self.phrases = []
-        # self.phrases = [Phrase.play]
-
-        # episode stats
-        self.report = EpisodeReport()
-
-        # phrase stats
-        self.episodes = mp.Value('i', 0)
-        
-        # epoch stats
-        self.phraseIndex: int = 0
-
         # training stats
+        self.episodes = mp.Value('i', 0)
         self.epochs: int = 0
+        self.totalEpisodes: int = 0
         self.totalSteps: int = 0
-
+        
         # History
         self.history = None
         
@@ -80,11 +65,21 @@ class Agent(object):
 
     def beginEpoch(self) -> None:
         self.epochs += 1
-        self.phraseIndex = 0
+        self.episodes.value = 0
+        self.startTime = time.perf_counter()
+        self.history = collections.deque(maxlen=self.target_episodes)
+
         return self.epochs <= self.target_epochs
 
     def endEpoch(self) -> None:
-        pass
+        if self.isTraining():
+            self.save()
+        # plt.cla()
+        # plt.plot(self.lossHistory)
+        # plt.show()
+        # plt.draw()
+        # plt.pause(0.00001)
+        print()
 
     def getPrediction(self, state):
         raise NotImplementedError()
@@ -96,24 +91,28 @@ class Agent(object):
         self.report.rewards += transition.reward
         # self.update()
 
-    def run(self, train: bool = True) -> None:
-        self.phrases = [Phrase.train] if train else [Phrase.play]
+    def run(self, train: bool = True, episodes: int = 1000, epochs: int = 10000, stepSleep: float = 0) -> None:
+        self.stepSleep = stepSleep
+        self.mode = Mode.train if train else Mode.eval
+        self.target_episodes = episodes
+        self.target_epochs = epochs
         self.start()
 
     def start(self):
+        print(f"Mode: {self.mode.name}")
+        print(f"Total Episodes: {self.totalEpisodes}")
+        print(f"Total Steps: {self.totalSteps}")
         while self.beginEpoch():
-            while self.beginPhrase():
-                gen = self.getSample()
-                while self.beginEpisode():
-                    while True:
-                        transition = next(gen)
-                        self.commit(transition)
-                        if transition.done:
-                            break
-                        if self.isPlaying():
-                            time.sleep(0.25)
-                    self.endEpisode()
-                self.endPhrase()
+            gen = self.getSample()
+            while self.beginEpisode():
+                while True:
+                    transition = next(gen)
+                    self.commit(transition)
+                    if transition.done:
+                        break
+                    if self.stepSleep > 0:
+                        time.sleep(self.stepSleep)
+                self.endEpisode()
             self.endEpoch()
     
     def getSample(self):
@@ -151,54 +150,22 @@ class Agent(object):
                     # finally:
                 state = nextState
 
-    def getPhrase(self) -> Phrase:
-        return self.phrases[self.phraseIndex]
-
     def isTraining(self) -> bool:
-        return self.getPhrase() == Phrase.train
+        return self.mode == Mode.train
 
-    def isTesting(self) -> bool:
-        return self.getPhrase() == Phrase.test
-
-    def isPlaying(self) -> bool:
-        return self.getPhrase() == Phrase.play
-
-    def beginPhrase(self) -> bool:
-        if self.phraseIndex >= len(self.phrases):
-            return False
-        self.episodes.value = 0
-
-        self.startTime = time.perf_counter()
-        if self.isTraining():
-            self.target_episodes = self.target_trains
-        elif self.isTesting():
-            self.target_episodes = self.target_tests
-        elif self.isPlaying():
-            self.target_episodes = 100
-        
-        self.history = collections.deque(maxlen=self.target_episodes)
-        return True
-
-    def endPhrase(self) -> None:
-        if self.isTraining():
-            self.save()
-
-        self.phraseIndex += 1
-        # plt.cla()
-        # plt.plot(self.lossHistory)
-        # plt.show()
-        # plt.draw()
-        # plt.pause(0.00001)
-        print()
+    def isEval(self) -> bool:
+        return self.mode == Mode.eval
 
     def beginEpisode(self) -> None:
         self.episodes.value += 1
         self.report = EpisodeReport()
+        self.history.append(self.report)
         return self.episodes.value <= self.target_episodes
 
     def endEpisode(self) -> None:
-        self.totalSteps += self.report.steps
-        self.history.append(self.report)
+        if self.isTraining():
+            self.totalEpisodes += 1
+            self.totalSteps += self.report.steps
         self.update()
 
     def update(self) -> None:
@@ -212,7 +179,7 @@ class Agent(object):
         durationPerEpisode = duration / self.episodes.value
         estimateDuration = self.target_episodes * durationPerEpisode
         totalSteps = np.sum([x.steps for x in self.history])
-        print(f"{self.getPhrase().name:5} #{self.epochs} {progress:>4.0%} {humanize.intword(self.totalSteps)} | " + \
+        print(f"#{self.epochs} {progress:>4.0%} {humanize.intword(self.totalSteps)} | " + \
             f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f}/ep | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
 
     def learn(self) -> None:
@@ -222,7 +189,8 @@ class Agent(object):
         try:
             path = self.getSavePath(True)
             data = {
-                "totalSteps": self.totalSteps
+                "totalSteps": self.totalSteps,
+                "totalEpisodes": self.totalEpisodes
             }
             for model in self.models:
                 data[model.name] = model.state_dict()
@@ -237,6 +205,7 @@ class Agent(object):
             print("Loading from path: ", path)
             data = torch.load(path, map_location=self.device)
             self.totalSteps = int(data["totalSteps"]) if "totalSteps" in data else 0
+            self.totalEpisodes = int(data["totalEpisodes"]) if "totalEpisodes" in data else 0
             for model in self.models:
                 model.load_state_dict(data[model.name])
             print("Weights loaded.")

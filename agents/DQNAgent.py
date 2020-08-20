@@ -62,23 +62,23 @@ class DQNAgent(Agent):
         super().__init__("dqn", env, **kwargs)
         
         # Trainning
-        self.update_target_every = kwargs.get('update_target_every', 1000)
-        self.learning_rate = kwargs.get('learning_rate', .001)
-        self.gamma = kwargs.get('gamma', 0.99)
+        self.update_target_every = 1000
+        self.learning_rate = 0.001
+        self.gamma = 0.99
         
         # Exploration
-        self.epsilon_max = kwargs.get('epsilon_max', 0.20)
-        self.epsilon_min = kwargs.get('epsilon_min', 0.00)
-        self.epsilon_phase_size = kwargs.get('epsilon_phase_size', 0.2)
+        self.epsilon_max = 0.2
+        self.epsilon_min = 0
+        self.epsilon_phase_size = 0.2
         self.epsilon = self.epsilon_max
-        self.epsilon_decay = ((self.epsilon_max - self.epsilon_min) / (self.target_trains * self.epsilon_phase_size))
-        self.beta_increment_per_sampling = ((1 - 0.4) / self.target_trains)
 
         # Memory
-        self.memory_size = kwargs.get('memory_size', 10000)
-        
+        self.memory_size = 10000
+        self.epsilon_decay = 0
+        self.beta_increment_per_sampling = 0
+
         # Mini Batch
-        self.minibatch_size = kwargs.get('minibatch_size', 64)
+        self.minibatch_size = 64
         
         # self.ltmemory = collections.deque(maxlen=self.memory_size)
         self.ltmemory = PrioritizedMemory(self.memory_size, self.beta_increment_per_sampling)
@@ -99,12 +99,14 @@ class DQNAgent(Agent):
         self.addModels(self.network)
         self.addModels(self.network_target)
 
-    def beginPhrase(self):
+    def beginEpoch(self):
         self.epsilon = self.epsilon_max
         self.stmemory.clear()
+        self.epsilon_decay = ((self.epsilon_max - self.epsilon_min) / (self.target_episodes * self.epsilon_phase_size))
+        self.beta_increment_per_sampling = ((1 - 0.4) / self.target_episodes)
         self.ltmemory = PrioritizedMemory(self.memory_size, self.beta_increment_per_sampling)
         self.updateTarget()
-        return super().beginPhrase()
+        return super().beginEpoch()
     
     def commit(self, transition: Transition):
         if self.isTraining():

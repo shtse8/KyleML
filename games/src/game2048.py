@@ -33,7 +33,7 @@ class Tile(Coord):
 class Grid:
     def __init__(self, size, previousState = None):
         self.size = size
-        self.cells =  self.fromState(previousState) if previousState != None else self.empty()
+        self.cells = self.fromState(previousState) if previousState is not None else self.empty()
         
     def empty(self):
         return np.empty((self.size, self.size), dtype=object)
@@ -78,7 +78,7 @@ class Grid:
         return not self.cellOccupied(cell)
         
     def cellOccupied(self, cell):
-        return self.cellContent(cell) != None
+        return self.cellContent(cell) is not None
         
     def cellContent(self, cell):
         if self.withinBounds(cell):
@@ -143,7 +143,6 @@ class Game2048:
         moved = False
 
         self.prepareTiles()
-
         # Traverse the grid in the right direction and move tiles
         for x in traversals.x:
             for y in traversals.y:
@@ -173,16 +172,15 @@ class Game2048:
                             
                     else:
                         self.moveTile(tile, positions["farthest"])
-                    
 
                     if not self.positionsEqual(cell, tile):
-                        moved = True # The tile moved from its original cell!
+                        moved = True  # The tile moved from its original cell!
                         
         if moved:
             self.addRandomTile()
 
             if not self.movesAvailable():
-                self.over = True # Game over!
+                self.over = True  # Game over!
 
         return moved
        
@@ -198,7 +196,7 @@ class Game2048:
         return map[direction]
             
     def buildTraversals(self, vector):
-        traversals = Traversal();
+        traversals = Traversal()
         
         for pos in range(self.size):
             traversals.x.append(pos)
@@ -215,7 +213,7 @@ class Game2048:
     def findFarthestPosition(self, cell, vector):
         # Progress towards the vector direction until an obstacle is found
         while True:
-            previous = cell;
+            previous = cell
             cell     = Coord(previous.x + vector.x, previous.y + vector.y)
             if not (self.grid.withinBounds(cell) and self.grid.cellAvailable(cell)):
                 break
@@ -223,7 +221,7 @@ class Game2048:
 
         return {
             "farthest": previous,
-            "next": cell # Used to check if a merge is required
+            "next": cell  # Used to check if a merge is required
         }
     
     def movesAvailable(self):

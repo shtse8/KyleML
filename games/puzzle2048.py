@@ -47,6 +47,25 @@ class Puzzle2048(Game):
                 state[cell.x][cell.y] = math.log2(cell.value)
         return state
 
+    def getActionMask(self):
+        actions = [
+            (0, -1),  # Up
+            (1, 0),  # Right
+            (0, 1),  # Down
+            (-1, 0)  # Left
+        ]
+        mask = np.zeros(self.actionSpace, dtype=int)
+        for i, vector in enumerate(actions):
+            for _, _, cell in self.game.grid.eachCell():
+                if cell:
+                    if cell.x + vector[0] >= 0 and cell.x + vector[0] < self.size and \
+                        cell.y + vector[1] >= 0 and cell.y + vector[1] < self.size:
+                        next = self.game.grid.cells[cell.x + vector[0]][cell.y + vector[1]]
+                        if next is None or next.value == cell.value:
+                            mask[i] = 1
+                            break
+        return mask
+
     def takeAction(self, action):
         score = self.game.score
         moved = self.game.move(action)

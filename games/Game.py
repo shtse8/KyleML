@@ -5,6 +5,9 @@ class Game(object):
     def reset(self):
         return self.getState()
 
+    def getActionMask(self):
+        raise NotImplementedError()
+
     def getState(self):
         return []
 

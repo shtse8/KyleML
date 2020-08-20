@@ -21,17 +21,30 @@ import torchvision.transforms as T
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Net(nn.Module):
-    def __init__(self, input_size, output_size, name = "model"):
+    def __init__(self, input_size, output_size, name="model"):
         super().__init__()
         self.name = name
-
-        self.linear = nn.Linear(input_size, 256)
-        # self.linear2 = nn.Linear(2048, 2048)
-        self.value = nn.Linear(256, 1)
-        self.adv = nn.Linear(256, output_size)
+        self.body = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
+            # nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            # nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            # nn.MaxPool2d(kernel_size=2, stride=2)
+            )
+        self.body2 = nn.Sequential(
+            nn.Linear(64 * 16, 512),
+            nn.ReLU(),
+            nn.Linear(512, 128),
+            nn.ReLU())
+        self.value = nn.Linear(128, 1)
+        self.adv = nn.Linear(128, output_size)
         
     def forward(self, x):
-        x = F.relu(self.linear(x))
+        x = self.body(x)
+        x = x.view(x.size(0), -1)
+        x = self.body2(x)
         # x = F.relu(self.linear2(x))
 
         value = self.value(x)
@@ -54,8 +67,8 @@ class DQNAgent(Agent):
         self.gamma = kwargs.get('gamma', 0.99)
         
         # Exploration
-        self.epsilon_max = kwargs.get('epsilon_max', 1.00)
-        self.epsilon_min = kwargs.get('epsilon_min', 0.10)
+        self.epsilon_max = kwargs.get('epsilon_max', 0.20)
+        self.epsilon_min = kwargs.get('epsilon_min', 0.00)
         self.epsilon_phase_size = kwargs.get('epsilon_phase_size', 0.2)
         self.epsilon = self.epsilon_max
         self.epsilon_decay = ((self.epsilon_max - self.epsilon_min) / (self.target_trains * self.epsilon_phase_size))
@@ -110,7 +123,7 @@ class DQNAgent(Agent):
         else:
             self.network.eval()
             with torch.no_grad():
-                stateTensor = torch.FloatTensor([state.flatten()]).to(self.device)
+                stateTensor = torch.FloatTensor([[state]]).to(self.device)
                 prediction = self.network(stateTensor).squeeze(0).cpu().detach().numpy()
         return prediction
 
@@ -132,7 +145,7 @@ class DQNAgent(Agent):
         
         # print(idxs, batch, is_weight)
         
-        states = np.array([x.state.flatten() for x in batch])
+        states = np.array([[x.state] for x in batch])
         states = torch.FloatTensor(states).to(self.device)
         
         actions = np.array([x.action for x in batch])
@@ -144,7 +157,7 @@ class DQNAgent(Agent):
         dones = np.array([x.done for x in batch])
         dones = torch.FloatTensor(dones).to(self.device)
                 
-        nextStates = np.array([x.nextState.flatten() for x in batch])
+        nextStates = np.array([[x.nextState] for x in batch])
         nextStates = torch.FloatTensor(nextStates).to(self.device)
         
         target_next_q_values = self.network_target(nextStates)
@@ -169,7 +182,7 @@ class DQNAgent(Agent):
         # for param in self.model.parameters():
         #     param.grad.data.clamp_(-1, 1)
         # In the other case, the author of Prioritized Experience Replay clip gradient by limiting the norm within 10.
-        # nn.utils.clip_grad.clip_grad_norm_(self.model.parameters(), 10)
+        nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 1)
         self.optimizer.step()
         
         # Update target model counter every episode

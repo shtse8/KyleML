@@ -5,6 +5,8 @@ import torch
 #   數組為正態分佈
 #   計算出最後每個數值的標準差
 def normalize(value):
+    if len(value) == 1:
+        return value - value
     # print(sys.float_info.min, torch.finfo(torch.float).eps)
     eps = sys.float_info.min
     if isinstance(value, torch.Tensor):

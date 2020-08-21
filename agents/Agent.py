@@ -29,7 +29,7 @@ class Agent(object):
         
         # Trainning
         self.mode = Mode.train
-        self.stepSleep: int = 0
+        self.delay: int = 0
         self.target_epochs: int = 0
         self.target_episodes: int = 0
         
@@ -43,7 +43,8 @@ class Agent(object):
         self.history = None
         
         self.startTime = 0
-
+        self.lastSave = 0
+        self.lastPrint = 0
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         # Save And Load
@@ -58,7 +59,7 @@ class Agent(object):
     def addModels(self, model: nn.Module) -> None:
         self.models.append(model)
 
-    def beginEpoch(self) -> None:
+    def epochBegin(self) -> None:
         self.epochs += 1
         self.episodes.value = 0
         self.startTime = time.perf_counter()
@@ -66,9 +67,7 @@ class Agent(object):
 
         return self.epochs <= self.target_epochs
 
-    def endEpoch(self) -> None:
-        if self.isTraining():
-            self.save()
+    def epochEnd(self) -> None:
         # plt.cla()
         # plt.plot(self.lossHistory)
         # plt.show()
@@ -82,68 +81,56 @@ class Agent(object):
     def getAction(self, state, mask=None) -> int:
         raise NotImplementedError()
 
-    def run(self, train: bool = True, episodes: int = 1000, epochs: int = 10000, stepSleep: float = 0) -> None:
-        self.stepSleep = stepSleep
+    def run(self, train: bool = True, episodes: int = 1000, epochs: int = 10000, delay: float = 0) -> None:
+        self.delay = delay
         self.mode = Mode.train if train else Mode.eval
         self.target_episodes = episodes
         self.target_epochs = epochs
         self.start()
 
-    def episodeRun(self):
-        experience = self.getExperience()
-        if self.isTraining():
-            self.learn(experience)
+    def onEpochBegin(self):
+        pass
 
+    def onEpisodeBegin(self):
+        pass
+
+    def onCommit(self, transition: Transition):
+        pass
+
+    def commit(self, transition: Transition):
+        self.report.rewards += transition.reward
+        self.onCommit(transition)
+        if time.perf_counter() - self.lastPrint > 1:
+            self.update()
 
     def start(self):
-        print(f"Mode: {self.mode.name}")
-        print(f"Total Episodes: {self.totalEpisodes}")
-        print(f"Total Steps: {self.totalSteps}")
-        while self.beginEpoch():
-            while self.beginEpisode():
-                experience = self.getExperience()
-                if self.isTraining():
-                    self.learn(experience)
-                # while True:
-                #     transition = next(gen)
-                #     self.commit(transition)
-                #     if self.stepSleep > 0:
-                #         time.sleep(self.stepSleep)
-                #     if transition.done:  # and len(self.memory) < 100:
-                #         break
-                self.endEpisode()
-            self.endEpoch()
-
-    def getExperience(self, num=10000, endOnDone=True):
-        gen = self.transitionGenerator()
-        memory = collections.deque(maxlen=num)
-        while True:
-            transition = next(gen)
-            self.report.rewards += transition.reward
-            memory.append(transition)
-            if len(memory) >= num or (endOnDone and transition.done):
-                break
-        return np.array(memory)
-
-    def transitionGenerator(self):
-        # samples = collections.deque(maxlen=num)
-        while True:
-            state = self.env.reset()
-            done: bool = False
-            while not done:
-                reward: float = 0.
-                nextState = state
-                # actionMask = self.env.getActionMask(state)
-                actionMask = np.ones(self.env.actionSpace)
-                prediction = self.getPrediction(state)
-                while True:
-                    action = self.getAction(prediction, actionMask)
-                    nextState, reward, done = self.env.takeAction(action)
-                    if not (state == nextState).all():
+        print(f"Mode: {self.mode.name}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
+        while self.epochBegin():
+            self.onEpochBegin()
+            while self.episodeBegin():
+                self.onEpisodeBegin()
+                state = self.env.reset()
+                done: bool = False
+                while not done:
+                    reward = 0.
+                    nextState = state
+                    # actionMask = self.env.getActionMask(state)
+                    actionMask = np.ones(self.env.actionSpace)
+                    prediction = self.getPrediction(state)
+                    while True:
+                        action = self.getAction(prediction, actionMask)
+                        nextState, reward, done = self.env.takeAction(action)
                         break
-                    actionMask[action] = 0
-                yield Transition(state, action, reward, nextState, done, prediction)
-                state = nextState
+                        if not (state == nextState).all():
+                            break
+                        actionMask[action] = 0
+                    transition = Transition(state, action, reward, nextState, done, prediction)
+                    self.commit(transition)
+                    if self.delay > 0:
+                        time.sleep(self.delay)
+                    state = nextState
+                self.episodeEnd()
+            self.epochEnd()
 
     def isTraining(self) -> bool:
         return self.mode == Mode.train
@@ -151,17 +138,18 @@ class Agent(object):
     def isEval(self) -> bool:
         return self.mode == Mode.eval
 
-    def beginEpisode(self) -> None:
+    def episodeBegin(self) -> None:
         self.episodes.value += 1
         self.report = EpisodeReport()
         self.history.append(self.report)
         return self.episodes.value <= self.target_episodes
 
-    def endEpisode(self) -> None:
+    def episodeEnd(self) -> None:
         if self.isTraining():
             self.totalEpisodes += 1
             self.totalSteps += self.report.steps
-        self.update()
+            if time.perf_counter() - self.lastSave > 60:
+                self.save()
 
     def update(self) -> None:
         duration = time.perf_counter() - self.startTime
@@ -178,6 +166,7 @@ class Agent(object):
               f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f} | ' +
               f'Steps: {totalSteps/duration:>7.2f}/s | Episodes: {1/durationPerEpisode:>6.2f}/s | ' +
               f'Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end="\b\r")
+        self.lastPrint = time.perf_counter()
 
     def learn(self) -> None:
         raise NotImplementedError()
@@ -192,6 +181,7 @@ class Agent(object):
             for model in self.models:
                 data[model.name] = model.state_dict()
             torch.save(data, path)
+            self.lastSave = time.perf_counter()
             # print("Saved Weights.")
         except Exception as e:
             print("Failed to save.", e)

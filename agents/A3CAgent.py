@@ -89,7 +89,7 @@ class A3CAgent(Agent):
             processes.append(p)
             # time.sleep(1)
         
-        self.beginEpoch()
+        self.epochBegin()
         self.beginPhrase()
         # self.network.to(self.device)
         while True:
@@ -106,8 +106,8 @@ class A3CAgent(Agent):
                                 self.save()
                             if self.episodes.value > self.target_episodes:
                                 self.endPhrase()
-                                self.endEpoch()
-                                self.beginEpoch()
+                                self.epochEnd()
+                                self.epochBegin()
                                 self.beginPhrase()
                         else:
                             raise Exception("Unknown Message.")

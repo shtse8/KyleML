@@ -1,5 +1,7 @@
 import numpy as np
 import collections
+import itertools
+import time
 from memories.Transition import Transition
 
 
@@ -12,26 +14,13 @@ class SimpleMemory(object):
     def add(self, transition: Transition) -> None:
         self.memory.append(transition)
 
-    def get(self, size: int = 0):
-        return self.memory
-        # states = []
-        # actions = []
-        # rewards = []
-        # nextStates = []
-        # dones = []
-        # for t in self.memory:
-            # states.append(t.state)
-            # actions.append(t.action)
-            # rewards.append(t.reward)
-            # nextStates.append(t.nextState)
-            # dones.append(t.done)
-        # return (
-            # np.array(states), 
-            # np.array(actions).astype(float), 
-            # np.array(rewards).astype(float), 
-            # np.array(nextStates), 
-            # np.array(dones)
-        # )
+    def get(self, size: int = 0, start: int = 0):
+        if size > 0:
+            end = min(start + size, len(self.memory) - 1)
+            return list(itertools.islice(self.memory, start, end))
+            # return np.array(self.memory)[start:end]
+        else:
+            return self.memory
     
     def clear(self) -> None:
         self.memory.clear()

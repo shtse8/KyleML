@@ -25,28 +25,38 @@ class Network(nn.Module):
         self.name = name
         
         hidden_nodes = 64
-        self.body = nn.Sequential(
-            nn.Conv2d(n_inputs[0], 32, kernel_size=1, stride=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=1, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(64 * n_inputs[1] * n_inputs[2], hidden_nodes),
-            nn.ReLU())
+        if type(n_inputs) is tuple and len(n_inputs) == 3:
+            self.body = nn.Sequential(
+                nn.Conv2d(n_inputs[0], 32, kernel_size=1, stride=1),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(1),
+                nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(1),
+                # nn.Conv2d(64, 64, kernel_size=1, stride=1),
+                # nn.ReLU(),
+                # nn.MaxPool2d(2),
+                nn.Flatten(),
+                nn.Linear(64 * n_inputs[1] * n_inputs[2], hidden_nodes),
+                nn.ReLU())
+        else:
             
+            if type(n_inputs) is tuple and len(n_inputs) == 1:
+                n_inputs = n_inputs[0]
+
+            self.body = nn.Sequential(
+                nn.Linear(n_inputs, hidden_nodes),
+                nn.Tanh(),
+                nn.Linear(hidden_nodes, hidden_nodes),
+                nn.Tanh())
+                
         # Define policy head
         self.policy = nn.Sequential(
-            nn.Linear(hidden_nodes, hidden_nodes),
-            nn.ReLU(),
             nn.Linear(hidden_nodes, n_outputs),
             nn.Softmax(dim=-1))
             
         # Define value head
         self.value = nn.Sequential(
-            nn.Linear(hidden_nodes, hidden_nodes),
-            nn.ReLU(),
             nn.Linear(hidden_nodes, 1))
 
     def forward(self, state):
@@ -67,21 +77,32 @@ class PPOAgent(Agent):
         super().__init__("ppo", env, **kwargs)
 
         # Trainning
-        self.learningRate: float = kwargs.get('learningRate', .0001)
-        self.gamma: float = kwargs.get('gamma', 0.9)
+        self.learningRate = .0001
+        self.gamma = 0.9
         self.eps_clip = 0.2
-        self.updateEpoches = 4
+        self.updateEpoches = 10
 
         # Prediction model (the main Model)
         self.network: Network = Network(
             self.env.observationShape,
             self.env.actionSpace)
         self.optimizer = optim.Adam(self.network.parameters(), lr=self.learningRate)
+        self.memory = None
         # self.schedular = schedular.StepLR(self.optimizer, step_size=1, gamma=0.999)
         
         self.network.to(self.device)
         self.addModels(self.network)
  
+    def onEpochBegin(self):
+        if self.isTraining():
+            self.memory = SimpleMemory(self.target_episodes)
+
+    def onCommit(self, transition):
+        if self.isTraining():
+            self.memory.add(transition)
+            if len(self.memory) >= 32 or transition.done:
+                self.learn()
+
     def getPrediction(self, state):
         self.network.eval()
         with torch.no_grad():
@@ -115,14 +136,12 @@ class PPOAgent(Agent):
             lastValue = value
         return advantages
 
-    def learn(self, batch) -> None:
+    def learn(self) -> None:
         self.network.train()
-        batchSize = len(batch) // self.updateEpoches
+        # batchSize = len(self.memory) // self.updateEpoches
         for i in range(self.updateEpoches):
-            startIndex = i * batchSize
-            endIndex = min(startIndex + batchSize, len(batch) - 1)
-            minibatch = batch[startIndex:endIndex]
-            
+            # minibatch = self.memory.get(batchSize, start=i * batchSize)
+            minibatch = self.memory
             states = np.array([x.state for x in minibatch])
             states = torch.FloatTensor(states).to(self.device)
             
@@ -150,7 +169,7 @@ class PPOAgent(Agent):
 
             advantages = self.getAdvantages(rewards, dones, values, lastValue)
             advantages = torch.FloatTensor(advantages).to(self.device)
-            advantages = Function.normalize(advantages)
+            # advantages = Function.normalize(advantages)
 
             dist = torch.distributions.Categorical(probs=action_probs)
             ratios = torch.exp(dist.log_prob(actions) - real_probs)  # porb1 / porb2 = exp(log(prob1) - log(prob2))
@@ -160,7 +179,6 @@ class PPOAgent(Agent):
             policy_loss = -torch.min(surr1, surr2).mean()  # Maximize Policy Loss
             entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
             value_loss = F.mse_loss(values, targetValues)  # Minimize Value Loss
-            # print(policy_loss, entropy_loss, value_loss)
             loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
             
             self.optimizer.zero_grad()
@@ -172,5 +190,7 @@ class PPOAgent(Agent):
 
             # Report
             self.report.trained(loss.item(), len(minibatch))
+
+        self.memory.clear()
             
 

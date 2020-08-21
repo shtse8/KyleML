@@ -9,12 +9,13 @@ from games.Snake import Snake
 from games.puzzle2048 import Puzzle2048
 # from games.CartPole import CartPole
 from games.CartPole import CartPole
+from games.mario import Mario
 from agents.DQNAgent import DQNAgent
 from agents.A2CAgent import A2CAgent
 from agents.A3CAgent import A3CAgent
 from agents.PPOAgent import PPOAgent
 import torch
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 
 def signal_handler(sig, frame):
@@ -49,7 +50,8 @@ def main():
         "snake": Snake,
         "simeplesnake": SimpleSnake,
         "cartpole": CartPole,
-        "2048": Puzzle2048
+        "2048": Puzzle2048,
+        "mario": Mario
     }
 
     if args.game in games:

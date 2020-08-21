@@ -18,43 +18,43 @@ import torch.optim.lr_scheduler as schedular
 #     nn.init.constant_(m.bias.data, 0)
 #     return m
 
+
 class Network(nn.Module):
     def __init__(self, n_inputs, n_outputs, name="default"):
         super().__init__()
         self.name = name
-
+        
         hidden_nodes = 64
         self.body = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(n_inputs[0], 32, kernel_size=1, stride=1),
+            nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=True))
-            # nn.Linear(n_inputs, hidden_nodes * 2),
-            # nn.ReLU(),
-            # nn.Linear(hidden_nodes * 2, hidden_nodes),
-            # nn.ReLU())
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=1, stride=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(64 * n_inputs[1] * n_inputs[2], hidden_nodes),
+            nn.ReLU())
             
         # Define policy head
         self.policy = nn.Sequential(
-            nn.Linear(hidden_nodes * 16, hidden_nodes),
+            nn.Linear(hidden_nodes, hidden_nodes),
             nn.ReLU(),
             nn.Linear(hidden_nodes, n_outputs),
             nn.Softmax(dim=-1))
             
         # Define value head
         self.value = nn.Sequential(
-            nn.Linear(hidden_nodes * 16, hidden_nodes),
+            nn.Linear(hidden_nodes, hidden_nodes),
             nn.ReLU(),
             nn.Linear(hidden_nodes, 1))
 
     def forward(self, state):
         output = self.body(state)
-        output = output.view(output.size(0), -1)
         return self.policy(output), self.value(output)
 
     def getPolicy(self, state):
         output = self.body(state)
-        output = output.view(output.size(0), -1)
         return self.policy(output)
 
     def getValue(self, state):
@@ -78,7 +78,7 @@ class PPOAgent(Agent):
 
         # Prediction model (the main Model)
         self.network: Network = Network(
-            np.product(self.env.observationSpace),
+            self.env.observationSpace,
             self.env.actionSpace)
         self.optimizer = optim.Adam(self.network.parameters(), lr=self.learningRate)
         # self.schedular = schedular.StepLR(self.optimizer, step_size=1, gamma=0.999)
@@ -96,7 +96,7 @@ class PPOAgent(Agent):
     def getPrediction(self, state):
         self.network.eval()
         with torch.no_grad():
-            state = torch.FloatTensor([[state]]).to(self.device)
+            state = torch.FloatTensor([state]).to(self.device)
             prediction = self.network.getPolicy(state).squeeze(0)
             return prediction.cpu().detach().numpy()
 
@@ -134,12 +134,12 @@ class PPOAgent(Agent):
 
     def learn(self) -> None:
         self.network.train()
-
+        
         batch = self.memory
         if len(batch) == 0:
             return
 
-        states = np.array([[x.state] for x in batch])
+        states = np.array([x.state for x in batch])
         states = torch.FloatTensor(states).to(self.device)
         
         actions = np.array([x.action for x in batch])

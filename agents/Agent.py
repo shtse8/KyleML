@@ -1,29 +1,24 @@
 import os
-from multiprocessing import Pool, TimeoutError
 import __main__
-import random
 import numpy as np
-import pandas as pd
-from operator import add
-import sys
 import collections
 import math
 import time
 from pathlib import Path
 import matplotlib.pyplot as plt
 from memories.Transition import Transition
-from utils.errors import InvalidAction
 from enum import Enum
 import torch
 import torch.nn as nn
 from games.Game import Game
 import torch.multiprocessing as mp
 import humanize
-from utils.PredictionHandler import PredictionHandler
+
 
 class Mode(Enum):
     train = 1
     eval = 1
+
 
 class Agent(object):
     def __init__(self, name: str, env: Game, **kwargs) -> None:
@@ -84,7 +79,7 @@ class Agent(object):
     def getPrediction(self, state):
         raise NotImplementedError()
 
-    def getAction(self, state, mask = None) -> int:
+    def getAction(self, state, mask=None) -> int:
         raise NotImplementedError()
 
     def commit(self, transition: Transition) -> None:
@@ -105,16 +100,15 @@ class Agent(object):
         while self.beginEpoch():
             gen = self.getSample()
             while self.beginEpisode():
-                while True:
+                transition: Transition = None
+                while not transition or not transition.done:  # and len(self.memory) < 100:
                     transition = next(gen)
                     self.commit(transition)
-                    if transition.done:
-                        break
                     if self.stepSleep > 0:
                         time.sleep(self.stepSleep)
                 self.endEpisode()
             self.endEpoch()
-    
+
     def getSample(self):
         # samples = collections.deque(maxlen=num)
         while True:
@@ -126,28 +120,11 @@ class Agent(object):
                 # actionMask = self.env.getActionMask(state)
                 actionMask = np.ones(self.env.actionSpace)
                 prediction = self.getPrediction(state)
-                while True:
-                    try:
-                        # print(actionMask)
-                        # print(state, self.env.getActionMask(), actionMask)
-                        # if prediction.max() > 0.95 and actionMask[prediction.argmax()] == 0:
-                        #     print(state, prediction, actionMask)
-                        action = self.getAction(prediction, actionMask)
-                        nextState, reward, done = self.env.takeAction(action)
-                        transition = Transition(state, action, reward, nextState, done, prediction)
-                        yield transition
-                        # samples.append(transition)
-                        # if len(samples) >= num or (endOnDone and done):
-                        #     yield samples
-                        #     samples.clear()
-                        break
-                    except InvalidAction:
-                        # print(prediction, state, action, "Failed")
-                        actionMask[action] = 0
-                        self.report.invalidMoves += 1
-                        yield Transition(state, action, 0, state, False, prediction)
-                        # print(actionMask)
-                    # finally:
+                while (nextState == state).all():
+                    action = self.getAction(prediction, actionMask)
+                    nextState, reward, done = self.env.takeAction(action)
+                    actionMask[action] = 0
+                yield Transition(state, action, reward, nextState, done, prediction)
                 state = nextState
 
     def isTraining(self) -> bool:
@@ -173,14 +150,16 @@ class Agent(object):
         avgLoss = np.mean([x.loss for x in self.history]) if len(self.history) > 0 else math.nan
         bestReward = np.max([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
         avgReward = np.mean([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
-        stdReward = np.std([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
+        # stdReward = np.std([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
         progress = self.episodes.value / self.target_episodes
-        invalidMovesPerEpisode = np.mean([x.invalidMoves for x in self.history])
+        # invalidMovesPerEpisode = np.mean([x.invalidMoves for x in self.history])
         durationPerEpisode = duration / self.episodes.value
         estimateDuration = self.target_episodes * durationPerEpisode
         totalSteps = np.sum([x.steps for x in self.history])
-        print(f"#{self.epochs} {progress:>4.0%} {humanize.intword(self.totalSteps)} | " + \
-            f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f} | Steps: {totalSteps/duration:>7.2f}/s | Episodes: {1/durationPerEpisode:>6.2f}/s | Invalid: {invalidMovesPerEpisode: >6.2f}/ep | Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end = "\b\r")
+        print(f"#{self.epochs} {progress:>4.0%} {humanize.intword(self.totalSteps)} | " +
+              f'Loss: {avgLoss:6.2f}/ep | Best: {bestReward:>5}, Avg: {avgReward:>5.2f} | ' +
+              f'Steps: {totalSteps/duration:>7.2f}/s | Episodes: {1/durationPerEpisode:>6.2f}/s | ' +
+              f'Time: {duration: >4.2f}s > {estimateDuration: >5.2f}s', end="\b\r")
 
     def learn(self) -> None:
         raise NotImplementedError()
@@ -236,6 +215,7 @@ class EpisodeManager:
     def start(self):
         self.count += 1
 
+
 class Message:
     def __init__(self):
         pass
@@ -246,7 +226,6 @@ class EpisodeReport(Message):
         self.steps: int = 0
         self.rewards: float = 0
         self.total_loss: float = 0
-        self.invalidMoves: int = 0
         self.episode_start_time: int = 0
         self.episode_end_time: int = 0
 

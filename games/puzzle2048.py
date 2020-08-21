@@ -13,7 +13,7 @@ class Puzzle2048(Game):
         self.name: str = "game2048"
         self.size: int = size
         self.game: Game2048 = Game2048(self.size)
-        self.observationSpace: tuple = (self.size, self.size)
+        self.observationSpace: tuple = (1, self.size, self.size)
         self.actionSpace: int = 4
         self.reward: float = 0
         self.tileColors: dict = {
@@ -41,10 +41,10 @@ class Puzzle2048(Game):
         return self.getState()
 
     def getState(self):
-        state = np.zeros((self.size, self.size), dtype=int)
+        state = np.zeros(self.observationSpace, dtype=int)
         for _, _, cell in self.game.grid.eachCell():
             if cell:
-                state[cell.x][cell.y] = math.log2(cell.value)
+                state[0][cell.x][cell.y] = math.log2(cell.value)
         return state
 
     def getActionMask(self, state):
@@ -69,9 +69,7 @@ class Puzzle2048(Game):
 
     def takeAction(self, action):
         score = self.game.score
-        moved = self.game.move(action)
-        if not moved:
-            raise InvalidAction()
+        self.game.move(action)
         self.reward = self.game.score - score
         # self.reward = max(-1, min(1, self.reward))
         return super().takeAction(action)

@@ -8,7 +8,7 @@ class Snake(Game):
     def __init__(self):
         self.name = "Snake"
         self.game = GameSrc(22, 22)
-        self.observationSpace = (22, 22, 1)
+        self.observationSpace = (1, 22, 22)
         self.actionSpace = 3
     
     def reset(self):
@@ -26,16 +26,16 @@ class Snake(Game):
         # 2 - Snake Body
         # 3 - wall
         # 4 - food
-        observation = np.zeros((self.game.height, self.game.width, 1))
-        observation[0,:,0] = observation[:,0,0] = observation[-1,:,0] = observation[:,-1,0] = 3
+        observation = np.zeros((self.game.height, self.game.width))
+        observation[0,:] = observation[:,0] = observation[-1,:] = observation[:,-1] = 3
         # print(game.player.position, game.food.x, game.food.y)
-        observation[self.game.food.y][self.game.food.x][0] = 4
+        observation[self.game.food.y][self.game.food.x] = 4
         
         player_position = (np.array(self.game.player.position)).astype(int)
-        observation[player_position[:,1], player_position[:,0],0] = 2
-        observation[self.game.player.y][self.game.player.x][0] = 1
+        observation[player_position[:,1], player_position[:,0]] = 2
+        observation[self.game.player.y][self.game.player.x]= 1
         # print(observation)
-        return observation.astype(int)
+        return [observation.astype(int)]
         
         # state = np.array([
             # (self.game.player.x_change == 1 and self.game.player.y_change == 0 and ((list(map(add, self.game.player.position[-1], [1, 0])) in self.game.player.position) or
@@ -96,8 +96,8 @@ class Snake(Game):
         
     def getReward(self):
         reward = 0
-        if self.game.crash:
-            reward = -1
+        # if self.game.crash:
+        #     reward = -1
         if self.game.player.eaten:
             reward = 1
         return reward

@@ -63,7 +63,7 @@ class A2CAgent(Agent):
 
         # Prediction model (the main Model)
         self.network: Network = Network(
-            np.product(self.env.observationSpace),
+            np.product(self.env.observationShape),
             self.env.actionSpace)
         self.optimizer = optim.Adam(self.network.parameters(), lr=self.learningRate)
 

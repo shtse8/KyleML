@@ -78,7 +78,7 @@ class PPOAgent(Agent):
 
         # Prediction model (the main Model)
         self.network: Network = Network(
-            self.env.observationSpace,
+            self.env.observationShape,
             self.env.actionSpace)
         self.optimizer = optim.Adam(self.network.parameters(), lr=self.learningRate)
         # self.schedular = schedular.StepLR(self.optimizer, step_size=1, gamma=0.999)
@@ -183,7 +183,7 @@ class PPOAgent(Agent):
             
             self.optimizer.zero_grad()
             loss.backward()
-
+            print(loss, len(batch))
             # Chip grad with norm
             nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
 

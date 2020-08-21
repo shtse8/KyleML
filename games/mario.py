@@ -17,7 +17,7 @@ class Mario(Game):
         shape = self.game.observation_space.shape
         if len(shape) == 3:
             shape = (shape[2], shape[0], shape[1])
-        self.observationSpace = shape
+        self.observationShape = shape
         self.actionSpace = self.game.action_space.n
         self.state = None
         self.done = False

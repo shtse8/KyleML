@@ -85,13 +85,13 @@ class DQNAgent(Agent):
         self.stmemory = SimpleMemory(self.memory_size)
         
         # Prediction model (the main Model)
-        self.network = Net(np.product(self.env.observationSpace), self.env.actionSpace, "model")
+        self.network = Net(np.product(self.env.observationShape), self.env.actionSpace, "model")
         self.network.to(self.device)
         # self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.learning_rate)
         self.optimizer = optim.Adam(self.network.parameters(), lr=self.learning_rate)
         
         # Target model
-        self.network_target = Net(np.product(self.env.observationSpace), self.env.actionSpace, "target_model")
+        self.network_target = Net(np.product(self.env.observationShape), self.env.actionSpace, "target_model")
         self.network_target.to(self.device)
         
         self.target_update_counter = 0

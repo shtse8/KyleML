@@ -61,7 +61,7 @@ class A3CAgent(Agent):
 
         # Prediction model (the main Model)
         self.network: Network = Network(
-            np.product(self.env.observationSpace),
+            np.product(self.env.observationShape),
             self.env.actionSpace)
         self.network.share_memory()
         self.optimizer = SharedAdam(self.network.parameters(), lr=self.learningRate)
@@ -186,7 +186,7 @@ class A3CWorker(Worker):
         # Trainning
         self.gamma: float = kwargs.get('gamma', 0.9)
         self.network: Network = Network(
-            np.product(self.env.observationSpace),
+            np.product(self.env.observationShape),
             self.env.actionSpace)
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.network.to(self.device)

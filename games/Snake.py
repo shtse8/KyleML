@@ -8,7 +8,7 @@ class Snake(Game):
     def __init__(self):
         self.name = "Snake"
         self.game = GameSrc(22, 22)
-        self.observationSpace = (1, 22, 22)
+        self.observationShape = (1, 22, 22)
         self.actionSpace = 3
     
     def reset(self):
@@ -81,7 +81,7 @@ class Snake(Game):
             # self.game.height
         # ]).astype(int)
         # state = np.concatenate((state, np.array(self.game.player.position).flatten()), axis = 0)
-        # state = np.pad(state, (0, self.observationSpace - len(state)))
+        # state = np.pad(state, (0, self.observationShape - len(state)))
         # return state
         
     def takeAction(self, action):

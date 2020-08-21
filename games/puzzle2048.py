@@ -13,7 +13,7 @@ class Puzzle2048(Game):
         self.name: str = "game2048"
         self.size: int = size
         self.game: Game2048 = Game2048(self.size)
-        self.observationSpace: tuple = (1, self.size, self.size)
+        self.observationShape: tuple = (1, self.size, self.size)
         self.actionSpace: int = 4
         self.reward: float = 0
         self.tileColors: dict = {
@@ -41,7 +41,7 @@ class Puzzle2048(Game):
         return self.getState()
 
     def getState(self):
-        state = np.zeros(self.observationSpace, dtype=int)
+        state = np.zeros(self.observationShape, dtype=int)
         for _, _, cell in self.game.grid.eachCell():
             if cell:
                 state[0][cell.x][cell.y] = math.log2(cell.value)
@@ -109,7 +109,7 @@ class Puzzle2048(Game):
 
         for x, col in enumerate(state):
             for y, cell in enumerate(col):
-                block_size = ((self.height - scoreHeight) / self.observationSpace[0], self.width / self.observationSpace[1])
+                block_size = ((self.height - scoreHeight) / self.observationShape[0], self.width / self.observationShape[1])
                 block_rect = pygame.Rect(x * block_size[1], scoreHeight + y * block_size[0], block_size[1], block_size[0])
                 pygame.draw.rect(self.display, self.tileColors[2 ** cell], block_rect)
                 if not cell == 0:

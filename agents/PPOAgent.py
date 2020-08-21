@@ -69,12 +69,8 @@ class PPOAgent(Agent):
         # Trainning
         self.learningRate: float = kwargs.get('learningRate', .0001)
         self.gamma: float = kwargs.get('gamma', 0.9)
-
-        # Memory
-        self.memory_size: int = kwargs.get('memory_size', 10000)
-
-        # self.ltmemory = collections.deque(maxlen=self.memory_size)
-        self.memory: SimpleMemory = SimpleMemory(self.memory_size)
+        self.eps_clip = 0.2
+        self.updateEpoches = 4
 
         # Prediction model (the main Model)
         self.network: Network = Network(
@@ -85,14 +81,7 @@ class PPOAgent(Agent):
         
         self.network.to(self.device)
         self.addModels(self.network)
-  
-    def commit(self, transition: Transition):
-        super().commit(transition)
-        if self.isTraining():
-            self.memory.add(transition)
-            if transition.done:
-                self.learn()
-
+ 
     def getPrediction(self, state):
         self.network.eval()
         with torch.no_grad():
@@ -107,23 +96,17 @@ class PPOAgent(Agent):
         else:
             return handler.getBestAction()
 
-    def beginEpisode(self) -> bool:
-        self.memory.clear()
-        return super().beginEpisode()
-
     # Discounted Rewards (N-steps)
-    def getDiscountedRewards(self, rewards, dones):
+    def getDiscountedRewards(self, rewards, dones, lastValue=0):
         discountedRewards = np.zeros_like(rewards).astype(float)
-        runningDiscountedRewards = 0
         for i in reversed(range(len(rewards))):
-            runningDiscountedRewards = rewards[i] + self.gamma * runningDiscountedRewards * (1 - dones[i])
-            discountedRewards[i] = runningDiscountedRewards
+            lastValue = rewards[i] + self.gamma * lastValue * (1 - dones[i])
+            discountedRewards[i] = lastValue
         return discountedRewards
 
-    def getAdvantages(self, rewards, dones, values):
+    def getAdvantages(self, rewards, dones, values, lastValue=0):
         advantages = np.zeros_like(rewards).astype(float)
         gae = 0
-        lastValue = 0
         for i in reversed(range(len(rewards))):
             value = values[i].item()
             detlas = rewards[i] + self.gamma * lastValue * (1 - dones[i]) - value
@@ -132,48 +115,47 @@ class PPOAgent(Agent):
             lastValue = value
         return advantages
 
-    def learn(self) -> None:
+    def learn(self, batch) -> None:
         self.network.train()
-        
-        batch = self.memory
-        if len(batch) == 0:
-            return
+        batchSize = len(batch) // self.updateEpoches
+        for i in range(self.updateEpoches):
+            startIndex = i * batchSize
+            endIndex = min(startIndex + batchSize, len(batch) - 1)
+            minibatch = batch[startIndex:endIndex]
+            
+            states = np.array([x.state for x in minibatch])
+            states = torch.FloatTensor(states).to(self.device)
+            
+            actions = np.array([x.action for x in minibatch])
+            actions = torch.LongTensor(actions).to(self.device)
+            
+            predictions = np.array([x.prediction for x in minibatch])
+            predictions = torch.FloatTensor(predictions).to(self.device)
 
-        states = np.array([x.state for x in batch])
-        states = torch.FloatTensor(states).to(self.device)
-        
-        actions = np.array([x.action for x in batch])
-        actions = torch.LongTensor(actions).to(self.device)
-        
-        predictions = np.array([x.prediction for x in batch])
-        predictions = torch.FloatTensor(predictions).to(self.device)
+            dones = np.array([x.done for x in minibatch])
+            # dones = torch.BoolTensor(dones).to(self.device)
 
-        dones = np.array([x.done for x in batch])
-        # dones = torch.BoolTensor(dones).to(self.device)
+            rewards = np.array([x.reward for x in minibatch])
+            nextStates = np.array([x.nextState for x in minibatch])
+            real_probs = torch.distributions.Categorical(probs=predictions).log_prob(actions)
 
-        real_probs = torch.distributions.Categorical(probs=predictions).log_prob(actions)
+            lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
 
-        rewards = np.array([x.reward for x in batch])
-
-        targetValues = self.getDiscountedRewards(rewards, dones)
-        targetValues = torch.FloatTensor(targetValues).to(self.device)
-        # targetValues = Function.normalize(targetValues)
-        # print(rewards, targetValues)
-        # with torch.no_grad():
-        
-        eps_clip = 0.2
-        for _ in range(4):
+            lastValue = 0 if dones[-1] else self.network.getValue(lastState).item()
+            targetValues = self.getDiscountedRewards(rewards, dones, lastValue)
+            targetValues = torch.FloatTensor(targetValues).to(self.device)
+            
             action_probs, values = self.network(states)
             values = values.squeeze(1)
 
-            advantages = self.getAdvantages(rewards, dones, values)
+            advantages = self.getAdvantages(rewards, dones, values, lastValue)
             advantages = torch.FloatTensor(advantages).to(self.device)
             advantages = Function.normalize(advantages)
 
             dist = torch.distributions.Categorical(probs=action_probs)
             ratios = torch.exp(dist.log_prob(actions) - real_probs)  # porb1 / porb2 = exp(log(prob1) - log(prob2))
             surr1 = ratios * advantages
-            surr2 = ratios.clamp(1 - eps_clip, 1 + eps_clip) * advantages
+            surr2 = ratios.clamp(1 - self.eps_clip, 1 + self.eps_clip) * advantages
 
             policy_loss = -torch.min(surr1, surr2).mean()  # Maximize Policy Loss
             entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
@@ -183,15 +165,12 @@ class PPOAgent(Agent):
             
             self.optimizer.zero_grad()
             loss.backward()
-            print(loss, len(batch))
             # Chip grad with norm
             nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
 
             self.optimizer.step()
 
             # Report
-            self.report.trained(loss.item(), len(batch))
+            self.report.trained(loss.item(), len(minibatch))
             
-        # Stats
-        self.memory.clear()
 

@@ -82,10 +82,6 @@ class Agent(object):
     def getAction(self, state, mask=None) -> int:
         raise NotImplementedError()
 
-    def commit(self, transition: Transition) -> None:
-        self.report.rewards += transition.reward
-        # self.update()
-
     def run(self, train: bool = True, episodes: int = 1000, epochs: int = 10000, stepSleep: float = 0) -> None:
         self.stepSleep = stepSleep
         self.mode = Mode.train if train else Mode.eval
@@ -93,23 +89,43 @@ class Agent(object):
         self.target_epochs = epochs
         self.start()
 
+    def episodeRun(self):
+        experience = self.getExperience()
+        if self.isTraining():
+            self.learn(experience)
+
+
     def start(self):
         print(f"Mode: {self.mode.name}")
         print(f"Total Episodes: {self.totalEpisodes}")
         print(f"Total Steps: {self.totalSteps}")
         while self.beginEpoch():
-            gen = self.getSample()
             while self.beginEpisode():
-                transition: Transition = None
-                while not transition or not transition.done:  # and len(self.memory) < 100:
-                    transition = next(gen)
-                    self.commit(transition)
-                    if self.stepSleep > 0:
-                        time.sleep(self.stepSleep)
+                experience = self.getExperience()
+                if self.isTraining():
+                    self.learn(experience)
+                # while True:
+                #     transition = next(gen)
+                #     self.commit(transition)
+                #     if self.stepSleep > 0:
+                #         time.sleep(self.stepSleep)
+                #     if transition.done:  # and len(self.memory) < 100:
+                #         break
                 self.endEpisode()
             self.endEpoch()
 
-    def getSample(self):
+    def getExperience(self, num=10000, endOnDone=True):
+        gen = self.transitionGenerator()
+        memory = collections.deque(maxlen=num)
+        while True:
+            transition = next(gen)
+            self.report.rewards += transition.reward
+            memory.append(transition)
+            if len(memory) >= num or (endOnDone and transition.done):
+                break
+        return np.array(memory)
+
+    def transitionGenerator(self):
         # samples = collections.deque(maxlen=num)
         while True:
             state = self.env.reset()
@@ -120,9 +136,11 @@ class Agent(object):
                 # actionMask = self.env.getActionMask(state)
                 actionMask = np.ones(self.env.actionSpace)
                 prediction = self.getPrediction(state)
-                while (nextState == state).all():
+                while True:
                     action = self.getAction(prediction, actionMask)
                     nextState, reward, done = self.env.takeAction(action)
+                    if not (state == nextState).all():
+                        break
                     actionMask[action] = 0
                 yield Transition(state, action, reward, nextState, done, prediction)
                 state = nextState

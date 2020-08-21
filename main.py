@@ -9,7 +9,9 @@ from games.Snake import Snake
 from games.puzzle2048 import Puzzle2048
 # from games.CartPole import CartPole
 from games.CartPole import CartPole
+from games.Breakout import Breakout
 from games.mario import Mario
+from games.Pong import Pong
 from agents.DQNAgent import DQNAgent
 from agents.A2CAgent import A2CAgent
 from agents.A3CAgent import A3CAgent
@@ -30,7 +32,8 @@ def main():
     parser = argparse.ArgumentParser(description='Kyle RL Playground')
     parser.add_argument('--game', default='2048', type=str)
     parser.add_argument('--agent', default='ppo', type=str)
-    parser.add_argument('--render', default=0, type=float)
+    parser.add_argument('--render', action='store_true', dest="render")
+    parser.add_argument('--delay', default=0, type=float)
     parser.add_argument('--load', action='store_true')
     parser.add_argument('--train', default=True, action='store_true', dest="train")
     parser.add_argument('--eval', action='store_false', dest="train")
@@ -51,7 +54,9 @@ def main():
         "simeplesnake": SimpleSnake,
         "cartpole": CartPole,
         "2048": Puzzle2048,
-        "mario": Mario
+        "mario": Mario,
+        "pong": Pong,
+        "breakout": Breakout,
     }
 
     if args.game in games:
@@ -59,7 +64,7 @@ def main():
     else:
         raise ValueError("Unknown Game " + args.game)
 
-    if args.render > 0:
+    if args.render:
         game.render()
 
     if args.agent in agents:
@@ -70,7 +75,7 @@ def main():
     if args.load or not args.train:
         agent.load()
 
-    agent.run(train=args.train, stepSleep=args.render)
+    agent.run(train=args.train, delay=args.delay)
 
 
 if __name__ == "__main__":

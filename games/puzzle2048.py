@@ -1,7 +1,5 @@
 import numpy as np
 import math
-
-from utils.errors import InvalidAction
 from .src.game2048 import Game2048
 from .Game import Game
 import pygame
@@ -106,10 +104,9 @@ class Puzzle2048(Game):
         text_rect = text.get_rect()
         text_rect.center = score_rect.center
         self.display.blit(text, text_rect)
-
-        for x, col in enumerate(state):
+        for x, col in enumerate(state[0]):
             for y, cell in enumerate(col):
-                block_size = ((self.height - scoreHeight) / self.observationShape[0], self.width / self.observationShape[1])
+                block_size = ((self.height - scoreHeight) / self.observationShape[1], self.width / self.observationShape[2])
                 block_rect = pygame.Rect(x * block_size[1], scoreHeight + y * block_size[0], block_size[1], block_size[0])
                 pygame.draw.rect(self.display, self.tileColors[2 ** cell], block_rect)
                 if not cell == 0:

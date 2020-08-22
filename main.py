@@ -12,10 +12,10 @@ from games.CartPole import CartPole
 from games.Breakout import Breakout
 from games.mario import Mario
 from games.Pong import Pong
-from agents.DQNAgent import DQNAgent
-from agents.A2CAgent import A2CAgent
-from agents.A3CAgent import A3CAgent
-from agents.PPOAgent import PPOAgent
+# from agents.DQNAgent import DQNAgent
+# from agents.A2CAgent import A2CAgent
+# from agents.A3CAgent import A3CAgent
+from agents.PPOAgent import Agent, PPOAlgo
 import torch
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
@@ -42,16 +42,16 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     print("CUDA:", torch.cuda.is_available())
         
-    agents = {
-        "dqn": DQNAgent,
-        "a2c": A2CAgent,
-        "a3c": A3CAgent,
-        "ppo": PPOAgent
-    }
+    # agents = {
+        # "dqn": DQNAgent,
+        # "a2c": A2CAgent,
+        # "a3c": A3CAgent,
+        # "ppo": PPOAgent
+    # }
 
     games = {
         "snake": Snake,
-        "simeplesnake": SimpleSnake,
+        "simplesnake": SimpleSnake,
         "cartpole": CartPole,
         "2048": Puzzle2048,
         "mario": Mario,
@@ -67,14 +67,15 @@ def main():
     if args.render:
         game.render()
 
-    if args.agent in agents:
-        agent = agents[args.agent](game)
-    else:
-        raise ValueError("Unknown Agent " + args.agent)
+    # if args.agent in agents:
+    #     agent = agents[args.agent](game)
+    # else:
+    #     raise ValueError("Unknown Agent " + args.agent)
 
-    if args.load or not args.train:
-        agent.load()
+    # if args.load or not args.train:
+    #     agent.load()
 
+    agent = Agent(PPOAlgo(), game)
     agent.run(train=args.train, delay=args.delay)
 
 

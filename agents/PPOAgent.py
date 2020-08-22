@@ -1,4 +1,5 @@
 import sys
+import time
 import numpy as np
 from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
@@ -71,16 +72,21 @@ class Network(nn.Module):
         output = self.body(state)
         return self.value(output)
         
+class PPOAlgo:
 
+
+
+    
 class PPOAgent(Agent):
     def __init__(self, env, **kwargs):
         super().__init__("ppo", env, **kwargs)
 
+    def onInit(self):
         # Trainning
-        self.learningRate = .0001
+        self.learningRate = .001
         self.gamma = 0.9
         self.eps_clip = 0.2
-        self.updateEpoches = 10
+        self.updateEpoches = 4
 
         # Prediction model (the main Model)
         self.network: Network = Network(
@@ -101,7 +107,10 @@ class PPOAgent(Agent):
         if self.isTraining():
             self.memory.add(transition)
             if len(self.memory) >= 32 or transition.done:
-                self.learn()
+                # self.learn(self.memory)
+                self.queue.put(self.memory)
+                self.memory = SimpleMemory(self.target_episodes)
+                # self.memory.clear()
 
     def getPrediction(self, state):
         self.network.eval()
@@ -136,33 +145,36 @@ class PPOAgent(Agent):
             lastValue = value
         return advantages
 
-    def learn(self) -> None:
+    def learn(self, memory) -> None:
         self.network.train()
+
+        # tic = time.perf_counter()
+        minibatch = memory
+        states = np.array([x.state for x in minibatch])
+        states = torch.FloatTensor(states).to(self.device)
+        
+        actions = np.array([x.action for x in minibatch])
+        actions = torch.LongTensor(actions).to(self.device)
+        
+        predictions = np.array([x.prediction for x in minibatch])
+        predictions = torch.FloatTensor(predictions).to(self.device)
+
+        dones = np.array([x.done for x in minibatch])
+        # dones = torch.BoolTensor(dones).to(self.device)
+
+        rewards = np.array([x.reward for x in minibatch])
+        nextStates = np.array([x.nextState for x in minibatch])
+        real_probs = torch.distributions.Categorical(probs=predictions).log_prob(actions)
+
+        lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
+
+        lastValue = 0 if dones[-1] else self.network.getValue(lastState).item()
+        targetValues = self.getDiscountedRewards(rewards, dones, lastValue)
+        targetValues = torch.FloatTensor(targetValues).to(self.device)
+        
         # batchSize = len(self.memory) // self.updateEpoches
         for i in range(self.updateEpoches):
             # minibatch = self.memory.get(batchSize, start=i * batchSize)
-            minibatch = self.memory
-            states = np.array([x.state for x in minibatch])
-            states = torch.FloatTensor(states).to(self.device)
-            
-            actions = np.array([x.action for x in minibatch])
-            actions = torch.LongTensor(actions).to(self.device)
-            
-            predictions = np.array([x.prediction for x in minibatch])
-            predictions = torch.FloatTensor(predictions).to(self.device)
-
-            dones = np.array([x.done for x in minibatch])
-            # dones = torch.BoolTensor(dones).to(self.device)
-
-            rewards = np.array([x.reward for x in minibatch])
-            nextStates = np.array([x.nextState for x in minibatch])
-            real_probs = torch.distributions.Categorical(probs=predictions).log_prob(actions)
-
-            lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
-
-            lastValue = 0 if dones[-1] else self.network.getValue(lastState).item()
-            targetValues = self.getDiscountedRewards(rewards, dones, lastValue)
-            targetValues = torch.FloatTensor(targetValues).to(self.device)
             
             action_probs, values = self.network(states)
             values = values.squeeze(1)
@@ -191,6 +203,7 @@ class PPOAgent(Agent):
             # Report
             self.report.trained(loss.item(), len(minibatch))
 
-        self.memory.clear()
+        
+        # print(time.perf_counter() - tic)
             
 

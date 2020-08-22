@@ -51,6 +51,9 @@ class Agent(object):
         self.weightPath = kwargs.get('weightPath', "./weights/")
         self.models = []
 
+        # multithread
+        self.queue = mp.Queue()
+
         # plt.ion()
         plt.ylabel("Loss")
         plt.xlabel("Episode")
@@ -97,14 +100,67 @@ class Agent(object):
     def onCommit(self, transition: Transition):
         pass
 
+    def onReceive(self, memory):
+        # receive memory from child
+        self.learn(memory)
+
+    def onInit(self):
+        pass
+
+    def mainWorker(self):
+        print("Main Worker Started")
+        self.onInit()
+        self.epochBegin()
+        while True:
+            try:
+                memory = self.queue.get_nowait()
+                # print(self.queue.qsize(), len(memory))
+                self.episodeBegin()
+                self.learn(memory)
+                for network in self.models:
+                    print(network.state_dict())
+                self.episodeEnd()
+            except Exception:
+                pass
+            if time.perf_counter() - self.lastPrint > 1:
+                self.update()
+
+    def childWorker(self, i):
+        print("Child Worker Started")
+        self.onInit()
+        self.report = EpisodeReport()
+        self.onEpochBegin()
+        while True:
+            self.onEpisodeBegin()
+            state = self.env.reset()
+            done: bool = False
+            while not done:
+                actionMask = np.ones(self.env.actionSpace)
+                prediction = self.getPrediction(state)
+                action = self.getAction(prediction, actionMask)
+                nextState, reward, done = self.env.takeAction(action)
+                transition = Transition(state, action, reward, nextState, done, prediction)
+                self.commit(transition)
+                if self.delay > 0:
+                    time.sleep(self.delay)
+                state = nextState
+
     def commit(self, transition: Transition):
         self.report.rewards += transition.reward
         self.onCommit(transition)
-        if time.perf_counter() - self.lastPrint > 1:
-            self.update()
 
     def start(self):
         print(f"Mode: {self.mode.name}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
+        processes = []
+        n_workers = 1 # mp.cpu_count() // 2
+        for i in range(n_workers):
+            p = mp.Process(target=self.childWorker, args=(i,))
+            p.start()
+            processes.append(p)
+        
+        self.mainWorker()
+
+        """
         while self.epochBegin():
             self.onEpochBegin()
             while self.episodeBegin():
@@ -131,7 +187,7 @@ class Agent(object):
                     state = nextState
                 self.episodeEnd()
             self.epochEnd()
-
+        """
     def isTraining(self) -> bool:
         return self.mode == Mode.train
 
@@ -159,7 +215,7 @@ class Agent(object):
         # stdReward = np.std([x.rewards for x in self.history]) if len(self.history) > 0 else math.nan
         progress = self.episodes.value / self.target_episodes
         # invalidMovesPerEpisode = np.mean([x.invalidMoves for x in self.history])
-        durationPerEpisode = duration / self.episodes.value
+        durationPerEpisode = duration / self.episodes.value if self.episodes.value > 0 else math.nan
         estimateDuration = self.target_episodes * durationPerEpisode
         totalSteps = np.sum([x.steps for x in self.history])
         print(f"#{self.epochs} {progress:>4.0%} {humanize.intword(self.totalSteps)} | " +
@@ -249,7 +305,7 @@ class EpisodeReport(Message):
 
     @property
     def loss(self):
-        return self.total_loss / self.steps if self.steps > 0 else math.nan
+        return self.total_loss / self.steps if self.steps > 0 else 0
 
     def trained(self, loss, steps):
         self.total_loss += loss * steps

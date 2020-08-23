@@ -3,3 +3,4 @@ bayesOpt.py
 __pycache__
 weights/
 .vscode/
+env/

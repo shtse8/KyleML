@@ -44,9 +44,9 @@ class PPONetwork(Network):
                 nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(inplace=True),
                 nn.MaxPool2d(1),
-                # nn.Conv2d(64, 64, kernel_size=1, stride=1),
-                # nn.ReLU(),
-                # nn.MaxPool2d(2),
+                nn.Conv2d(64, 64, kernel_size=1, stride=1),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(1),
                 nn.Flatten(),
                 nn.Linear(64 * inputShape[1] * inputShape[2], hidden_nodes),
                 nn.ReLU(inplace=True))
@@ -123,9 +123,9 @@ class Algo:
 class PPOAlgo(Algo):
     def __init__(self):
         super().__init__(Policy(
-            batchSize=128,
+            batchSize=32,
             learningRate=0.001,
-            versionTolerance=4))
+            versionTolerance=10))
         self.gamma = 0.9
         self.epsClip = 0.2
 
@@ -140,8 +140,7 @@ class PPOAlgo(Algo):
         with torch.no_grad():
             state = torch.FloatTensor([state]).to(self.device)
             prediction = network.getPolicy(state).squeeze(0)
-            prediction = prediction.cpu().detach().numpy()
-            return prediction
+            return prediction.cpu().detach().numpy()
 
     def getAction(self, prediction, isTraining: bool):
         if isTraining:
@@ -255,20 +254,42 @@ class Evaluator(Base):
         self.delay = delay
         # self.algo.device = torch.device("cpu")
         self.network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace)
+        self.network.version = -1
         self.conn = conn
+        self.isRequesting = False
 
     def pullNetwork(self):
         self.conn.send(NetworkPull())
-        message = self.conn.recv()
-        self.network.load_state_dict(message.stateDict)
-        self.network.version = message.version
+        message: NetworkPush = self.conn.recv()
+        if isinstance(message, NetworkPush):
+            if message.version > self.network.version:
+                self.network.load_state_dict(message.stateDict)
+                self.network.version = message.version
+
+    def requestPullNetwork(self):
+        if not self.isRequesting:
+            self.conn.send(NetworkPull())
+            self.isRequesting = True
+
+    def tryPullNetwork(self):
+        if self.isRequesting and self.conn.poll():
+            message: NetworkPush = self.conn.recv()
+            if isinstance(message, NetworkPush):
+                self.isRequesting = False
+                if message.version > self.network.version:
+                    self.network.load_state_dict(message.stateDict)
+                    self.network.version = message.version
+                    return True
+        
+        return False
 
     def pushMemory(self, memory):
         self.conn.send(MemoryPush(memory, self.network.version))
 
     def onCommit(self, memory):
         self.pushMemory(memory)
-        self.pullNetwork()
+        self.requestPullNetwork()
+        # self.pullNetwork()
         
     def eval(self, isTraining=False):
         self.pullNetwork()
@@ -278,6 +299,8 @@ class Evaluator(Base):
             state = self.env.reset()
             done: bool = False
             while not done:
+                if self.tryPullNetwork():
+                    memory.clear()
                 prediction = self.algo.getPrediction(self.network, state, isTraining)
                 action = self.algo.getAction(prediction, isTraining)
                 nextState, reward, done = self.env.takeAction(action)
@@ -306,6 +329,7 @@ class Agent:
         self.totalEpisodes = 0
         self.totalSteps = 0
         self.epochs = 1
+        self.dropped = 0
 
         mp.set_start_method("spawn")
         # Create Evaluators
@@ -313,7 +337,7 @@ class Agent:
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         n_workers = mp.cpu_count() // 2
-        # n_workers = 2
+        # n_workers = 3
         for i in range(n_workers):
             child = Child(i, self.createEvaluator).start()
             evaluators.append(child)
@@ -333,7 +357,7 @@ class Agent:
                             self.epoch.trained(loss, len(message.memory))
                             self.totalSteps += len(message.memory)
                         else:
-                            pass
+                            self.dropped += len(message.memory)
                             # print("memory is dropped.", message.version, trainer.network.version)
                         # print("learnt", loss)
                     elif isinstance(message, NetworkPull):
@@ -356,7 +380,10 @@ class Agent:
               f'Loss: {self.epoch.loss:6.2f}/ep | ' + 
               f'Best: {self.epoch.bestRewards:>5}, Avg: {self.epoch.avgRewards:>5.2f} | ' +
               f'Steps: {self.epoch.steps / self.epoch.duration:>7.2f}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
-              f'Time: {self.epoch.duration: >4.2f}s > {self.epoch.estimateDuration: >5.2f}s', end="\b\r")
+              f'Dropped: {self.dropped} | ' +
+              f'Time: {self.epoch.duration: >4.2f}s > {self.epoch.estimateDuration: >5.2f}s'
+              , 
+              end="\b\r")
         self.lastPrint = time.perf_counter()
 
     def createEvaluator(self, conn):

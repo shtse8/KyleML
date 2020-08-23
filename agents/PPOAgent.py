@@ -123,8 +123,8 @@ class PPOAlgo(Algo):
     def __init__(self):
         super().__init__(Policy(
             batchSize=32,
-            learningRate=0.001,
-            versionTolerance=10))
+            learningRate=0.0001,
+            versionTolerance=8))
         self.gamma = 0.9
         self.epsClip = 0.2
 
@@ -236,16 +236,17 @@ class Trainer(Base):
     def learn(self, memory):
         return self.algo.learn(self.network, memory)
 
-    def getStateDict(self):
-        if self.stateDictCacheVersion == self.network.version:
-            stateDict = self.stateDictCache
-        else:
+    def updateStateDict(self):
+        if self.stateDictCacheVersion != self.network.version:
             stateDict = self.network.state_dict()
             for key, value in stateDict.items():
                 stateDict[key] = value.cpu()
             self.stateDictCache = stateDict
             self.stateDictCacheVersion = self.network.version
-        return stateDict
+
+    def getStateDict(self):
+        self.updateStateDict()
+        return self.stateDictCache
 
 class Evaluator(Base):
     def __init__(self, algo: Algo, env, conn, delay=0):
@@ -288,7 +289,6 @@ class Evaluator(Base):
     def onCommit(self, memory):
         self.pushMemory(memory)
         self.requestPullNetwork()
-        # self.pullNetwork()
         
     def eval(self, isTraining=False):
         self.pullNetwork()
@@ -306,7 +306,7 @@ class Evaluator(Base):
                 transition = Transition(state, action, reward, nextState, done, prediction)
                 report.rewards += reward
                 memory.append(transition)
-                if transition.done or len(memory) >= self.algo.policy.batchSize:
+                if len(memory) >= self.algo.policy.batchSize:
                     self.onCommit(memory)
                     memory.clear()
                 if self.delay > 0:
@@ -350,8 +350,7 @@ class Agent:
                 while evaluator.poll():
                     message = evaluator.recv()
                     if isinstance(message, MemoryPush):
-                        if message.version >= trainer.network.version - trainer.algo.policy.versionTolerance \
-                            and len(message.memory) >= 5:
+                        if message.version >= trainer.network.version - trainer.algo.policy.versionTolerance:
                             loss = trainer.learn(message.memory)
                             self.epoch.trained(loss, len(message.memory))
                             self.totalSteps += len(message.memory)

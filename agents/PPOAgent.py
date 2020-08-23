@@ -125,7 +125,7 @@ class PPOAlgo(Algo):
             batchSize=32,
             learningRate=0.0001,
             versionTolerance=8))
-        self.gamma = 0.9
+        self.gamma = 0.99
         self.epsClip = 0.2
 
     # def createMemory(self, len):
@@ -177,17 +177,15 @@ class PPOAlgo(Algo):
         
         predictions = np.array([x.prediction for x in memory])
         predictions = torch.FloatTensor(predictions).to(self.device)
-
         dones = np.array([x.done for x in memory])
-        # dones = torch.BoolTensor(dones).to(self.device)
-
         rewards = np.array([x.reward for x in memory])
-        nextStates = np.array([x.nextState for x in memory])
         real_probs = torch.distributions.Categorical(probs=predictions).log_prob(actions)
 
-        lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
-
-        lastValue = 0 if dones[-1] else network.getValue(lastState).item()
+        lastValue = 0
+        if not dones[-1]:
+            nextStates = np.array([x.nextState for x in memory])
+            lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
+            lastValue = network.getValue(lastState).item()
         targetValues = self.getDiscountedRewards(rewards, dones, lastValue)
         targetValues = torch.FloatTensor(targetValues).to(self.device)
         
@@ -321,7 +319,7 @@ class Agent:
         self.env = env
         self.history = []
 
-    def run(self, train: bool = True, episodes: int = 1000, epochs: int = 10000, delay: float = 0) -> None:
+    def run(self, train: bool = True, episodes: int = 10000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
         self.lastPrint = time.perf_counter()
@@ -353,7 +351,12 @@ class Agent:
                         if message.version >= trainer.network.version - trainer.algo.policy.versionTolerance:
                             loss = trainer.learn(message.memory)
                             self.epoch.trained(loss, len(message.memory))
+                            self.epoch.episodes += 1
                             self.totalSteps += len(message.memory)
+                            if self.epoch.episodes >= self.epoch.target_episodes:
+                                self.epoch = Epoch(episodes).start()
+                                self.epochs += 1
+                                print()
                         else:
                             self.dropped += len(message.memory)
                             # print("memory is dropped.", message.version, trainer.network.version)
@@ -362,11 +365,6 @@ class Agent:
                         evaluator.send(NetworkPush(trainer.getStateDict(), trainer.network.version))
                     elif isinstance(message, EpisodeReport):
                         self.epoch.add(message)
-                        self.epoch.episodes += 1
-                        if self.epoch.episodes >= self.epoch.target_episodes:
-                            self.epoch = Epoch(episodes).start()
-                            self.epochs += 1
-                            print()
                     else:
                         raise Exception("Unknown Message")
 
@@ -374,12 +372,12 @@ class Agent:
                 self.update()
 
     def update(self) -> None:
-        print(f"#{self.epochs} {Function.humanize(self.epoch.episodes)} {Function.humanize(self.totalSteps)} | " +
+        print(f"#{self.epochs} {Function.humanize(self.epoch.episodes):>6} {Function.humanize(self.totalSteps):>7} | " +
               f'Loss: {Function.humanize(self.epoch.loss):>6}/ep | ' + 
               f'Best: {Function.humanize(self.epoch.bestRewards):>5}, Avg: {Function.humanize(self.epoch.avgRewards):>5} | ' +
-              f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>7}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
+              f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>5}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
               f'Dropped: {Function.humanize(self.dropped)} | ' +
-              f'Time: {Function.humanizeTime(self.epoch.duration)} > {Function.humanizeTime(self.epoch.estimateDuration)}'
+              f'Time: {Function.humanizeTime(self.epoch.duration):>5} > {Function.humanizeTime(self.epoch.estimateDuration):}'
               , 
               end="\b\r")
         self.lastPrint = time.perf_counter()
@@ -497,7 +495,7 @@ class Epoch(Message):
 
     @property
     def durationPerEpisode(self):
-        return self.duration / self.episodes if self.episodes > 0 else math.nan
+        return self.duration / self.episodes if self.episodes > 0 else math.inf
 
     @property
     def estimateDuration(self):
@@ -505,7 +503,7 @@ class Epoch(Message):
 
     @property
     def avgRewards(self):
-        return self.totalRewards / self.episodes if self.episodes > 0 else math.nan
+        return self.totalRewards / len(self.history) if len(self.history) > 0 else math.nan
 
     def add(self, episode):
         if episode.rewards > self.bestRewards:

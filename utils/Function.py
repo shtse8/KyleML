@@ -1,6 +1,6 @@
 import sys
 import torch
-
+import math
 
 #   數組為正態分佈
 #   計算出最後每個數值的標準差
@@ -13,3 +13,29 @@ def normalize(value):
         eps = torch.finfo(torch.float).eps
     value = (value - value.mean()) / (value.std() + eps)
     return value
+
+
+def humanize(value):
+    if value in [None, math.nan, math.inf, -math.inf]:
+        return str(value)
+    
+    sci = ["K", "M", "B", "T"]
+    for i in reversed(range(len(sci))):
+        base = 1000 ** (i+1)
+        if value > base:
+            return f"{value / base:.2f}{sci[i]}"
+    return f"{value:.0f}" if isinstance(value, int) else f"{value:.2f}"
+
+def humanizeTime(value):
+    if value in [None, math.nan, math.inf, -math.inf]:
+        return str(value)
+
+    timeStr = ""
+    if value > 86400:
+        timeStr += f"{value // 86400:.0f}d"
+    if value > 3600:
+        timeStr += f"{(value % 86400) // 3600:.0f}h"
+    if value > 60:
+        timeStr += f"{(value % 3600) // 60:.0f}m"
+    timeStr += f"{value % 60:.0f}s"
+    return timeStr

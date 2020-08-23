@@ -14,7 +14,6 @@ import torch.nn.functional as F
 import torch.optim.lr_scheduler as schedular
 import torch.multiprocessing as mp
 import math
-import humanize
 # def init_layer(m):
 #     weight = m.weight.data
 #     weight.normal_(0, 1)
@@ -376,12 +375,12 @@ class Agent:
                 self.update()
 
     def update(self) -> None:
-        print(f"#{self.epochs} {self.epoch.episodes} {humanize.intword(self.totalSteps)} | " +
-              f'Loss: {self.epoch.loss:6.2f}/ep | ' + 
-              f'Best: {self.epoch.bestRewards:>5}, Avg: {self.epoch.avgRewards:>5.2f} | ' +
-              f'Steps: {self.epoch.steps / self.epoch.duration:>7.2f}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
-              f'Dropped: {self.dropped} | ' +
-              f'Time: {self.epoch.duration: >4.2f}s > {self.epoch.estimateDuration: >5.2f}s'
+        print(f"#{self.epochs} {Function.humanize(self.epoch.episodes)} {Function.humanize(self.totalSteps)} | " +
+              f'Loss: {Function.humanize(self.epoch.loss):>6}/ep | ' + 
+              f'Best: {Function.humanize(self.epoch.bestRewards):>5}, Avg: {Function.humanize(self.epoch.avgRewards):>5} | ' +
+              f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>7}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
+              f'Dropped: {Function.humanize(self.dropped)} | ' +
+              f'Time: {Function.humanizeTime(self.epoch.duration)} > {Function.humanizeTime(self.epoch.estimateDuration)}'
               , 
               end="\b\r")
         self.lastPrint = time.perf_counter()

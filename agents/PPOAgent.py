@@ -38,17 +38,17 @@ class PPONetwork(Network):
         hidden_nodes = 128
         if type(inputShape) is tuple and len(inputShape) == 3:
             self.body = nn.Sequential(
-                nn.Conv2d(inputShape[0], 16, kernel_size=1, stride=1),
+                nn.Conv2d(inputShape[0], 32, kernel_size=1, stride=1),
                 nn.ReLU(inplace=True),
-                # nn.MaxPool2d(1),
-                nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+                nn.MaxPool2d(1),
+                nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(inplace=True),
-                # nn.MaxPool2d(1),
+                nn.MaxPool2d(1),
                 # nn.Conv2d(64, 64, kernel_size=1, stride=1),
                 # nn.ReLU(),
                 # nn.MaxPool2d(2),
                 nn.Flatten(),
-                nn.Linear(32 * inputShape[1] * inputShape[2], hidden_nodes),
+                nn.Linear(64 * inputShape[1] * inputShape[2], hidden_nodes),
                 nn.ReLU(inplace=True))
         else:
             
@@ -123,7 +123,7 @@ class Algo:
 class PPOAlgo(Algo):
     def __init__(self):
         super().__init__(Policy(
-            batchSize=32,
+            batchSize=128,
             learningRate=0.001,
             versionTolerance=4))
         self.gamma = 0.9
@@ -307,7 +307,7 @@ class Agent:
         self.totalSteps = 0
         self.epochs = 1
 
-        # mp.set_start_method("spawn")
+        mp.set_start_method("spawn")
         # Create Evaluators
         print(f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
         evaluators = []
@@ -315,13 +315,13 @@ class Agent:
         n_workers = mp.cpu_count() // 2
         # n_workers = 2
         for i in range(n_workers):
-            child = Child(self.createEvaluator, (i,)).start()
+            child = Child(i, self.createEvaluator).start()
             evaluators.append(child)
         
         self.evaluators.extend(evaluators)
         
         trainer = Trainer(self.algo, self.env)
-        self.epoch = Epoch(episodes)
+        self.epoch = Epoch(episodes).start()
         while True:
             for evaluator in self.evaluators:
                 while evaluator.poll():
@@ -331,6 +331,7 @@ class Agent:
                             and len(message.memory) >= 5:
                             loss = trainer.learn(message.memory)
                             self.epoch.trained(loss, len(message.memory))
+                            self.totalSteps += len(message.memory)
                         else:
                             pass
                             # print("memory is dropped.", message.version, trainer.network.version)
@@ -340,6 +341,10 @@ class Agent:
                     elif isinstance(message, EpisodeReport):
                         self.epoch.add(message)
                         self.epoch.episodes += 1
+                        if self.epoch.episodes >= self.epoch.target_episodes:
+                            self.epoch = Epoch(episodes).start()
+                            self.epochs += 1
+                            print()
                     else:
                         raise Exception("Unknown Message")
 
@@ -354,12 +359,13 @@ class Agent:
               f'Time: {self.epoch.duration: >4.2f}s > {self.epoch.estimateDuration: >5.2f}s', end="\b\r")
         self.lastPrint = time.perf_counter()
 
-    def createEvaluator(self, i, conn):
+    def createEvaluator(self, conn):
         Evaluator(self.algo, self.env, conn).eval(self.isTraining)
 
 
 class Child:
-    def __init__(self, target, args):
+    def __init__(self, id, target, args=()):
+        self.id = id
         self.process = None
         self.target = target
         self.args = args
@@ -410,9 +416,11 @@ class EpisodeReport(Message):
 
     def start(self):
         self.episode_start_time = time.perf_counter()
+        return self
 
     def end(self):
         self.episode_end_time = time.perf_counter()
+        return self
 
     @property
     def duration(self):
@@ -444,9 +452,11 @@ class Epoch(Message):
 
     def start(self):
         self.epoch_start_time = time.perf_counter()
+        return self
 
     def end(self):
         self.epoch_end_time = time.perf_counter()
+        return self
 
     @property
     def progress(self):
@@ -477,8 +487,10 @@ class Epoch(Message):
             self.bestRewards = episode.rewards
         self.totalRewards += episode.rewards
         self.history.append(episode)
+        return self
 
     def trained(self, loss, steps):
         self.total_loss += loss * steps
         self.steps += steps
+        return self
         

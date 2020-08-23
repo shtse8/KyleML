@@ -21,6 +21,127 @@ import math
 #     nn.init.constant_(m.bias.data, 0)
 #     return m
 
+class Message:
+    def __init__(self):
+        pass
+
+class LastestInfo(Message):
+    def __init__(self, networkStateDict, networkVersion):
+        self.networkStateDict = networkStateDict
+        self.networkVersion = networkVersion
+
+class MemoryPush(Message):
+    def __init__(self, memory, version):
+        super().__init__()
+        self.memory = memory
+        self.version = version
+
+class NetworkPull(Message):
+    def __init__(self):
+        pass
+
+class NetworkPush(Message):
+    def __init__(self, stateDict, version):
+        self.stateDict = stateDict
+        self.version = version
+
+class EpisodeReport(Message):
+    def __init__(self):
+        self.steps: int = 0
+        self.rewards: float = 0
+        self.total_loss: float = 0
+        self.episode_start_time: int = 0
+        self.episode_end_time: int = 0
+
+    def start(self):
+        self.episode_start_time = time.perf_counter()
+        return self
+
+    def end(self):
+        self.episode_end_time = time.perf_counter()
+        return self
+
+    @property
+    def duration(self):
+        return (self.episode_end_time if self.episode_end_time > 0 else time.perf_counter()) - self.episode_start_time
+
+    @property
+    def loss(self):
+        return self.total_loss / self.steps if self.steps > 0 else 0
+
+    def trained(self, loss, steps):
+        self.total_loss += loss * steps
+        self.steps += steps
+        
+
+class PredictedAction(object):
+    def __init__(self):
+        self.index = None
+        self.prediction = None
+
+    def __int__(self):
+        return self.index
+
+class Epoch(Message):
+    def __init__(self, target_episodes):
+        self.target_episodes = target_episodes
+        self.steps: int = 0
+        self.rewards: float = 0
+        self.total_loss: float = 0
+        self.epoch_start_time: int = 0
+        self.epoch_end_time: int = 0
+        self.episodes = 0
+        self.history = collections.deque(maxlen=target_episodes)
+        self.bestRewards = 0
+
+        # for stats
+        self.totalRewards = 0
+
+    def start(self):
+        self.epoch_start_time = time.perf_counter()
+        return self
+
+    def end(self):
+        self.epoch_end_time = time.perf_counter()
+        return self
+
+    @property
+    def progress(self):
+        return self.episodes / self.target_episodes
+
+    @property
+    def duration(self):
+        return (self.epoch_end_time if self.epoch_end_time > 0 else time.perf_counter()) - self.epoch_start_time
+
+    @property
+    def loss(self):
+        return self.total_loss / self.steps if self.steps > 0 else 0
+
+    @property
+    def durationPerEpisode(self):
+        return self.duration / self.episodes if self.episodes > 0 else math.inf
+
+    @property
+    def estimateDuration(self):
+        return self.target_episodes * self.durationPerEpisode
+
+    @property
+    def avgRewards(self):
+        return self.totalRewards / len(self.history) if len(self.history) > 0 else math.nan
+
+    def add(self, episode):
+        if episode.rewards > self.bestRewards:
+            self.bestRewards = episode.rewards
+        self.totalRewards += episode.rewards
+        self.history.append(episode)
+        return self
+
+    def trained(self, loss, steps):
+        self.total_loss += loss * steps
+        self.steps += steps
+        return self
+        
+
 class Network(nn.Module):
     def __init__(self, inputShape, n_outputs):
         super().__init__()
@@ -110,10 +231,7 @@ class Algo:
     def createNetwork(self) -> Network:
         raise NotImplementedError
 
-    def getPrediction(self, network, state, isTrainig: bool):
-        raise NotImplementedError
-
-    def getAction(self, prediction, isTrainig: bool):
+    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
         raise NotImplementedError
 
     def learn(self, network: Network, memory):
@@ -134,18 +252,21 @@ class PPOAlgo(Algo):
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs).to(self.device)
 
-    def getPrediction(self, network, state, isTraining: bool):
+    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
+        action = PredictedAction()
         network.eval()
         with torch.no_grad():
             state = torch.FloatTensor([state]).to(self.device)
             prediction = network.getPolicy(state).squeeze(0)
-            return prediction.cpu().detach().numpy()
+            action.prediction = prediction.cpu().detach().numpy()
+            handler = PredictionHandler(action.prediction, mask)
+            action.index = handler.getRandomAction() if isTraining else handler.getBestAction()
 
-    def getAction(self, prediction, isTraining: bool):
-        if isTraining:
-            return np.random.choice(len(prediction), p=prediction)
-        else:
-            return prediction.argmax()
+            # if isTraining:
+            #     action.index = torch.distributions.Categorical(probs=prediction).sample().item()
+            # else:
+            #     action.index = prediction.argmax().item()
+            return action
 
     # Discounted Rewards (N-steps)
     def getDiscountedRewards(self, rewards, dones, lastValue=0):
@@ -172,10 +293,10 @@ class PPOAlgo(Algo):
         states = np.array([x.state for x in memory])
         states = torch.FloatTensor(states).to(self.device)
         
-        actions = np.array([x.action for x in memory])
+        actions = np.array([x.action.index for x in memory])
         actions = torch.LongTensor(actions).to(self.device)
         
-        predictions = np.array([x.prediction for x in memory])
+        predictions = np.array([x.action.prediction for x in memory])
         predictions = torch.FloatTensor(predictions).to(self.device)
         dones = np.array([x.done for x in memory])
         rewards = np.array([x.reward for x in memory])
@@ -238,13 +359,14 @@ class Trainer(Base):
         if self.stateDictCacheVersion != self.network.version:
             stateDict = self.network.state_dict()
             for key, value in stateDict.items():
-                stateDict[key] = value.cpu()
+                stateDict[key] = value.cpu().detach().numpy()
             self.stateDictCache = stateDict
             self.stateDictCacheVersion = self.network.version
 
     def getStateDict(self):
         self.updateStateDict()
         return self.stateDictCache
+
 
 class Evaluator(Base):
     def __init__(self, algo: Algo, env, conn, delay=0):
@@ -255,62 +377,74 @@ class Evaluator(Base):
         self.network.version = -1
         self.conn = conn
         self.isRequesting = False
+        self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
+        self.report = None
 
-    def pullNetwork(self):
-        self.conn.send(NetworkPull())
-        message: NetworkPush = self.conn.recv()
-        if isinstance(message, NetworkPush):
-            if message.version > self.network.version:
-                self.network.load_state_dict(message.stateDict)
-                self.network.version = message.version
+        self.lastestInfo = None
 
-    def requestPullNetwork(self):
-        if not self.isRequesting:
-            self.conn.send(NetworkPull())
-            self.isRequesting = True
+    def recv(self):
+        while self.conn.poll():
+            message = self.conn.recv()
+            if isinstance(message, LastestInfo):
+                self.lastestInfo = message
 
-    def tryPullNetwork(self):
-        if self.isRequesting and self.conn.poll():
-            message: NetworkPush = self.conn.recv()
-            if isinstance(message, NetworkPush):
-                self.isRequesting = False
-                if message.version > self.network.version:
-                    self.network.load_state_dict(message.stateDict)
-                    self.network.version = message.version
-                    return True
-        
+    def applyNextNetwork(self):
+        if self.lastestInfo and self.lastestInfo.networkVersion > self.network.version:
+            stateDict = self.lastestInfo.networkStateDict
+            for key, value in stateDict.items():
+                stateDict[key] = torch.from_numpy(value)
+            self.network.load_state_dict(stateDict)
+            self.network.version = self.lastestInfo.networkVersion
+            self.memory.clear()
+            return True
         return False
 
-    def pushMemory(self, memory):
-        self.conn.send(MemoryPush(memory, self.network.version))
+    def pushMemory(self):
+        if self.isValidVersion():
+            self.conn.send(MemoryPush(self.memory, self.network.version))
+        self.memory.clear()
 
-    def onCommit(self, memory):
-        self.pushMemory(memory)
-        self.requestPullNetwork()
+    def commit(self, transition: Transition):
+        self.report.rewards += transition.reward
+        self.memory.append(transition)
+        if len(self.memory) >= self.algo.policy.batchSize:
+            self.pushMemory()
+            self.applyNextNetwork()
         
+    def isValidVersion(self):
+        return self.lastestInfo and self.network.version >= self.lastestInfo.networkVersion // 2 - self.algo.policy.versionTolerance
+
+    def checkVersion(self):
+        if self.lastestInfo and not self.isValidVersion():
+            self.applyNextNetwork()
+
     def eval(self, isTraining=False):
-        self.pullNetwork()
+        # Wait for first broadcast
+        while not self.lastestInfo:
+            self.recv()
+        self.applyNextNetwork()
+
         while True:
-            memory = collections.deque(maxlen=self.algo.policy.batchSize)
-            report = EpisodeReport()
+            self.report = EpisodeReport()
             state = self.env.reset()
             done: bool = False
             while not done:
-                if self.tryPullNetwork():
-                    memory.clear()
-                prediction = self.algo.getPrediction(self.network, state, isTraining)
-                action = self.algo.getAction(prediction, isTraining)
-                nextState, reward, done = self.env.takeAction(action)
-                transition = Transition(state, action, reward, nextState, done, prediction)
-                report.rewards += reward
-                memory.append(transition)
-                if len(memory) >= self.algo.policy.batchSize:
-                    self.onCommit(memory)
-                    memory.clear()
+                self.recv()
+                self.checkVersion()
+                
+                actionMask = np.ones(self.env.actionSpace)
+                while True:
+                    action = self.algo.getAction(self.network, state, actionMask, isTraining)
+                    nextState, reward, done = self.env.takeAction(action.index)
+                    if not (nextState == state).all():
+                        break
+                    actionMask[action.index] = 0
+                transition = Transition(state, action, reward, nextState, done)
+                self.commit(transition)
                 if self.delay > 0:
                     time.sleep(self.delay)
                 state = nextState
-            self.conn.send(report)
+            self.conn.send(self.report)
 
 class Agent:
     def __init__(self, algo: Algo, env):
@@ -333,14 +467,15 @@ class Agent:
         print(f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
         evaluators = []
         # n_workers = mp.cpu_count() - 1
-        n_workers = mp.cpu_count() // 2
-        # n_workers = 3
+        # n_workers = mp.cpu_count() // 2
+        n_workers = 4
         for i in range(n_workers):
             child = Child(i, self.createEvaluator).start()
             evaluators.append(child)
         
-        self.evaluators.extend(evaluators)
-        
+        self.evaluators = np.array(evaluators)
+
+        lastBoardcast = -1
         trainer = Trainer(self.algo, self.env)
         self.epoch = Epoch(episodes).start()
         while True:
@@ -361,12 +496,16 @@ class Agent:
                             self.dropped += len(message.memory)
                             # print("memory is dropped.", message.version, trainer.network.version)
                         # print("learnt", loss)
-                    elif isinstance(message, NetworkPull):
-                        evaluator.send(NetworkPush(trainer.getStateDict(), trainer.network.version))
                     elif isinstance(message, EpisodeReport):
                         self.epoch.add(message)
                     else:
                         raise Exception("Unknown Message")
+
+            # Boardcast
+            if lastBoardcast < trainer.network.version:
+                for evaluator in self.evaluators:
+                    evaluator.send(LastestInfo(trainer.getStateDict(), trainer.network.version))
+                lastBoardcast = trainer.network.version
 
             if time.perf_counter() - self.lastPrint > .1:
                 self.update()
@@ -409,111 +548,3 @@ class Child:
     def send(self, object):
         return self.conn.send(object)
 
-
-class Message:
-    def __init__(self):
-        pass
-
-class MemoryPush(Message):
-    def __init__(self, memory, version):
-        super().__init__()
-        self.memory = memory
-        self.version = version
-
-class NetworkPull(Message):
-    def __init__(self):
-        pass
-
-class NetworkPush(Message):
-    def __init__(self, stateDict, version):
-        self.stateDict = stateDict
-        self.version = version
-
-class EpisodeReport(Message):
-    def __init__(self):
-        self.steps: int = 0
-        self.rewards: float = 0
-        self.total_loss: float = 0
-        self.episode_start_time: int = 0
-        self.episode_end_time: int = 0
-
-    def start(self):
-        self.episode_start_time = time.perf_counter()
-        return self
-
-    def end(self):
-        self.episode_end_time = time.perf_counter()
-        return self
-
-    @property
-    def duration(self):
-        return (self.episode_end_time if self.episode_end_time > 0 else time.perf_counter()) - self.episode_start_time
-
-    @property
-    def loss(self):
-        return self.total_loss / self.steps if self.steps > 0 else 0
-
-    def trained(self, loss, steps):
-        self.total_loss += loss * steps
-        self.steps += steps
-        
-
-class Epoch(Message):
-    def __init__(self, target_episodes):
-        self.target_episodes = target_episodes
-        self.steps: int = 0
-        self.rewards: float = 0
-        self.total_loss: float = 0
-        self.epoch_start_time: int = 0
-        self.epoch_end_time: int = 0
-        self.episodes = 0
-        self.history = collections.deque(maxlen=target_episodes)
-        self.bestRewards = 0
-
-        # for stats
-        self.totalRewards = 0
-
-    def start(self):
-        self.epoch_start_time = time.perf_counter()
-        return self
-
-    def end(self):
-        self.epoch_end_time = time.perf_counter()
-        return self
-
-    @property
-    def progress(self):
-        return self.episodes / self.target_episodes
-
-    @property
-    def duration(self):
-        return (self.epoch_end_time if self.epoch_end_time > 0 else time.perf_counter()) - self.epoch_start_time
-
-    @property
-    def loss(self):
-        return self.total_loss / self.steps if self.steps > 0 else 0
-
-    @property
-    def durationPerEpisode(self):
-        return self.duration / self.episodes if self.episodes > 0 else math.inf
-
-    @property
-    def estimateDuration(self):
-        return self.target_episodes * self.durationPerEpisode
-
-    @property
-    def avgRewards(self):
-        return self.totalRewards / len(self.history) if len(self.history) > 0 else math.nan
-
-    def add(self, episode):
-        if episode.rewards > self.bestRewards:
-            self.bestRewards = episode.rewards
-        self.totalRewards += episode.rewards
-        self.history.append(episode)
-        return self
-
-    def trained(self, loss, steps):
-        self.total_loss += loss * steps
-        self.steps += steps
-        return self
-        

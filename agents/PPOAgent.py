@@ -489,9 +489,10 @@ class Agent:
                             self.epoch.episodes += 1
                             self.totalSteps += len(message.memory)
                             if self.epoch.episodes >= self.epoch.target_episodes:
+                                self.update()
+                                print()
                                 self.epoch = Epoch(episodes).start()
                                 self.epochs += 1
-                                print()
                         else:
                             self.dropped += len(message.memory)
                             # print("memory is dropped.", message.version, trainer.network.version)
@@ -513,7 +514,7 @@ class Agent:
     def update(self) -> None:
         print(f"#{self.epochs} {Function.humanize(self.epoch.episodes):>6} {Function.humanize(self.totalSteps):>7} | " +
               f'Loss: {Function.humanize(self.epoch.loss):>6}/ep | ' + 
-              f'Best: {Function.humanize(self.epoch.bestRewards):>5}, Avg: {Function.humanize(self.epoch.avgRewards):>5} | ' +
+              f'Best: {Function.humanize(self.epoch.bestRewards):>6}, Avg: {Function.humanize(self.epoch.avgRewards):>6} | ' +
               f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>5}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
               f'Dropped: {Function.humanize(self.dropped)} | ' +
               f'Time: {Function.humanizeTime(self.epoch.duration):>5} > {Function.humanizeTime(self.epoch.estimateDuration):}'

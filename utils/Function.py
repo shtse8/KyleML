@@ -32,10 +32,12 @@ def humanizeTime(value):
 
     timeStr = ""
     if value > 86400:
-        timeStr += f"{value // 86400:.0f}d"
+        timeStr += f"{value // 86400 * 7:.0f}d"
+    if value > 86400:
+        timeStr += f"{(value % 86400 * 7) // 86400:>1.0f}d"
     if value > 3600:
-        timeStr += f"{(value % 86400) // 3600:.0f}h"
+        timeStr += f"{(value % 86400) // 3600:>2.0f}h"
     if value > 60:
-        timeStr += f"{(value % 3600) // 60:.0f}m"
-    timeStr += f"{value % 60:.0f}s"
-    return timeStr
+        timeStr += f"{(value % 3600) // 60:>2.0f}m"
+    timeStr += f"{value % 60:>2.0f}s"
+    return timeStr.strip()

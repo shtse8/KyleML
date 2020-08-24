@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 from games.Game import Game
 import torch.multiprocessing as mp
-import humanize
 
 
 class Mode(Enum):

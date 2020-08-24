@@ -62,6 +62,10 @@ class EpisodeReport(Message):
         return self
 
     @property
+    def isEnd(self):
+        return self.epoch_end_time > 0
+
+    @property
     def duration(self):
         return (self.episode_end_time if self.episode_end_time > 0 else time.perf_counter()) - self.episode_start_time
 
@@ -86,6 +90,7 @@ class Epoch(Message):
     def __init__(self, target_episodes):
         self.target_episodes = target_episodes
         self.steps: int = 0
+        self.drops: int = 0
         self.rewards: float = 0
         self.total_loss: float = 0
         self.epoch_start_time: int = 0
@@ -105,6 +110,14 @@ class Epoch(Message):
         self.epoch_end_time = time.perf_counter()
         return self
 
+    @property
+    def hitRate(self):
+        return self.steps / (self.steps + self.drops) if (self.steps + self.drops) > 0 else math.nan
+
+    @property
+    def isEnd(self):
+        return self.epoch_end_time > 0
+        
     @property
     def progress(self):
         return self.episodes / self.target_episodes
@@ -139,6 +152,9 @@ class Epoch(Message):
     def trained(self, loss, steps):
         self.total_loss += loss * steps
         self.steps += steps
+        self.episodes += 1
+        if self.episodes >= self.target_episodes:
+            self.end()
         return self
         
 
@@ -155,18 +171,18 @@ class PPONetwork(Network):
     def __init__(self, inputShape, n_outputs):
         super().__init__(inputShape, n_outputs)
         
-        hidden_nodes = 128
+        hidden_nodes = 64
         if type(inputShape) is tuple and len(inputShape) == 3:
             self.body = nn.Sequential(
                 nn.Conv2d(inputShape[0], 32, kernel_size=1, stride=1),
                 nn.ReLU(inplace=True),
-                nn.MaxPool2d(1),
+                # nn.MaxPool2d(1),
                 nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(inplace=True),
-                nn.MaxPool2d(1),
+                # nn.MaxPool2d(1),
                 nn.Conv2d(64, 64, kernel_size=1, stride=1),
                 nn.ReLU(inplace=True),
-                nn.MaxPool2d(1),
+                # nn.MaxPool2d(1),
                 nn.Flatten(),
                 nn.Linear(64 * inputShape[1] * inputShape[2], hidden_nodes),
                 nn.ReLU(inplace=True))
@@ -177,9 +193,9 @@ class PPONetwork(Network):
 
             self.body = nn.Sequential(
                 nn.Linear(inputShape, hidden_nodes),
-                nn.Tanh(),
+                nn.ReLU(inplace=True),
                 nn.Linear(hidden_nodes, hidden_nodes),
-                nn.Tanh())
+                nn.ReLU(inplace=True))
                 
         # Define policy head
         self.policy = nn.Sequential(
@@ -187,8 +203,7 @@ class PPONetwork(Network):
             nn.Softmax(dim=-1))
             
         # Define value head
-        self.value = nn.Sequential(
-            nn.Linear(hidden_nodes, 1))
+        self.value = nn.Sequential(nn.Linear(hidden_nodes, 1))
 
     def buildOptimizer(self, learningRate):
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
@@ -242,8 +257,8 @@ class PPOAlgo(Algo):
         super().__init__(Policy(
             batchSize=32,
             learningRate=0.0001,
-            versionTolerance=8))
-        self.gamma = 0.99
+            versionTolerance=0))
+        self.gamma = 0.9
         self.epsClip = 0.2
 
     # def createMemory(self, len):
@@ -280,24 +295,29 @@ class PPOAlgo(Algo):
         advantages = np.zeros_like(rewards).astype(float)
         gae = 0
         for i in reversed(range(len(rewards))):
-            value = values[i].item()
-            detlas = rewards[i] + self.gamma * lastValue * (1 - dones[i]) - value
+            detlas = rewards[i] + self.gamma * lastValue * (1 - dones[i]) - values[i]
             gae = detlas + self.gamma * 0.95 * gae * (1 - dones[i])
             advantages[i] = gae
-            lastValue = value
+            lastValue = values[i]
         return advantages
 
     def learn(self, network: Network, memory):
         network.train()
 
+
         states = np.array([x.state for x in memory])
         states = torch.FloatTensor(states).to(self.device)
+
+        # test
+        # result = network(torch.zeros_like(states[0]).to(self.device).unsqueeze(0))
+        # print(result)
+
         
         actions = np.array([x.action.index for x in memory])
         actions = torch.LongTensor(actions).to(self.device)
         
         predictions = np.array([x.action.prediction for x in memory])
-        predictions = torch.FloatTensor(predictions).to(self.device)
+        predictions = torch.FloatTensor(predictions).to(self.device).detach()
         dones = np.array([x.done for x in memory])
         rewards = np.array([x.reward for x in memory])
         real_probs = torch.distributions.Categorical(probs=predictions).log_prob(actions)
@@ -309,33 +329,45 @@ class PPOAlgo(Algo):
             lastValue = network.getValue(lastState).item()
         targetValues = self.getDiscountedRewards(rewards, dones, lastValue)
         targetValues = torch.FloatTensor(targetValues).to(self.device)
-        
-        action_probs, values = network(states)
-        values = values.squeeze(1)
+        # targetValues = Function.normalize(targetValues)
 
-        advantages = self.getAdvantages(rewards, dones, values, lastValue)
-        advantages = torch.FloatTensor(advantages).to(self.device)
-        advantages = Function.normalize(advantages)
+        lossList = []
+        for _ in range(10):
 
-        dist = torch.distributions.Categorical(probs=action_probs)
-        ratios = torch.exp(dist.log_prob(actions) - real_probs)  # porb1 / porb2 = exp(log(prob1) - log(prob2))
-        surr1 = ratios * advantages
-        surr2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
+            action_probs, values = network(states)
+            values = values.squeeze(1)
 
-        policy_loss = -torch.min(surr1, surr2).mean()  # Maximize Policy Loss
-        entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
-        value_loss = F.mse_loss(values, targetValues)  # Minimize Value Loss
-        loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
-        
-        network.optimizer.zero_grad()
-        loss.backward()
-        # Chip grad with norm
-        nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
-        network.optimizer.step()
-        network.version += 1
+            advantages = targetValues - values
+            # print(targetValues, values)
+            # print(advantages)
+            # advantages = self.getAdvantages(rewards, dones, values.cpu().detach().numpy(), lastValue)
+            # advantages = torch.FloatTensor(advantages).to(self.device)
+            # print(advantages)
+            # targetValues = advantages + values
+            # advantages = Function.normalize(advantages)
 
+            dist = torch.distributions.Categorical(probs=action_probs)
+            ratios = torch.exp(dist.log_prob(actions) - real_probs)  # porb1 / porb2 = exp(log(prob1) - log(prob2))
+            surr1 = ratios * advantages
+            surr2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
+
+            policy_loss = -torch.min(surr1, surr2).mean()  # Maximize Policy Loss (Rewards)
+            entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
+            value_loss = F.mse_loss(values, targetValues)  # Minimize Value Loss (Distance to Target)
+            loss = policy_loss + 0.01 * entropy_loss + 2 * value_loss
+            # loss = 0.01 * entropy_loss + 1 * value_loss
+            # print(policy_loss, entropy_loss, value_loss, loss)
+            
+            network.optimizer.zero_grad()
+            loss.backward()
+            # Chip grad with norm
+            # nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 10)
+            network.optimizer.step()
+            
+            lossList.append(loss.item())
         # Report
-        return loss.item()
+        network.version += 1
+        return np.mean(lossList)
 
 class Base:
     def __init__(self, algo: Algo, env):
@@ -412,7 +444,7 @@ class Evaluator(Base):
             self.applyNextNetwork()
         
     def isValidVersion(self):
-        return self.lastestInfo and self.network.version >= self.lastestInfo.networkVersion // 2 - self.algo.policy.versionTolerance
+        return self.lastestInfo and self.network.version >= self.lastestInfo.networkVersion - self.algo.policy.versionTolerance
 
     def checkVersion(self):
         if self.lastestInfo and not self.isValidVersion():
@@ -425,7 +457,7 @@ class Evaluator(Base):
         self.applyNextNetwork()
 
         while True:
-            self.report = EpisodeReport()
+            self.report = EpisodeReport().start()
             state = self.env.reset()
             done: bool = False
             while not done:
@@ -444,7 +476,7 @@ class Evaluator(Base):
                 if self.delay > 0:
                     time.sleep(self.delay)
                 state = nextState
-            self.conn.send(self.report)
+            self.conn.send(self.report.end())
 
 class Agent:
     def __init__(self, algo: Algo, env):
@@ -468,7 +500,7 @@ class Agent:
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
-        n_workers = 4
+        n_workers = 1
         for i in range(n_workers):
             child = Child(i, self.createEvaluator).start()
             evaluators.append(child)
@@ -483,18 +515,18 @@ class Agent:
                 while evaluator.poll():
                     message = evaluator.recv()
                     if isinstance(message, MemoryPush):
+                        # print(evaluator.id, "memory received.", message.version, trainer.network.version, message.version >= trainer.network.version - trainer.algo.policy.versionTolerance)
                         if message.version >= trainer.network.version - trainer.algo.policy.versionTolerance:
                             loss = trainer.learn(message.memory)
                             self.epoch.trained(loss, len(message.memory))
-                            self.epoch.episodes += 1
                             self.totalSteps += len(message.memory)
-                            if self.epoch.episodes >= self.epoch.target_episodes:
+                            if self.epoch.isEnd:
                                 self.update()
                                 print()
                                 self.epoch = Epoch(episodes).start()
                                 self.epochs += 1
                         else:
-                            self.dropped += len(message.memory)
+                            self.epoch.drops += len(message.memory)
                             # print("memory is dropped.", message.version, trainer.network.version)
                         # print("learnt", loss)
                     elif isinstance(message, EpisodeReport):
@@ -504,19 +536,21 @@ class Agent:
 
             # Boardcast
             if lastBoardcast < trainer.network.version:
+                # print("broadcast", trainer.network.version)
+                message = LastestInfo(trainer.getStateDict(), trainer.network.version)
                 for evaluator in self.evaluators:
-                    evaluator.send(LastestInfo(trainer.getStateDict(), trainer.network.version))
+                    evaluator.send(message)
                 lastBoardcast = trainer.network.version
 
             if time.perf_counter() - self.lastPrint > .1:
                 self.update()
 
     def update(self) -> None:
-        print(f"#{self.epochs} {Function.humanize(self.epoch.episodes):>6} {Function.humanize(self.totalSteps):>7} | " +
+        hitRate = 1 - self.dropped / self.totalSteps if self.totalSteps > 0 else math.nan
+        print(f"#{self.epochs} {Function.humanize(self.epoch.episodes):>6} {self.epoch.hitRate:>7.2%} | " +
               f'Loss: {Function.humanize(self.epoch.loss):>6}/ep | ' + 
               f'Best: {Function.humanize(self.epoch.bestRewards):>6}, Avg: {Function.humanize(self.epoch.avgRewards):>6} | ' +
               f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>5}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
-              f'Dropped: {Function.humanize(self.dropped)} | ' +
               f'Time: {Function.humanizeTime(self.epoch.duration):>5} > {Function.humanizeTime(self.epoch.estimateDuration):}'
               , 
               end="\b\r")

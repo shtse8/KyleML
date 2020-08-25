@@ -45,6 +45,12 @@ class NetworkPush(Message):
         self.stateDict = stateDict
         self.version = version
 
+class LearnReport(Message):
+    def __init__(self, loss, steps, drops = 0):
+        self.loss = loss
+        self.steps = steps
+        self.drops = drops
+
 class EpisodeReport(Message):
     def __init__(self):
         self.steps: int = 0
@@ -257,7 +263,7 @@ class PPOAlgo(Algo):
         super().__init__(Policy(
             batchSize=32,
             learningRate=0.0001,
-            versionTolerance=0))
+            versionTolerance=4))
         self.gamma = 0.9
         self.epsClip = 0.2
 
@@ -332,7 +338,7 @@ class PPOAlgo(Algo):
         # targetValues = Function.normalize(targetValues)
 
         lossList = []
-        for _ in range(10):
+        for _ in range(1):
 
             action_probs, values = network(states)
             values = values.squeeze(1)
@@ -354,7 +360,8 @@ class PPOAlgo(Algo):
             policy_loss = -torch.min(surr1, surr2).mean()  # Maximize Policy Loss (Rewards)
             entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
             value_loss = F.mse_loss(values, targetValues)  # Minimize Value Loss (Distance to Target)
-            loss = policy_loss + 0.01 * entropy_loss + 2 * value_loss
+            # loss = policy_loss + 0.01 * entropy_loss + 2 * value_loss
+            loss = policy_loss + 2 * value_loss
             # loss = 0.01 * entropy_loss + 1 * value_loss
             # print(policy_loss, entropy_loss, value_loss, loss)
             
@@ -378,11 +385,25 @@ class Base:
         raise NotImplementedError
 
 class Trainer(Base):
-    def __init__(self, algo: Algo, env):
+    def __init__(self, algo: Algo, env, conn):
         super().__init__(algo, env)
         self.network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace).buildOptimizer(self.algo.policy.learningRate)
         self.stateDictCache = None
         self.stateDictCacheVersion = -1
+        self.conn = conn
+        self.lastBroadcast = -1
+
+    def recv(self):
+        while self.conn.poll():
+            message = self.conn.recv()
+            if isinstance(message, MemoryPush):
+                if message.version >= self.network.version - self.algo.policy.versionTolerance:
+                    loss = self.learn(message.memory)
+                    self.conn.send(LearnReport(loss, len(message.memory)))
+                else:
+                    self.conn.send(LearnReport(0, 0, drops=len(message.memory)))
+            else:
+                raise Exception("Unknown Message")
 
     def learn(self, memory):
         return self.algo.learn(self.network, memory)
@@ -398,6 +419,14 @@ class Trainer(Base):
     def getStateDict(self):
         self.updateStateDict()
         return self.stateDictCache
+
+    def start(self):
+        while True:
+            self.recv()
+            if self.lastBroadcast < self.network.version:
+                self.conn.send(LastestInfo(self.getStateDict(), self.network.version))
+                self.lastBroadcast = self.network.version
+            time.sleep(0.1)
 
 
 class Evaluator(Base):
@@ -428,6 +457,7 @@ class Evaluator(Base):
             self.network.load_state_dict(stateDict)
             self.network.version = self.lastestInfo.networkVersion
             self.memory.clear()
+            # print("Applied new network", self.network.version)
             return True
         return False
 
@@ -441,28 +471,26 @@ class Evaluator(Base):
         self.memory.append(transition)
         if len(self.memory) >= self.algo.policy.batchSize:
             self.pushMemory()
-            self.applyNextNetwork()
+            # self.applyNextNetwork()
         
     def isValidVersion(self):
         return self.lastestInfo and self.network.version >= self.lastestInfo.networkVersion - self.algo.policy.versionTolerance
 
     def checkVersion(self):
-        if self.lastestInfo and not self.isValidVersion():
+        if not self.isValidVersion():
             self.applyNextNetwork()
+        return self.isValidVersion()
 
     def eval(self, isTraining=False):
-        # Wait for first broadcast
-        while not self.lastestInfo:
-            self.recv()
-        self.applyNextNetwork()
-
         while True:
             self.report = EpisodeReport().start()
             state = self.env.reset()
             done: bool = False
             while not done:
                 self.recv()
-                self.checkVersion()
+                if not self.checkVersion():
+                    time.sleep(0.1)
+                    continue
                 
                 actionMask = np.ones(self.env.actionSpace)
                 while True:
@@ -485,6 +513,10 @@ class Agent:
         self.env = env
         self.history = []
 
+    def broadcast(self, message):
+        for evaluator in self.evaluators:
+            evaluator.send(message)
+
     def run(self, train: bool = True, episodes: int = 10000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
@@ -499,48 +531,43 @@ class Agent:
         print(f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
         evaluators = []
         # n_workers = mp.cpu_count() - 1
-        # n_workers = mp.cpu_count() // 2
-        n_workers = 1
+        n_workers = mp.cpu_count() // 2
+        n_workers = 2
         for i in range(n_workers):
             child = Child(i, self.createEvaluator).start()
             evaluators.append(child)
+        trainer = Child(i, self.createTrainer).start()
         
         self.evaluators = np.array(evaluators)
 
         lastBoardcast = -1
-        trainer = Trainer(self.algo, self.env)
         self.epoch = Epoch(episodes).start()
         while True:
             for evaluator in self.evaluators:
                 while evaluator.poll():
                     message = evaluator.recv()
                     if isinstance(message, MemoryPush):
-                        # print(evaluator.id, "memory received.", message.version, trainer.network.version, message.version >= trainer.network.version - trainer.algo.policy.versionTolerance)
-                        if message.version >= trainer.network.version - trainer.algo.policy.versionTolerance:
-                            loss = trainer.learn(message.memory)
-                            self.epoch.trained(loss, len(message.memory))
-                            self.totalSteps += len(message.memory)
-                            if self.epoch.isEnd:
-                                self.update()
-                                print()
-                                self.epoch = Epoch(episodes).start()
-                                self.epochs += 1
-                        else:
-                            self.epoch.drops += len(message.memory)
-                            # print("memory is dropped.", message.version, trainer.network.version)
-                        # print("learnt", loss)
+                        trainer.send(message)
                     elif isinstance(message, EpisodeReport):
                         self.epoch.add(message)
                     else:
                         raise Exception("Unknown Message")
 
-            # Boardcast
-            if lastBoardcast < trainer.network.version:
-                # print("broadcast", trainer.network.version)
-                message = LastestInfo(trainer.getStateDict(), trainer.network.version)
-                for evaluator in self.evaluators:
-                    evaluator.send(message)
-                lastBoardcast = trainer.network.version
+            while trainer.poll():
+                message = trainer.recv()
+                if isinstance(message, LastestInfo):
+                    self.broadcast(message)
+                elif isinstance(message, LearnReport):
+                    self.epoch.trained(message.loss, message.steps)
+                    self.epoch.drops += message.drops
+                    self.totalSteps += message.steps
+                    if self.epoch.isEnd:
+                        self.update()
+                        print()
+                        self.epoch = Epoch(episodes).start()
+                        self.epochs += 1
+                else:
+                    raise Exception("Unknown Message")
 
             if time.perf_counter() - self.lastPrint > .1:
                 self.update()
@@ -558,6 +585,9 @@ class Agent:
 
     def createEvaluator(self, conn):
         Evaluator(self.algo, self.env, conn).eval(self.isTraining)
+
+    def createTrainer(self, conn):
+        Trainer(self.algo, self.env, conn).start()
 
 
 class Child:

@@ -1,4 +1,5 @@
 import sys
+from enum import Enum
 import time
 import numpy as np
 import collections
@@ -26,7 +27,8 @@ class Message:
         pass
 
 class LastestInfo(Message):
-    def __init__(self, networkStateDict, networkVersion):
+    def __init__(self, name, networkStateDict, networkVersion):
+        self.name = name
         self.networkStateDict = networkStateDict
         self.networkVersion = networkVersion
 
@@ -178,68 +180,130 @@ class PPONetwork(Network):
         super().__init__(inputShape, n_outputs)
         
         hidden_nodes = 64
-        if type(inputShape) is tuple and len(inputShape) == 3:
-            self.body = nn.Sequential(
-                nn.Conv2d(inputShape[0], 32, kernel_size=1, stride=1),
-                nn.ReLU(inplace=True),
-                # nn.MaxPool2d(1),
-                nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-                nn.ReLU(inplace=True),
-                # nn.MaxPool2d(1),
-                nn.Conv2d(64, 64, kernel_size=1, stride=1),
-                nn.ReLU(inplace=True),
-                # nn.MaxPool2d(1),
-                nn.Flatten(),
-                nn.Linear(64 * inputShape[1] * inputShape[2], hidden_nodes),
-                nn.ReLU(inplace=True))
-        else:
+        # if type(inputShape) is tuple and len(inputShape) == 3:
+        #     self.body = nn.Sequential(
+        #         nn.Conv2d(inputShape[0], 32, kernel_size=1, stride=1),
+        #         nn.ReLU(inplace=True),
+        #         # nn.MaxPool2d(1),
+        #         nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+        #         nn.ReLU(inplace=True),
+        #         # nn.MaxPool2d(1),
+        #         nn.Conv2d(64, 64, kernel_size=1, stride=1),
+        #         nn.ReLU(inplace=True),
+        #         # nn.MaxPool2d(1),
+        #         nn.Flatten(),
+        #         nn.Linear(64 * inputShape[1] * inputShape[2], hidden_nodes),
+        #         nn.ReLU(inplace=True))
+        # else:
             
-            if type(inputShape) is tuple and len(inputShape) == 1:
-                inputShape = inputShape[0]
+        #     if type(inputShape) is tuple and len(inputShape) == 1:
+        #         inputShape = inputShape[0]
 
-            self.body = nn.Sequential(
-                nn.Linear(inputShape, hidden_nodes),
-                nn.ReLU(inplace=True),
-                nn.Linear(hidden_nodes, hidden_nodes),
-                nn.ReLU(inplace=True))
+        #     self.body = nn.Sequential(
+        #         nn.Linear(inputShape, hidden_nodes),
+        #         nn.ReLU(inplace=True),
+        #         nn.Linear(hidden_nodes, hidden_nodes),
+        #         nn.ReLU(inplace=True))
                 
         # Define policy head
         self.policy = nn.Sequential(
+            nn.Linear(inputShape, hidden_nodes),
+            nn.Tanh(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.Tanh(),
             nn.Linear(hidden_nodes, n_outputs),
             nn.Softmax(dim=-1))
             
         # Define value head
-        self.value = nn.Sequential(nn.Linear(hidden_nodes, 1))
+        self.value = nn.Sequential(
+            nn.Linear(inputShape, hidden_nodes),
+            nn.Tanh(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.Tanh(),
+            nn.Linear(hidden_nodes, 1))
 
     def buildOptimizer(self, learningRate):
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
         return self
 
     def forward(self, state):
-        output = self.body(state)
-        return self.policy(output), self.value(output)
+        # output = self.body(state)
+        return self.policy(state), self.value(state)
 
     def getPolicy(self, state):
-        output = self.body(state)
-        return self.policy(output)
+        # output = self.body(state)
+        return self.policy(state)
 
     def getValue(self, state):
-        output = self.body(state)
-        return self.value(output)
+        # output = self.body(state)
+        return self.value(state)
+
+
+class PPOActorNetwork(Network):
+    def __init__(self, inputShape, n_outputs):
+        super().__init__(inputShape, n_outputs)
+        
+        hidden_nodes = 64
+        # Define policy head
+        self.policy = nn.Sequential(
+            nn.Linear(inputShape, hidden_nodes),
+            nn.Tanh(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.Tanh(),
+            nn.Linear(hidden_nodes, n_outputs),
+            nn.Softmax(dim=-1))
+            
+
+    def buildOptimizer(self, learningRate):
+        self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
+        return self
+
+    def forward(self, state):
+        # output = self.body(state)
+        return self.policy(state)
+
+
+
+class PPOCriticNetwork(Network):
+    def __init__(self, inputShape, n_outputs):
+        super().__init__(inputShape, n_outputs)
+        
+        hidden_nodes = 64
+        # Define value head
+        self.value = nn.Sequential(
+            nn.Linear(inputShape, hidden_nodes),
+            nn.Tanh(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.Tanh(),
+            nn.Linear(hidden_nodes, 1))
+
+    def buildOptimizer(self, learningRate):
+        self.optimizer = optim.Adam(self.parameters(), lr=0.0002)
+        return self
+
+    def forward(self, state):
+        return self.value(state)
+
+
+
+class NetworkUpdateStrategy(Enum):
+    Aggressive = 1
+    Lazy = 2
 
 class Policy:
-    def __init__(self, batchSize, learningRate, versionTolerance):
+    def __init__(self, batchSize, learningRate, versionTolerance, networkUpdateStrategy):
         self.batchSize = batchSize
         self.versionTolerance = versionTolerance
         self.learningRate = learningRate
+        self.networkUpdateStrategy = networkUpdateStrategy
 
 class OnPolicy(Policy):
     def __init__(self, batchSize, learningRate):
-        super().__init__(batchSize, learningRate, 0)
+        super().__init__(batchSize, learningRate, 0, NetworkUpdateStrategy.Aggressive)
         
 class OffPolicy(Policy):
     def __init__(self, batchSize, learningRate):
-        super().__init__(batchSize, learningRate, math.inf)
+        super().__init__(batchSize, learningRate, math.inf, NetworkUpdateStrategy.Lazy)
 
 class Algo:
     def __init__(self, policy: Policy):
@@ -263,7 +327,8 @@ class PPOAlgo(Algo):
         super().__init__(Policy(
             batchSize=32,
             learningRate=0.0001,
-            versionTolerance=4))
+            versionTolerance=0,
+            networkUpdateStrategy=NetworkUpdateStrategy.Aggressive))
         self.gamma = 0.9
         self.epsClip = 0.2
 
@@ -271,18 +336,21 @@ class PPOAlgo(Algo):
     #     return SimpleMemory(len)
         
     def createNetwork(self, inputShape, n_outputs) -> Network:
-        return PPONetwork(inputShape, n_outputs).to(self.device)
+        return {
+            "actor": PPOActorNetwork(inputShape, n_outputs).to(self.device),
+            "critic": PPOCriticNetwork(inputShape, n_outputs).to(self.device)
+        }
 
     def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
         action = PredictedAction()
-        network.eval()
+        network["actor"].eval()
         with torch.no_grad():
             state = torch.FloatTensor([state]).to(self.device)
-            prediction = network.getPolicy(state).squeeze(0)
+            prediction = network["actor"](state).squeeze(0)
             action.prediction = prediction.cpu().detach().numpy()
             handler = PredictionHandler(action.prediction, mask)
             action.index = handler.getRandomAction() if isTraining else handler.getBestAction()
-
+            # print(prediction, action.index)
             # if isTraining:
             #     action.index = torch.distributions.Categorical(probs=prediction).sample().item()
             # else:
@@ -308,17 +376,16 @@ class PPOAlgo(Algo):
         return advantages
 
     def learn(self, network: Network, memory):
-        network.train()
-
+        network["actor"].train()
+        network["critic"].train()
 
         states = np.array([x.state for x in memory])
         states = torch.FloatTensor(states).to(self.device)
-
+        
         # test
-        # result = network(torch.zeros_like(states[0]).to(self.device).unsqueeze(0))
+        # result = network["actor"](torch.zeros_like(states[0]).to(self.device).unsqueeze(0))
         # print(result)
 
-        
         actions = np.array([x.action.index for x in memory])
         actions = torch.LongTensor(actions).to(self.device)
         
@@ -327,23 +394,25 @@ class PPOAlgo(Algo):
         dones = np.array([x.done for x in memory])
         rewards = np.array([x.reward for x in memory])
         real_probs = torch.distributions.Categorical(probs=predictions).log_prob(actions)
-
+        
         lastValue = 0
-        if not dones[-1]:
-            nextStates = np.array([x.nextState for x in memory])
-            lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
-            lastValue = network.getValue(lastState).item()
+        lastMemory = memory[-1]
+        if not lastMemory.done:
+            lastState = torch.FloatTensor([lastMemory.nextState]).to(self.device)
+            lastValue = network["critic"](lastState).item()
         targetValues = self.getDiscountedRewards(rewards, dones, lastValue)
         targetValues = torch.FloatTensor(targetValues).to(self.device)
         # targetValues = Function.normalize(targetValues)
-
+        # print(targetValues)
         lossList = []
-        for _ in range(1):
+        for _ in range(3):
 
-            action_probs, values = network(states)
+            action_probs = network["actor"](states)
+            values = network["critic"](states)
             values = values.squeeze(1)
 
-            advantages = targetValues - values
+            advantages = targetValues - values.detach()
+            # print(adv)
             # print(targetValues, values)
             # print(advantages)
             # advantages = self.getAdvantages(rewards, dones, values.cpu().detach().numpy(), lastValue)
@@ -358,22 +427,30 @@ class PPOAlgo(Algo):
             surr2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
 
             policy_loss = -torch.min(surr1, surr2).mean()  # Maximize Policy Loss (Rewards)
-            entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
+            # entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
             value_loss = F.mse_loss(values, targetValues)  # Minimize Value Loss (Distance to Target)
-            # loss = policy_loss + 0.01 * entropy_loss + 2 * value_loss
-            loss = policy_loss + 2 * value_loss
+            # loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
+            
+            # loss = policy_loss + 0.5 * value_loss
             # loss = 0.01 * entropy_loss + 1 * value_loss
             # print(policy_loss, entropy_loss, value_loss, loss)
-            
-            network.optimizer.zero_grad()
-            loss.backward()
+            network["actor"].optimizer.zero_grad()
+            policy_loss.backward()
             # Chip grad with norm
             # nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 10)
-            network.optimizer.step()
+            network["actor"].optimizer.step()
             
-            lossList.append(loss.item())
+            # print(policy_loss, entropy_loss, value_loss, loss)
+            network["critic"].optimizer.zero_grad()
+            value_loss.backward()
+            # Chip grad with norm
+            # nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 10)
+            network["critic"].optimizer.step()
+
+            lossList.append(policy_loss.item() + value_loss.item())
         # Report
-        network.version += 1
+        network["actor"].version += 1
+        network["critic"].version += 1
         return np.mean(lossList)
 
 class Base:
@@ -390,18 +467,21 @@ class Base:
 class Trainer(Base):
     def __init__(self, algo: Algo, env, conn):
         super().__init__(algo, env)
-        self.network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace).buildOptimizer(self.algo.policy.learningRate)
-        self.stateDictCache = None
-        self.stateDictCacheVersion = -1
+        self.network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace)
+        for network in self.network.values():
+            network.buildOptimizer(self.algo.policy.learningRate)
+        self.cache = {}
+        # self.stateDictCache = None
+        # self.stateDictCacheVersion = -1
         self.conn = conn
-        self.lastBroadcast = -1
+        self.lastBroadcast = {}
 
     def recv(self):
         while self.conn.poll():
             message = self.conn.recv()
             if isinstance(message, MemoryPush):
                 # print("Trainer: Received Memory Push")
-                if message.version >= self.network.version - self.algo.policy.versionTolerance:
+                if message.version >= self.network["actor"].version - self.algo.policy.versionTolerance:
                     # print("Tranier: To learn")
                     loss = self.learn(message.memory)
                     # print("Trainer: Loss = ", loss)
@@ -416,25 +496,30 @@ class Trainer(Base):
     def learn(self, memory):
         return self.algo.learn(self.network, memory)
 
-    def updateStateDict(self):
-        if self.stateDictCacheVersion != self.network.version:
-            stateDict = self.network.state_dict()
+    def updateStateDict(self, name):
+        network = self.network[name]
+        if not self.cache.get(name) or self.cache[name]["version"] != network.version:
+            stateDict = network.state_dict()
             for key, value in stateDict.items():
                 stateDict[key] = value.cpu().detach().numpy()
-            self.stateDictCache = stateDict
-            self.stateDictCacheVersion = self.network.version
+            self.cache[name] = {}
+            self.cache[name]["stateDict"] = stateDict
+            self.cache[name]["version"] = network.version
 
-    def getStateDict(self):
-        self.updateStateDict()
-        return self.stateDictCache
+    def getStateDict(self, name):
+        self.updateStateDict(name)
+        return self.cache[name]["stateDict"]
 
     def start(self):
         while True:
             self.recv()
-            if self.lastBroadcast < self.network.version:
-                self.conn.send(LastestInfo(self.getStateDict(), self.network.version))
-                self.lastBroadcast = self.network.version
-            time.sleep(0.1)
+            for name, network in self.network.items():
+                if self.lastBroadcast.get(name) is None or self.lastBroadcast[name] < network.version:
+                    # print("broadcasting", not self.lastBroadcast.get(name))
+                    self.conn.send(LastestInfo(name, self.getStateDict(name), network.version))
+                    self.lastBroadcast[name] = network.version
+                    # print(self.lastBroadcast[name], network.version)
+            # time.sleep(0.1)
 
 
 class Evaluator(Base):
@@ -443,35 +528,37 @@ class Evaluator(Base):
         self.delay = delay
         # self.algo.device = torch.device("cpu")
         self.network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace)
-        self.network.version = -1
+        for name, network in self.network.items():
+            network.version = -1
         self.conn = conn
         self.isRequesting = False
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
         self.report = None
 
-        self.lastestInfo = None
+        self.lastestInfo = {}
 
     def recv(self):
         while self.conn.poll():
             message = self.conn.recv()
             if isinstance(message, LastestInfo):
-                self.lastestInfo = message
+                self.lastestInfo[message.name] = message
 
     def applyNextNetwork(self):
-        if self.lastestInfo and self.lastestInfo.networkVersion > self.network.version:
-            stateDict = self.lastestInfo.networkStateDict
-            for key, value in stateDict.items():
-                stateDict[key] = torch.from_numpy(value)
-            self.network.load_state_dict(stateDict)
-            self.network.version = self.lastestInfo.networkVersion
-            self.memory.clear()
+
+        for name, network in self.network.items():
+            lastestInfo = self.lastestInfo.get(name)
+            if lastestInfo and lastestInfo.networkVersion > network.version:
+                stateDict = lastestInfo.networkStateDict
+                for key, value in stateDict.items():
+                    stateDict[key] = torch.from_numpy(value)
+                network.load_state_dict(stateDict)
+                network.version = lastestInfo.networkVersion
+                self.memory.clear()
             # print("Applied new network", self.network.version)
-            return True
-        return False
 
     def pushMemory(self):
         if self.isValidVersion():
-            self.conn.send(MemoryPush(self.memory, self.network.version))
+            self.conn.send(MemoryPush(self.memory, self.network["actor"].version))
         self.memory.clear()
 
     def commit(self, transition: Transition):
@@ -482,10 +569,10 @@ class Evaluator(Base):
             # self.applyNextNetwork()
         
     def isValidVersion(self):
-        return self.lastestInfo and self.network.version >= self.lastestInfo.networkVersion - self.algo.policy.versionTolerance
+        return self.lastestInfo and self.network["actor"].version >= self.lastestInfo["actor"].networkVersion - self.algo.policy.versionTolerance
 
     def checkVersion(self):
-        if not self.isValidVersion():
+        if self.algo.policy.networkUpdateStrategy == NetworkUpdateStrategy.Aggressive or not self.isValidVersion():
             self.applyNextNetwork()
         return self.isValidVersion()
 
@@ -540,7 +627,7 @@ class Agent:
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
-        n_workers = 4
+        n_workers = 1
         for i in range(n_workers):
             child = Child(i, self.createEvaluator).start()
             evaluators.append(child)

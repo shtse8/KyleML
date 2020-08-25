@@ -22,7 +22,8 @@ class GymGame(Game):
  
     def reset(self):
         self.state = self.game.reset()
-        self.state = np.einsum('ijk->kij', self.state)
+        if len(self.observationShape) == 3:
+            self.state = np.einsum('ijk->kij', self.state)
         self.reward = 0
         self.done = False
         return self.state
@@ -32,7 +33,8 @@ class GymGame(Game):
         
     def takeAction(self, action):
         self.state, self.reward, self.done, _ = self.game.step(action)
-        self.state = np.einsum('ijk->kij', self.state)
+        if len(self.observationShape) == 3:
+            self.state = np.einsum('ijk->kij', self.state)
         return super().takeAction(action)
         
     def render(self) -> None:

@@ -384,6 +384,9 @@ class Base:
     def init(self):
         raise NotImplementedError
 
+    def start(self):
+        raise NotImplementedError
+
 class Trainer(Base):
     def __init__(self, algo: Algo, env, conn):
         super().__init__(algo, env)
@@ -397,11 +400,16 @@ class Trainer(Base):
         while self.conn.poll():
             message = self.conn.recv()
             if isinstance(message, MemoryPush):
+                # print("Trainer: Received Memory Push")
                 if message.version >= self.network.version - self.algo.policy.versionTolerance:
+                    # print("Tranier: To learn")
                     loss = self.learn(message.memory)
+                    # print("Trainer: Loss = ", loss)
                     self.conn.send(LearnReport(loss, len(message.memory)))
                 else:
+                    # print("Tranier: To learn")
                     self.conn.send(LearnReport(0, 0, drops=len(message.memory)))
+                # print("Trainer: Sent Report")
             else:
                 raise Exception("Unknown Message")
 
@@ -481,7 +489,7 @@ class Evaluator(Base):
             self.applyNextNetwork()
         return self.isValidVersion()
 
-    def eval(self, isTraining=False):
+    def start(self, isTraining=False):
         while True:
             self.report = EpisodeReport().start()
             state = self.env.reset()
@@ -531,28 +539,30 @@ class Agent:
         print(f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
         evaluators = []
         # n_workers = mp.cpu_count() - 1
-        n_workers = mp.cpu_count() // 2
-        n_workers = 2
+        # n_workers = mp.cpu_count() // 2
+        n_workers = 4
         for i in range(n_workers):
             child = Child(i, self.createEvaluator).start()
             evaluators.append(child)
         trainer = Child(i, self.createTrainer).start()
         
         self.evaluators = np.array(evaluators)
-
-        lastBoardcast = -1
         self.epoch = Epoch(episodes).start()
         while True:
+            # print("Evaluators Poll")
             for evaluator in self.evaluators:
                 while evaluator.poll():
                     message = evaluator.recv()
                     if isinstance(message, MemoryPush):
+                        # print("Recived Memory Push")
                         trainer.send(message)
+                        # print("Forwarded")
                     elif isinstance(message, EpisodeReport):
                         self.epoch.add(message)
                     else:
                         raise Exception("Unknown Message")
-
+                    
+            # print("Trainer Poll")
             while trainer.poll():
                 message = trainer.recv()
                 if isinstance(message, LastestInfo):
@@ -584,7 +594,7 @@ class Agent:
         self.lastPrint = time.perf_counter()
 
     def createEvaluator(self, conn):
-        Evaluator(self.algo, self.env, conn).eval(self.isTraining)
+        Evaluator(self.algo, self.env, conn).start(self.isTraining)
 
     def createTrainer(self, conn):
         Trainer(self.algo, self.env, conn).start()

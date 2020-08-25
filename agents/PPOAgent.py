@@ -14,6 +14,7 @@ import torch.nn.functional as F
 import torch.optim.lr_scheduler as schedular
 import torch.multiprocessing as mp
 import math
+import multiprocessing
 # def init_layer(m):
 #     weight = m.weight.data
 #     weight.normal_(0, 1)
@@ -30,6 +31,14 @@ class LastestInfo(Message):
         self.networkStateDict = networkStateDict
         self.networkVersion = networkVersion
 
+class MemoryCollected(Message):
+    def __init__(self, count=1):
+        self.count = count
+
+class MemoryPull(Message):
+    def __init__(self):
+        super().__init__()
+
 class MemoryPush(Message):
     def __init__(self, memory, version):
         super().__init__()
@@ -38,7 +47,7 @@ class MemoryPush(Message):
 
 class NetworkPull(Message):
     def __init__(self):
-        pass
+        super().__init__()
 
 class NetworkPush(Message):
     def __init__(self, stateDict, version):
@@ -301,43 +310,52 @@ class PPOAlgo(Algo):
             lastValue = values[i]
         return advantages
 
+    def processMemory(self, network, memory):
+        dones = np.array([x.done for x in memory])
+        rewards = np.array([x.reward for x in memory])
+        lastValue = 0
+        lastMemory = memory[-1]
+        if not lastMemory.done:
+            lastState = torch.FloatTensor([lastMemory.nextState]).to(self.device)
+            lastValue = network.getValue(lastState).item()
+        newRewards = self.getDiscountedRewards(rewards, dones, lastValue)
+        for i, transition in enumerate(memory):
+            transition.reward = newRewards[i]
+
     def learn(self, network: Network, memory):
         network.train()
-
 
         states = np.array([x.state for x in memory])
         states = torch.FloatTensor(states).to(self.device)
 
-        # test
-        # result = network(torch.zeros_like(states[0]).to(self.device).unsqueeze(0))
-        # print(result)
-
-        
         actions = np.array([x.action.index for x in memory])
         actions = torch.LongTensor(actions).to(self.device)
         
         predictions = np.array([x.action.prediction for x in memory])
-        predictions = torch.FloatTensor(predictions).to(self.device).detach()
-        dones = np.array([x.done for x in memory])
-        rewards = np.array([x.reward for x in memory])
+        predictions = torch.FloatTensor(predictions).to(self.device)
         real_probs = torch.distributions.Categorical(probs=predictions).log_prob(actions)
 
-        lastValue = 0
-        if not dones[-1]:
-            nextStates = np.array([x.nextState for x in memory])
-            lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
-            lastValue = network.getValue(lastState).item()
-        targetValues = self.getDiscountedRewards(rewards, dones, lastValue)
-        targetValues = torch.FloatTensor(targetValues).to(self.device)
+        # dones = np.array([x.done for x in memory])
+        rewards = np.array([x.reward for x in memory])
+        rewards = torch.FloatTensor(rewards).to(self.device)
+        
+
+        # lastValue = 0
+        # if not dones[-1]:
+        #     nextStates = np.array([x.nextState for x in memory])
+        #     lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
+        #     lastValue = network.getValue(lastState).item()
+        # targetValues = self.getDiscountedRewards(rewards, dones, lastValue)
+        # targetValues = torch.FloatTensor(targetValues).to(self.device)
         # targetValues = Function.normalize(targetValues)
 
         lossList = []
-        for _ in range(10):
+        for _ in range(1):
 
             action_probs, values = network(states)
             values = values.squeeze(1)
 
-            advantages = targetValues - values
+            advantages = rewards - values
             # print(targetValues, values)
             # print(advantages)
             # advantages = self.getAdvantages(rewards, dones, values.cpu().detach().numpy(), lastValue)
@@ -352,9 +370,9 @@ class PPOAlgo(Algo):
             surr2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
 
             policy_loss = -torch.min(surr1, surr2).mean()  # Maximize Policy Loss (Rewards)
-            entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
-            value_loss = F.mse_loss(values, targetValues)  # Minimize Value Loss (Distance to Target)
-            loss = policy_loss + 0.01 * entropy_loss + 2 * value_loss
+            # entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
+            value_loss = F.mse_loss(values, rewards)  # Minimize Value Loss (Distance to Target)
+            loss = policy_loss + 2 * value_loss
             # loss = 0.01 * entropy_loss + 1 * value_loss
             # print(policy_loss, entropy_loss, value_loss, loss)
             
@@ -412,58 +430,46 @@ class Evaluator(Base):
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
         self.report = None
 
-        self.lastestInfo = None
+        self.shouldRun = False
 
-    def recv(self):
-        while self.conn.poll():
-            message = self.conn.recv()
-            if isinstance(message, LastestInfo):
-                self.lastestInfo = message
-
-    def applyNextNetwork(self):
-        if self.lastestInfo and self.lastestInfo.networkVersion > self.network.version:
-            stateDict = self.lastestInfo.networkStateDict
+    def waitForNewNetwork(self):
+        message = self.conn.recv()
+        if isinstance(message, LastestInfo):
+            # print("Received new network")
+            stateDict = message.networkStateDict
             for key, value in stateDict.items():
                 stateDict[key] = torch.from_numpy(value)
             self.network.load_state_dict(stateDict)
-            self.network.version = self.lastestInfo.networkVersion
+            self.network.version = message.networkVersion
             self.memory.clear()
-            return True
-        return False
+            self.shouldRun = True
 
     def pushMemory(self):
-        if self.isValidVersion():
+        if len(self.memory) > 0:
+            self.algo.processMemory(self.network, self.memory)
             self.conn.send(MemoryPush(self.memory, self.network.version))
-        self.memory.clear()
+            self.memory.clear()
 
     def commit(self, transition: Transition):
         self.report.rewards += transition.reward
         self.memory.append(transition)
-        if len(self.memory) >= self.algo.policy.batchSize:
-            self.pushMemory()
-            self.applyNextNetwork()
-        
-    def isValidVersion(self):
-        return self.lastestInfo and self.network.version >= self.lastestInfo.networkVersion - self.algo.policy.versionTolerance
 
-    def checkVersion(self):
-        if self.lastestInfo and not self.isValidVersion():
-            self.applyNextNetwork()
+        self.conn.send(MemoryCollected())
+        message = self.conn.recv()
+        if isinstance(message, MemoryPull):
+            # print("Received memory pull")
+            self.pushMemory()
+            # wait for new network
+            self.waitForNewNetwork()
 
     def eval(self, isTraining=False):
-        # Wait for first broadcast
-        while not self.lastestInfo:
-            self.recv()
-        self.applyNextNetwork()
-
+        self.waitForNewNetwork()
         while True:
             self.report = EpisodeReport().start()
             state = self.env.reset()
             done: bool = False
             while not done:
-                self.recv()
-                self.checkVersion()
-                
+                # make a new step on env
                 actionMask = np.ones(self.env.actionSpace)
                 while True:
                     action = self.algo.getAction(self.network, state, actionMask, isTraining)
@@ -472,6 +478,8 @@ class Evaluator(Base):
                         break
                     actionMask[action.index] = 0
                 transition = Transition(state, action, reward, nextState, done)
+
+                # commit to memory
                 self.commit(transition)
                 if self.delay > 0:
                     time.sleep(self.delay)
@@ -484,6 +492,10 @@ class Agent:
         self.algo = algo
         self.env = env
         self.history = []
+
+    def broadcast(self, message):
+        for evaluator in self.evaluators:
+            evaluator.send(message)
 
     def run(self, train: bool = True, episodes: int = 10000, delay: float = 0) -> None:
         self.delay = delay
@@ -499,48 +511,91 @@ class Agent:
         print(f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
         evaluators = []
         # n_workers = mp.cpu_count() - 1
-        # n_workers = mp.cpu_count() // 2
-        n_workers = 1
+        n_workers = mp.cpu_count() // 2
+        n_workers = 4
         for i in range(n_workers):
             child = Child(i, self.createEvaluator).start()
             evaluators.append(child)
         
         self.evaluators = np.array(evaluators)
 
+
+        pulling = False
         lastBoardcast = -1
         trainer = Trainer(self.algo, self.env)
         self.epoch = Epoch(episodes).start()
+        memory = collections.deque(maxlen=self.algo.policy.batchSize)
+        message = LastestInfo(trainer.getStateDict(), trainer.network.version)
+        self.broadcast(message)
+        lastLearn = time.perf_counter()
+        totalMemoryCount = 0
         while True:
+            # conns = multiprocessing.connection.wait([e.conn for e in self.evaluators], 0)
             for evaluator in self.evaluators:
                 while evaluator.poll():
                     message = evaluator.recv()
-                    if isinstance(message, MemoryPush):
-                        # print(evaluator.id, "memory received.", message.version, trainer.network.version, message.version >= trainer.network.version - trainer.algo.policy.versionTolerance)
-                        if message.version >= trainer.network.version - trainer.algo.policy.versionTolerance:
-                            loss = trainer.learn(message.memory)
-                            self.epoch.trained(loss, len(message.memory))
-                            self.totalSteps += len(message.memory)
-                            if self.epoch.isEnd:
-                                self.update()
-                                print()
-                                self.epoch = Epoch(episodes).start()
-                                self.epochs += 1
+                    if isinstance(message, MemoryCollected):
+                        totalMemoryCount += message.count
+                        evaluator.n_memory += message.count
+                        # print("MemoryCollected", evaluator.id, totalMemoryCount, evaluator.n_memory)
+                        # print(evaluator.id, evaluator.n_memory)
+                        # totalMemoryCount = np.sum([e.n_memory for e in self.evaluators])
+                        if totalMemoryCount >= self.algo.policy.batchSize:
+                            if not pulling:
+                                pulling = True
+                                for e in self.evaluators:
+                                    e.pulling = True
+                            # print("pull", evaluator.id, evaluator.n_memory)
+                            evaluator.send(MemoryPull())
                         else:
-                            self.epoch.drops += len(message.memory)
-                            # print("memory is dropped.", message.version, trainer.network.version)
-                        # print("learnt", loss)
+                            evaluator.send(Message())
+
+                    elif isinstance(message, MemoryPush):
+                        oldLen = len(memory)
+                        if len(memory) < self.algo.policy.batchSize and message.version == trainer.network.version:
+                            memory.extend(message.memory)
+                        # print(evaluator.id, evaluator.n_memory, len(message.memory), oldLen, len(memory), message.version == trainer.network.version)
+                        evaluator.n_memory = 0
+                        evaluator.pulling = False
+                        if not any([e.pulling for e in self.evaluators]):
+                            pulling = False
                     elif isinstance(message, EpisodeReport):
                         self.epoch.add(message)
                     else:
                         raise Exception("Unknown Message")
 
             # Boardcast
-            if lastBoardcast < trainer.network.version:
-                # print("broadcast", trainer.network.version)
+            # if not pulling:
+            #     totalMemoryCount = np.sum([e.n_memory for e in self.evaluators])
+            #     if totalMemoryCount > self.algo.policy.batchSize:
+            #         pulling = True
+            #         # print("totalMemoryCount", totalMemoryCount)
+            #         self.broadcast(MemoryPull())
+            # totalMemoryCount = np.array([e.pulling for e in self.evaluators]).all()
+            # print([e.pulling for e in self.evaluators])
+            if not pulling and len(memory) >= self.algo.policy.batchSize:
+                # print("Collect", time.perf_counter() - lastLearn)
+                tic = time.perf_counter()
+                pulling = False
+                # print("Learn")
+                # tic2 = time.perf_counter()
+                loss = trainer.learn(memory)
+                # print(time.perf_counter() - tic2)
+                self.epoch.trained(loss, len(memory))
+                self.totalSteps += len(memory)
+                memory.clear()
+                totalMemoryCount = 0
+                # print("memory clear")
+                if self.epoch.isEnd:
+                    self.update()
+                    print()
+                    self.epoch = Epoch(episodes).start()
+                    self.epochs += 1
                 message = LastestInfo(trainer.getStateDict(), trainer.network.version)
-                for evaluator in self.evaluators:
-                    evaluator.send(message)
-                lastBoardcast = trainer.network.version
+                self.broadcast(message)
+                lastLearn = time.perf_counter()
+                # print("Learn", time.perf_counter() - tic)
+
 
             if time.perf_counter() - self.lastPrint > .1:
                 self.update()
@@ -567,6 +622,8 @@ class Child:
         self.target = target
         self.args = args
         self.conn = None
+        self.n_memory = 0
+        self.pulling = False
 
     def start(self):
         self.conn, child_conn = mp.Pipe(True)

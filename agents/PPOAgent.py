@@ -1,5 +1,6 @@
 import sys
 import time
+from enum import Enum
 import numpy as np
 import collections
 from memories.SimpleMemory import SimpleMemory
@@ -24,6 +25,10 @@ import math
 class Message:
     def __init__(self):
         pass
+
+class NetworkUpdateStrategy(Enum):
+    Aggressive = 1
+    Lazy = 2
 
 class LastestInfo(Message):
     def __init__(self, networkStateDict, networkVersion):
@@ -228,18 +233,19 @@ class PPONetwork(Network):
         return self.value(output)
 
 class Policy:
-    def __init__(self, batchSize, learningRate, versionTolerance):
+    def __init__(self, batchSize, learningRate, versionTolerance, networkUpdateStrategy):
         self.batchSize = batchSize
         self.versionTolerance = versionTolerance
         self.learningRate = learningRate
+        self.networkUpdateStrategy = networkUpdateStrategy
 
 class OnPolicy(Policy):
     def __init__(self, batchSize, learningRate):
-        super().__init__(batchSize, learningRate, 0)
+        super().__init__(batchSize, learningRate, 0, NetworkUpdateStrategy.Aggressive)
         
 class OffPolicy(Policy):
     def __init__(self, batchSize, learningRate):
-        super().__init__(batchSize, learningRate, math.inf)
+        super().__init__(batchSize, learningRate, math.inf, NetworkUpdateStrategy.Lazy)
 
 class Algo:
     def __init__(self, policy: Policy):
@@ -263,8 +269,9 @@ class PPOAlgo(Algo):
         super().__init__(Policy(
             batchSize=32,
             learningRate=0.0001,
-            versionTolerance=4))
-        self.gamma = 0.9
+            versionTolerance=9,
+            networkUpdateStrategy=NetworkUpdateStrategy.Aggressive))
+        self.gamma = 0.99
         self.epsClip = 0.2
 
     # def createMemory(self, len):
@@ -337,44 +344,40 @@ class PPOAlgo(Algo):
         targetValues = torch.FloatTensor(targetValues).to(self.device)
         # targetValues = Function.normalize(targetValues)
 
-        lossList = []
-        for _ in range(1):
+        action_probs, values = network(states)
+        values = values.squeeze(1)
 
-            action_probs, values = network(states)
-            values = values.squeeze(1)
+        # advantages = targetValues - values.detach()
+        # print(targetValues, values)
+        # print(advantages)
+        advantages = self.getAdvantages(rewards, dones, values.cpu().detach().numpy(), lastValue)
+        advantages = torch.FloatTensor(advantages).to(self.device)
+        # print(advantages)
+        # targetValues = advantages + values
+        # advantages = Function.normalize(advantages)
 
-            advantages = targetValues - values
-            # print(targetValues, values)
-            # print(advantages)
-            # advantages = self.getAdvantages(rewards, dones, values.cpu().detach().numpy(), lastValue)
-            # advantages = torch.FloatTensor(advantages).to(self.device)
-            # print(advantages)
-            # targetValues = advantages + values
-            # advantages = Function.normalize(advantages)
+        dist = torch.distributions.Categorical(probs=action_probs)
+        ratios = torch.exp(dist.log_prob(actions) - real_probs)  # porb1 / porb2 = exp(log(prob1) - log(prob2))
+        surr1 = ratios * advantages
+        surr2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
 
-            dist = torch.distributions.Categorical(probs=action_probs)
-            ratios = torch.exp(dist.log_prob(actions) - real_probs)  # porb1 / porb2 = exp(log(prob1) - log(prob2))
-            surr1 = ratios * advantages
-            surr2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
-
-            policy_loss = -torch.min(surr1, surr2).mean()  # Maximize Policy Loss (Rewards)
-            entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
-            value_loss = F.mse_loss(values, targetValues)  # Minimize Value Loss (Distance to Target)
-            # loss = policy_loss + 0.01 * entropy_loss + 2 * value_loss
-            loss = policy_loss + 2 * value_loss
-            # loss = 0.01 * entropy_loss + 1 * value_loss
-            # print(policy_loss, entropy_loss, value_loss, loss)
-            
-            network.optimizer.zero_grad()
-            loss.backward()
-            # Chip grad with norm
-            # nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 10)
-            network.optimizer.step()
-            
-            lossList.append(loss.item())
+        policy_loss = -torch.min(surr1, surr2).mean()  # Maximize Policy Loss (Rewards)
+        entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
+        value_loss = F.mse_loss(values, targetValues)  # Minimize Value Loss (Distance to Target)
+        loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
+        # loss = policy_loss + 2 * value_loss
+        # loss = 0.01 * entropy_loss + 1 * value_loss
+        # print(policy_loss, entropy_loss, value_loss, loss)
+        
+        network.optimizer.zero_grad()
+        loss.backward()
+        # Chip grad with norm
+        nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
+        network.optimizer.step()
+        
         # Report
         network.version += 1
-        return np.mean(lossList)
+        return np.mean(loss.item())
 
 class Base:
     def __init__(self, algo: Algo, env):
@@ -402,6 +405,8 @@ class Trainer(Base):
             if isinstance(message, MemoryPush):
                 # print("Trainer: Received Memory Push")
                 if message.version >= self.network.version - self.algo.policy.versionTolerance:
+                    # if message.version == self.network.version:
+                    # print(self.network.version - message.version)
                     # print("Tranier: To learn")
                     loss = self.learn(message.memory)
                     # print("Trainer: Loss = ", loss)
@@ -434,7 +439,7 @@ class Trainer(Base):
             if self.lastBroadcast < self.network.version:
                 self.conn.send(LastestInfo(self.getStateDict(), self.network.version))
                 self.lastBroadcast = self.network.version
-            time.sleep(0.1)
+            # time.sleep(0.1)
 
 
 class Evaluator(Base):
@@ -485,7 +490,7 @@ class Evaluator(Base):
         return self.lastestInfo and self.network.version >= self.lastestInfo.networkVersion - self.algo.policy.versionTolerance
 
     def checkVersion(self):
-        if not self.isValidVersion():
+        if self.algo.policy.networkUpdateStrategy == NetworkUpdateStrategy.Aggressive or not self.isValidVersion():
             self.applyNextNetwork()
         return self.isValidVersion()
 

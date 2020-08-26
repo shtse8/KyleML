@@ -1,5 +1,6 @@
-import multiprocessing.connection as conns
-conns.BUFSIZE = 2 ** 20
+import multiprocessing.connection
+multiprocessing.connection.BUFSIZE = 2 ** 24
+# print(multiprocessing.connection.BUFSIZE)
 
 import sys
 import time
@@ -431,12 +432,14 @@ class Evaluator(Base):
         self.report = None
 
         self.lastestNetworkInfo = None
+        self.waiting = True
 
     def recv(self):
         while self.conn.poll():
             message = self.conn.recv()
             if isinstance(message, NetworkInfo):
                 self.lastestNetworkInfo = message
+                self.waiting = False
 
     def applyNextNetwork(self):
         if self.lastestNetworkInfo and self.network.isNewer(self.lastestNetworkInfo):
@@ -450,6 +453,7 @@ class Evaluator(Base):
         if self.isValidVersion():
             self.conn.send(MemoryPush(self.memory, self.network.version))
         self.memory.clear()
+        self.waiting = True
         # time.sleep(0.1)
 
     def commit(self, transition: Transition):
@@ -474,7 +478,7 @@ class Evaluator(Base):
             done: bool = False
             while not done:
                 self.recv()
-                if not self.checkVersion():
+                if self.waiting or not self.checkVersion():
                     time.sleep(0.01)
                     continue
 

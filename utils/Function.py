@@ -1,6 +1,7 @@
 import sys
 import torch
 import math
+import pickle
 
 #   數組為正態分佈
 #   計算出最後每個數值的標準差
@@ -41,3 +42,6 @@ def humanizeTime(value):
         timeStr += f"{(value % 3600) // 60:>2.0f}m"
     timeStr += f"{value % 60 // 1:>2.0f}s"
     return timeStr.strip()
+
+def getSize(obj):
+    return len(pickle.dumps(obj))

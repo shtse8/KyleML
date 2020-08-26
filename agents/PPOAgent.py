@@ -1,3 +1,6 @@
+import multiprocessing.connection as conns
+conns.BUFSIZE = 2 ** 20
+
 import sys
 import time
 from enum import Enum
@@ -15,6 +18,7 @@ import torch.nn.functional as F
 import torch.optim.lr_scheduler as schedular
 import torch.multiprocessing as mp
 import math
+
 # def init_layer(m):
 #     weight = m.weight.data
 #     weight.normal_(0, 1)
@@ -151,6 +155,7 @@ class Network(nn.Module):
 
     def _updateStateDict(self):
         if self.info is None or self.info.version != self.version:
+            # print("Update Cache", self.version)
             stateDict = self.state_dict()
             for key, value in stateDict.items():
                 stateDict[key] = value.cpu().detach().numpy()
@@ -253,7 +258,7 @@ class Algo:
     def createNetwork(self) -> Network:
         raise NotImplementedError
 
-    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, isTraining: bool) -> PredictedAction:
         raise NotImplementedError
 
     def learn(self, network: Network, memory):
@@ -273,20 +278,17 @@ class PPOAlgo(Algo):
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs).to(self.device)
 
-    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, isTraining: bool) -> PredictedAction:
         action = PredictedAction()
         network.eval()
         with torch.no_grad():
             state = torch.FloatTensor([state]).to(self.device)
             prediction = network.getPolicy(state).squeeze(0)
             action.prediction = prediction.cpu().detach().numpy()
-            handler = PredictionHandler(action.prediction, mask)
-            action.index = handler.getRandomAction() if isTraining else handler.getBestAction()
-
-            # if isTraining:
-            #     action.index = torch.distributions.Categorical(probs=prediction).sample().item()
-            # else:
-            #     action.index = prediction.argmax().item()
+            if isTraining:
+                action.index = torch.distributions.Categorical(probs=prediction).sample().item()
+            else:
+                action.index = prediction.argmax().item()
             return action
 
     # Discounted Rewards (N-steps)
@@ -367,7 +369,7 @@ class PPOAlgo(Algo):
 
         # Report
         network.version += 1
-        return np.mean(loss.item())
+        return loss.item()
 
 
 class Base:
@@ -377,25 +379,54 @@ class Base:
 
 
 class Trainer(Base):
-    def __init__(self, algo: Algo, env):
+    def __init__(self, algo: Algo, env, conn):
         super().__init__(algo, env)
         self.network = self.algo.createNetwork(
             self.env.observationShape, self.env.actionSpace).buildOptimizer(self.algo.policy.learningRate)
+        self.conn = conn
+        self.lastBroadcast = None
+        self.memoryPushBuffer = collections.deque(maxlen=1000)
 
-    def learn(self, memory):
-        return self.algo.learn(self.network, memory)
+    def recv(self):
+        while self.conn.poll():
+            message = self.conn.recv()
+            if isinstance(message, MemoryPush):
+                self.memoryPushBuffer.append(message)
+
+    def learn(self):
+        while len(self.memoryPushBuffer):
+            message = self.memoryPushBuffer.popleft()
+            steps = len(message.memory)
+            if message.version >= self.network.version - self.algo.policy.versionTolerance:
+                loss = self.algo.learn(self.network, message.memory)
+                self.conn.send(LearnReport(loss, steps, 0))
+            else:
+                self.conn.send(LearnReport(0, 0, steps))
+
+    def pushNewNetwork(self):
+        if self.lastBroadcast is None or self.lastBroadcast.version < self.network.version:
+            networkInfo = self.network.getInfo()
+            self.conn.send(networkInfo)
+            self.lastBroadcast = networkInfo
+
+    def start(self, isTraining=False):
+        while True:
+            self.recv()
+            self.learn()
+            self.pushNewNetwork()
 
 
 class Evaluator(Base):
-    def __init__(self, algo: Algo, env, conn, delay=0):
+    def __init__(self, id, algo: Algo, env, conn, delay=0):
         super().__init__(algo, env.getNew())
+        self.id = id
         self.delay = delay
         # self.algo.device = torch.device("cpu")
         self.network = self.algo.createNetwork(
             self.env.observationShape, self.env.actionSpace)
         self.network.version = -1
         self.conn = conn
-        self.isRequesting = False
+        
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
         self.report = None
 
@@ -419,6 +450,7 @@ class Evaluator(Base):
         if self.isValidVersion():
             self.conn.send(MemoryPush(self.memory, self.network.version))
         self.memory.clear()
+        # time.sleep(0.1)
 
     def commit(self, transition: Transition):
         self.report.rewards += transition.reward
@@ -443,17 +475,11 @@ class Evaluator(Base):
             while not done:
                 self.recv()
                 if not self.checkVersion():
-                    time.sleep(0.1)
+                    time.sleep(0.01)
                     continue
 
-                actionMask = np.ones(self.env.actionSpace)
-                while True:
-                    action = self.algo.getAction(
-                        self.network, state, actionMask, isTraining)
-                    nextState, reward, done = self.env.takeAction(action.index)
-                    if not (nextState == state).all():
-                        break
-                    actionMask[action.index] = 0
+                action = self.algo.getAction(self.network, state, isTraining)
+                nextState, reward, done = self.env.takeAction(action.index)
                 transition = Transition(state, action, reward, nextState, done)
                 self.commit(transition)
                 if self.delay > 0:
@@ -469,6 +495,12 @@ class Agent:
         self.env = env
         self.history = []
 
+        self.totalEpisodes = 0
+        self.totalSteps = 0
+        self.epochs = 1
+        self.dropped = 0
+        self.lastPrint = 0
+        
     def broadcast(self, message):
         for evaluator in self.evaluators:
             evaluator.send(message)
@@ -476,90 +508,77 @@ class Agent:
     def run(self, train: bool = True, episodes: int = 10000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
-        self.lastPrint = time.perf_counter()
-        self.totalEpisodes = 0
-        self.totalSteps = 0
-        self.epochs = 1
-        self.dropped = 0
-
         # mp.set_start_method("spawn")
+
         # Create Evaluators
-        print(
-            f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
+        print(f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
+
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
         n_workers = 4
         for i in range(n_workers):
-            child = Child(i, self.createEvaluator).start()
-            evaluators.append(child)
+            evaluator = EvaluatorProcess(i, self.algo, self.env, self.isTraining).start()
+            evaluators.append(evaluator)
 
-        trainer = Trainer(self.algo, self.env)
-
-        lastBroadcast = None
         self.evaluators = np.array(evaluators)
+        trainer = TrainerProcess(self.algo, self.env).start()
         self.epoch = Epoch(episodes).start()
         while True:
+            self.update()
+
             # print("Evaluators Poll")
             for evaluator in self.evaluators:
-                while evaluator.poll():
+                if evaluator.poll():
                     message = evaluator.recv()
                     if isinstance(message, MemoryPush):
-                        # print("Trainer: Received Memory Push")
-                        steps = len(message.memory)
-                        if message.version >= trainer.network.version - self.algo.policy.versionTolerance:
-                            loss = trainer.learn(message.memory)
-                            self.epoch.trained(loss, steps)
-                            self.totalSteps += steps
-                            if self.epoch.isEnd:
-                                self.update()
-                                print()
-                                self.epoch = Epoch(episodes).start()
-                                self.epochs += 1
-                        else:
-                            self.epoch.drops += steps
+                        trainer.send(message)
                     elif isinstance(message, EnvReport):
                         self.epoch.add(message)
                     else:
                         raise Exception("Unknown Message")
 
-            networkInfo = trainer.network.getInfo()
-            if lastBroadcast is None or lastBroadcast.version < networkInfo.version:
-                self.broadcast(networkInfo)
-                lastBroadcast = networkInfo
+            if trainer.poll():
+                message = trainer.recv()
+                if isinstance(message, NetworkInfo):
+                    self.broadcast(message)
+                elif isinstance(message, LearnReport):
+                    if message.steps > 0:
+                        self.epoch.trained(message.loss, message.steps)
+                        self.totalSteps += message.steps
+                        if self.epoch.isEnd:
+                            self.update(0)
+                            print()
+                            self.epoch = Epoch(episodes).start()
+                            self.epochs += 1
+                    else:
+                        self.epoch.drops += message.drops
 
-            if time.perf_counter() - self.lastPrint > .1:
-                self.update()
-
-    def update(self) -> None:
+    def update(self, freq=.1) -> None:
+        if time.perf_counter() - self.lastPrint < freq:
+            return
         print(f"#{self.epochs} {Function.humanize(self.epoch.episodes):>6} {self.epoch.hitRate:>7.2%} | " +
               f'Loss: {Function.humanize(self.epoch.loss):>6}/ep | ' +
               f'Best: {Function.humanize(self.epoch.bestRewards):>6}, Avg: {Function.humanize(self.epoch.avgRewards):>6} | ' +
               f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>5}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
               f' {Function.humanizeTime(self.epoch.duration):>5} > {Function.humanizeTime(self.epoch.estimateDuration):}' +
-              '                                 ',
+              '      ',
               end="\b\r")
         self.lastPrint = time.perf_counter()
 
-    def createEvaluator(self, conn):
-        Evaluator(self.algo, self.env, conn).start(self.isTraining)
-
-    def createTrainer(self, conn):
-        Trainer(self.algo, self.env, conn).start()
-
-
-class Child:
-    def __init__(self, id, target, args=()):
-        self.id = id
+class PipedProcess:
+    def __init__(self):
         self.process = None
-        self.target = target
-        self.args = args
         self.conn = None
+        self.started = False
 
     def start(self):
+        if self.started:
+            raise Exception("Process is started")
+
+        self.started = True
         self.conn, child_conn = mp.Pipe(True)
-        self.process = mp.Process(
-            target=self.target, args=self.args + (child_conn,))
+        self.process = mp.Process(target=self.run, args=(child_conn,))
         self.process.start()
         return self
 
@@ -569,5 +588,29 @@ class Child:
     def recv(self):
         return self.conn.recv()
 
-    def send(self, object):
-        return self.conn.send(object)
+    def send(self, obj):
+        return self.conn.send(obj)
+
+    def run(self, conn):
+        pass
+
+
+class EvaluatorProcess(PipedProcess):
+    def __init__(self, id, algo, env, isTraining):
+        super().__init__()
+        self.id = id
+        self.algo = algo
+        self.env = env
+        self.isTraining = isTraining
+
+    def run(self, conn):
+        Evaluator(self.id, self.algo, self.env, conn).start(self.isTraining)
+
+class TrainerProcess(PipedProcess):
+    def __init__(self, algo, env):
+        super().__init__()
+        self.algo = algo
+        self.env = env
+
+    def run(self, conn):
+        Trainer(self.algo, self.env, conn).start()

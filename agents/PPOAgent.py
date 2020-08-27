@@ -426,6 +426,7 @@ class Trainer(Base):
     def __init__(self, algo: Algo, env, sync, conn):
         super().__init__(algo, env)
         # self.algo.device = torch.device("cpu")
+        self.algo.device = sync.getDevice()
         self.network = self.algo.createNetwork(
             self.env.observationShape, self.env.actionSpace).buildOptimizer(self.algo.policy.learningRate)
         self.conn = conn
@@ -464,6 +465,7 @@ class Evaluator(Base):
         self.id = id
         self.delay = delay
         # self.algo.device = torch.device("cpu")
+        self.algo.device = sync.getDevice()
         self.network = self.algo.createNetwork(
             self.env.observationShape, self.env.actionSpace)
         self.network.version = -1

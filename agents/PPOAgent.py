@@ -216,7 +216,7 @@ class Network(nn.Module):
             # print("Update Cache", self.version)
             stateDict = self.state_dict()
             for key, value in stateDict.items():
-                stateDict[key] = value.cpu().detach().numpy()
+                stateDict[key] = value.cpu() #.detach().numpy()
             self.info = NetworkInfo(stateDict, self.version)
 
     def getInfo(self) -> NetworkInfo:
@@ -225,8 +225,8 @@ class Network(nn.Module):
 
     def loadInfo(self, info: NetworkInfo):
         stateDict = info.stateDict
-        for key, value in stateDict.items():
-            stateDict[key] = torch.from_numpy(value)
+        # for key, value in stateDict.items():
+        #     stateDict[key] = torch.from_numpy(value)
         self.load_state_dict(stateDict)
         self.version = info.version
 
@@ -423,7 +423,7 @@ class Base:
 
 
 class Trainer(Base):
-    def __init__(self, algo: Algo, env, conn):
+    def __init__(self, algo: Algo, env, sync, conn):
         super().__init__(algo, env)
         # self.algo.device = torch.device("cpu")
         self.network = self.algo.createNetwork(
@@ -432,37 +432,34 @@ class Trainer(Base):
         self.lastBroadcast = None
         self.memoryPushBuffer = collections.deque(maxlen=1000)
 
-    def recv(self):
-        while self.conn.poll():
-            message = self.conn.recv()
-            if isinstance(message, MemoryPush):
-                self.memoryPushBuffer.append(message)
+        self.sync = sync
 
     def learn(self):
-        while len(self.memoryPushBuffer):
-            message = self.memoryPushBuffer.popleft()
+        while not self.sync.memoryQueue.empty():
+            message = self.sync.memoryQueue.get()
             steps = len(message.memory)
             if message.version >= self.network.version - self.algo.policy.versionTolerance:
                 loss = self.algo.learn(self.network, message.memory)
-                self.conn.send(LearnReport(loss=loss, steps=steps))
+                report = LearnReport(loss=loss, steps=steps)
             else:
-                self.conn.send(LearnReport(drops=steps))
+                report = LearnReport(drops=steps)
+            self.sync.reportQueue.put(report)
 
     def pushNewNetwork(self):
         if self.lastBroadcast is None or self.lastBroadcast.version < self.network.version:
             networkInfo = self.network.getInfo()
-            self.conn.send(networkInfo)
+            self.sync.latestStateDict.update(networkInfo.stateDict)
+            self.sync.latestVersion.value = networkInfo.version
             self.lastBroadcast = networkInfo
 
     def start(self, isTraining=False):
         while True:
-            self.recv()
             self.learn()
             self.pushNewNetwork()
 
 
 class Evaluator(Base):
-    def __init__(self, id, algo: Algo, env, conn, delay=0):
+    def __init__(self, id, algo: Algo, env, sync, conn, delay=0):
         super().__init__(algo, env.getNew())
         self.id = id
         self.delay = delay
@@ -475,56 +472,39 @@ class Evaluator(Base):
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
         self.report = None
 
-        self.lastestNetworkInfo = None
-        self.waiting = True
-
-    def recv(self):
-        while self.conn.poll():
-            message = self.conn.recv()
-            if isinstance(message, NetworkInfo):
-                self.lastestNetworkInfo = message
-                self.waiting = False
-
-    def applyNextNetwork(self):
-        if self.lastestNetworkInfo and self.network.isNewer(self.lastestNetworkInfo):
-            self.network.loadInfo(self.lastestNetworkInfo)
-            self.memory.clear()
-            # print("Applied new network", self.network.version)
-            return True
-        return False
+        self.sync = sync
 
     def pushMemory(self):
         if self.isValidVersion():
-            self.conn.send(MemoryPush(self.memory, self.network.version))
-        self.memory.clear()
-        self.waiting = True
-        # time.sleep(0.1)
+            message = MemoryPush(self.memory, self.network.version)
+            self.sync.memoryQueue.put(message)
+        self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
+        self.updateNetwork()
 
     def commit(self, transition: Transition):
         self.report.rewards += transition.reward
         self.memory.append(transition)
         if len(self.memory) >= self.algo.policy.batchSize:
             self.pushMemory()
-            # self.applyNextNetwork()
 
     def isValidVersion(self):
-        return self.lastestNetworkInfo and self.network.version >= self.lastestNetworkInfo.version - self.algo.policy.versionTolerance
+        return self.network.version >= self.sync.latestVersion.value - self.algo.policy.versionTolerance
 
-    def checkVersion(self):
-        if self.algo.policy.networkUpdateStrategy == NetworkUpdateStrategy.Aggressive or not self.isValidVersion():
-            self.applyNextNetwork()
-        return self.isValidVersion()
+    def updateNetwork(self):
+        while self.sync.latestVersion == -1:
+            time.sleep(0.01)
+            
+        if self.network.version < self.sync.latestVersion.value:
+            networkInfo = NetworkInfo(self.sync.latestStateDict, self.sync.latestVersion.value)
+            self.network.loadInfo(networkInfo)
 
     def start(self, isTraining=False):
+        self.updateNetwork()
         while True:
             self.report = EnvReport()
             state = self.env.reset()
             done: bool = False
             while not done:
-                self.recv()
-                if self.waiting or not self.checkVersion():
-                    time.sleep(0.01)
-                    continue
                 action = self.algo.getAction(self.network, state, isTraining)
                 nextState, reward, done = self.env.takeAction(action.index)
                 transition = Transition(state, action, reward, nextState, done)
@@ -532,7 +512,7 @@ class Evaluator(Base):
                 if self.delay > 0:
                     time.sleep(self.delay)
                 state = nextState
-            self.conn.send(self.report)
+            self.sync.reportQueue.put(self.report)
 
 
 class Agent:
@@ -547,6 +527,8 @@ class Agent:
         self.epochs = 1
         self.dropped = 0
         self.lastPrint = 0
+
+        self.sync = SyncContext()
 
     def broadcast(self, message):
         for evaluator in self.evaluators:
@@ -564,34 +546,21 @@ class Agent:
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
-        n_workers = 4
+        n_workers = 2
         for i in range(n_workers):
             evaluator = EvaluatorProcess(
-                i, self.algo, self.env, self.isTraining).start()
+                i, self.algo, self.env, self.isTraining, self.sync).start()
             evaluators.append(evaluator)
 
         self.evaluators = np.array(evaluators)
-        trainer = TrainerProcess(self.algo, self.env).start()
+        trainer = TrainerProcess(self.algo, self.env, self.sync).start()
         self.epoch = Epoch(episodes).start()
         while True:
             self.update()
 
-            # print("Evaluators Poll")
-            for evaluator in self.evaluators:
-                if evaluator.poll():
-                    message = evaluator.recv()
-                    if isinstance(message, MemoryPush):
-                        trainer.send(message)
-                    elif isinstance(message, EnvReport):
-                        self.epoch.add(message)
-                    else:
-                        raise Exception("Unknown Message")
-
-            if trainer.poll():
-                message = trainer.recv()
-                if isinstance(message, NetworkInfo):
-                    self.broadcast(message)
-                elif isinstance(message, LearnReport):
+            while not self.sync.reportQueue.empty():
+                message = self.sync.reportQueue.get()
+                if isinstance(message, LearnReport):
                     if message.steps > 0:
                         self.epoch.trained(message.loss, message.steps)
                         self.totalSteps += message.steps
@@ -602,6 +571,8 @@ class Agent:
                             self.epochs += 1
                     else:
                         self.epoch.drops += message.drops
+                elif isinstance(message, EnvReport):
+                    self.epoch.add(message)
 
     def update(self, freq=.1) -> None:
         if time.perf_counter() - self.lastPrint < freq:
@@ -618,24 +589,44 @@ class Agent:
 
 
 class EvaluatorProcess(PipedProcess):
-    def __init__(self, id, algo, env, isTraining):
+    def __init__(self, id, algo, env, isTraining, sync):
         super().__init__()
         self.id = id
         self.algo = algo
         self.env = env
         self.isTraining = isTraining
+        self.sync = sync
 
     def run(self, conn):
         # print("Evaluator-" + str(self.id), os.getpid())
-        Evaluator(self.id, self.algo, self.env, conn).start(self.isTraining)
+        Evaluator(self.id, self.algo, self.env, self.sync, conn).start(self.isTraining)
 
 
 class TrainerProcess(PipedProcess):
-    def __init__(self, algo, env):
+    def __init__(self, algo, env, sync):
         super().__init__()
         self.algo = algo
         self.env = env
+        self.sync = sync
 
     def run(self, conn):
         # print("Trainer", os.getpid())
-        Trainer(self.algo, self.env, conn).start()
+        Trainer(self.algo, self.env, self.sync, conn).start()
+
+
+# thread safe
+class SyncContext:
+    def __init__(self):
+        self.latestStateDict = mp.Manager().dict()
+        self.latestVersion = mp.Value('i', -1)
+        self.memoryQueue = mp.Queue(maxsize=1000)
+        self.reportQueue = mp.Queue(maxsize=1000)
+        self.deviceIndex = mp.Value('i', 0)
+
+    def getDevice(self):
+        deviceName = "cpu"
+        if torch.cuda.is_available():
+            cudaId = self.deviceIndex.value % torch.cuda.device_count()
+            deviceName = "cuda:" + str(cudaId)
+            self.deviceIndex.value = self.deviceIndex.value + 1
+        return torch.device(deviceName)

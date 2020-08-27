@@ -17,11 +17,7 @@ from enum import Enum
 import time
 import sys
 import multiprocessing.connection
-from utils.PipedProcess import PipedProcess
-
-# print("BUFSIZE", multiprocessing.connection.BUFSIZE)
-
-# print(multiprocessing.connection.BUFSIZE)
+from utils.PipedProcess import Process
 
 
 # def init_layer(m):
@@ -423,13 +419,12 @@ class Base:
 
 
 class Trainer(Base):
-    def __init__(self, algo: Algo, env, sync, conn):
+    def __init__(self, algo: Algo, env, sync):
         super().__init__(algo, env)
         # self.algo.device = torch.device("cpu")
         self.algo.device = sync.getDevice()
         self.network = self.algo.createNetwork(
             self.env.observationShape, self.env.actionSpace).buildOptimizer(self.algo.policy.learningRate)
-        self.conn = conn
         self.lastBroadcast = None
         self.memoryPushBuffer = collections.deque(maxlen=1000)
 
@@ -460,7 +455,7 @@ class Trainer(Base):
 
 
 class Evaluator(Base):
-    def __init__(self, id, algo: Algo, env, sync, conn, delay=0):
+    def __init__(self, id, algo: Algo, env, sync, delay=0):
         super().__init__(algo, env.getNew())
         self.id = id
         self.delay = delay
@@ -469,7 +464,6 @@ class Evaluator(Base):
         self.network = self.algo.createNetwork(
             self.env.observationShape, self.env.actionSpace)
         self.network.version = -1
-        self.conn = conn
 
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
         self.report = None
@@ -540,7 +534,7 @@ class Agent:
         self.delay = delay
         self.isTraining = train
         # mp.set_start_method("spawn")
-        multiprocessing.connection.BUFSIZE = 2 ** 24
+        # multiprocessing.connection.BUFSIZE = 2 ** 24
         # Create Evaluators
         print(
             f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
@@ -590,7 +584,7 @@ class Agent:
         self.lastPrint = time.perf_counter()
 
 
-class EvaluatorProcess(PipedProcess):
+class EvaluatorProcess(Process):
     def __init__(self, id, algo, env, isTraining, sync):
         super().__init__()
         self.id = id
@@ -599,21 +593,21 @@ class EvaluatorProcess(PipedProcess):
         self.isTraining = isTraining
         self.sync = sync
 
-    def run(self, conn):
+    def run(self):
         # print("Evaluator-" + str(self.id), os.getpid())
-        Evaluator(self.id, self.algo, self.env, self.sync, conn).start(self.isTraining)
+        Evaluator(self.id, self.algo, self.env, self.sync).start(self.isTraining)
 
 
-class TrainerProcess(PipedProcess):
+class TrainerProcess(Process):
     def __init__(self, algo, env, sync):
         super().__init__()
         self.algo = algo
         self.env = env
         self.sync = sync
 
-    def run(self, conn):
+    def run(self):
         # print("Trainer", os.getpid())
-        Trainer(self.algo, self.env, self.sync, conn).start()
+        Trainer(self.algo, self.env, self.sync).start()
 
 
 # thread safe

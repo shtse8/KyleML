@@ -533,7 +533,7 @@ class Agent:
     def run(self, train: bool = True, episodes: int = 10000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
-        # mp.set_start_method("spawn")
+        mp.set_start_method("spawn")
         # multiprocessing.connection.BUFSIZE = 2 ** 24
         # Create Evaluators
         print(

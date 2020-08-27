@@ -40,9 +40,13 @@ def main():
     args = parser.parse_args()
     print(args)
     signal.signal(signal.SIGINT, signal_handler)
-    torch.backends.cudnn.benchmark = True
-    print(f"CUDA: {torch.cuda.is_available()} ({torch.version.cuda})")
-    print(f"CUDNN: {torch.backends.cudnn.enabled} ({torch.backends.cudnn.version()})")
+    
+    if torch.cuda.is_available():
+        print(f"CUDA {torch.version.cuda}")
+    if torch.backends.cudnn.enabled:
+        torch.backends.cudnn.benchmark = True
+        print(f"CUDNN {torch.backends.cudnn.version()}")
+
     # agents = {
         # "dqn": DQNAgent,
         # "a2c": A2CAgent,

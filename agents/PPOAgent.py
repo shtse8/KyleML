@@ -1,3 +1,4 @@
+import os
 import math
 import torch.multiprocessing as mp
 import torch.optim.lr_scheduler as schedular
@@ -16,7 +17,8 @@ from enum import Enum
 import time
 import sys
 import multiprocessing.connection
-multiprocessing.connection.BUFSIZE = 2 ** 24
+# print("BUFSIZE", multiprocessing.connection.BUFSIZE)
+
 # print(multiprocessing.connection.BUFSIZE)
 
 
@@ -421,6 +423,7 @@ class Base:
 class Trainer(Base):
     def __init__(self, algo: Algo, env, conn):
         super().__init__(algo, env)
+        # self.algo.device = torch.device("cpu")
         self.network = self.algo.createNetwork(
             self.env.observationShape, self.env.actionSpace).buildOptimizer(self.algo.policy.learningRate)
         self.conn = conn
@@ -520,7 +523,6 @@ class Evaluator(Base):
                 if self.waiting or not self.checkVersion():
                     time.sleep(0.01)
                     continue
-
                 action = self.algo.getAction(self.network, state, isTraining)
                 nextState, reward, done = self.env.takeAction(action.index)
                 transition = Transition(state, action, reward, nextState, done)
@@ -552,7 +554,7 @@ class Agent:
         self.delay = delay
         self.isTraining = train
         # mp.set_start_method("spawn")
-
+        multiprocessing.connection.BUFSIZE = 2 ** 24
         # Create Evaluators
         print(
             f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
@@ -560,7 +562,7 @@ class Agent:
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
-        n_workers = 2
+        n_workers = 4
         for i in range(n_workers):
             evaluator = EvaluatorProcess(
                 i, self.algo, self.env, self.isTraining).start()
@@ -612,6 +614,33 @@ class Agent:
               end="\b\r")
         self.lastPrint = time.perf_counter()
 
+class BufferConnection:
+    def __init__(self, connection):
+        self.connection = connection
+        self.buffer = collections.deque(maxlen=1000)
+
+    def _bufferAll(self):
+        while self.connection.poll():
+            self.buffer.append(self.connection.recv())
+
+    def hasMessage(self):
+        return len(self.buffer) > 0
+
+    def poll(self):
+        self._bufferAll()
+        return self.hasMessage()
+
+    def recv(self):
+        # blocking
+        while True:
+            self._bufferAll()
+            if self.hasMessage():
+                break
+            time.sleep(0.01)
+        return self.buffer.popleft()
+
+    def send(self, obj):
+        return self.connection.send(obj)
 
 class PipedProcess:
     def __init__(self):
@@ -624,7 +653,9 @@ class PipedProcess:
             raise Exception("Process is started")
 
         self.started = True
-        self.conn, child_conn = mp.Pipe(True)
+        connections = mp.Pipe(True)
+        self.conn = BufferConnection(connections[0])
+        child_conn = BufferConnection(connections[1])
         self.process = mp.Process(target=self.run, args=(child_conn,))
         self.process.start()
         return self
@@ -651,6 +682,7 @@ class EvaluatorProcess(PipedProcess):
         self.isTraining = isTraining
 
     def run(self, conn):
+        # print("Evaluator-" + str(self.id), os.getpid())
         Evaluator(self.id, self.algo, self.env, conn).start(self.isTraining)
 
 
@@ -661,4 +693,5 @@ class TrainerProcess(PipedProcess):
         self.env = env
 
     def run(self, conn):
+        # print("Trainer", os.getpid())
         Trainer(self.algo, self.env, conn).start()

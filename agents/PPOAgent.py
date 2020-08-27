@@ -1,24 +1,24 @@
+import math
+import torch.multiprocessing as mp
+import torch.optim.lr_scheduler as schedular
+import torch.nn.functional as F
+import torch.optim as optim
+import torch.nn as nn
+import torch
+import utils.Function as Function
+from utils.PredictionHandler import PredictionHandler
+from .Agent import Agent
+from memories.Transition import Transition
+from memories.SimpleMemory import SimpleMemory
+import collections
+import numpy as np
+from enum import Enum
+import time
+import sys
 import multiprocessing.connection
 multiprocessing.connection.BUFSIZE = 2 ** 24
 # print(multiprocessing.connection.BUFSIZE)
 
-import sys
-import time
-from enum import Enum
-import numpy as np
-import collections
-from memories.SimpleMemory import SimpleMemory
-from memories.Transition import Transition
-from .Agent import Agent
-from utils.PredictionHandler import PredictionHandler
-import utils.Function as Function
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-import torch.optim.lr_scheduler as schedular
-import torch.multiprocessing as mp
-import math
 
 # def init_layer(m):
 #     weight = m.weight.data
@@ -52,7 +52,7 @@ class MemoryPush(Message):
 
 
 class LearnReport(Message):
-    def __init__(self, loss, steps, drops=0):
+    def __init__(self, loss=0, steps=0, drops=0):
         self.loss = loss
         self.steps = steps
         self.drops = drops
@@ -144,6 +144,59 @@ class Epoch(Message):
         return self
 
 
+class ConvLayers(nn.Module):
+    def __init__(self, inputShape, n_outputs):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Conv2d(inputShape[0], 32, kernel_size=1, stride=1),
+            nn.ReLU(),
+            # nn.MaxPool2d(1),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            # nn.MaxPool2d(1),
+            nn.Conv2d(64, 64, kernel_size=1, stride=1),
+            nn.ReLU(),
+            # nn.MaxPool2d(1),
+            nn.Flatten(),
+            nn.Linear(64 * inputShape[1] * inputShape[2], n_outputs),
+            nn.ReLU())
+
+    def forward(self, x):
+        return self.layers(x)
+
+
+
+
+class FCLayers(nn.Module):
+    def __init__(self, n_inputs, n_outputs, hidden_nodes=0):
+        super().__init__()
+        if hidden_nodes == 0:
+            hidden_nodes = n_outputs
+
+        self.layers = nn.Sequential(
+                nn.Linear(n_inputs, hidden_nodes),
+                nn.ReLU(),
+                nn.Linear(hidden_nodes, n_outputs),
+                nn.ReLU())
+
+    def forward(self, x):
+        return self.layers(x)
+
+
+class BodyLayers(nn.Module):
+    def __init__(self, inputShape, n_outputs):
+        super().__init__()
+        if type(inputShape) is tuple and len(inputShape) == 3:
+            self.layers = ConvLayers(inputShape, n_outputs)
+        else:
+            if type(inputShape) is tuple and len(inputShape) == 1:
+                inputShape = inputShape[0]
+            self.layers = FCLayers(inputShape, n_outputs)
+
+    def forward(self, x):
+        return self.layers(x)
+
+
 class Network(nn.Module):
     def __init__(self, inputShape, n_outputs):
         super().__init__()
@@ -182,30 +235,7 @@ class PPONetwork(Network):
         super().__init__(inputShape, n_outputs)
 
         hidden_nodes = 64
-        if type(inputShape) is tuple and len(inputShape) == 3:
-            self.body = nn.Sequential(
-                nn.Conv2d(inputShape[0], 32, kernel_size=1, stride=1),
-                nn.ReLU(),
-                # nn.MaxPool2d(1),
-                nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-                nn.ReLU(),
-                # nn.MaxPool2d(1),
-                nn.Conv2d(64, 64, kernel_size=1, stride=1),
-                nn.ReLU(),
-                # nn.MaxPool2d(1),
-                nn.Flatten(),
-                nn.Linear(64 * inputShape[1] * inputShape[2], hidden_nodes),
-                nn.ReLU())
-        else:
-
-            if type(inputShape) is tuple and len(inputShape) == 1:
-                inputShape = inputShape[0]
-
-            self.body = nn.Sequential(
-                nn.Linear(inputShape, hidden_nodes),
-                nn.ReLU(),
-                nn.Linear(hidden_nodes, hidden_nodes),
-                nn.ReLU())
+        self.body = BodyLayers(inputShape, hidden_nodes)
 
         # Define policy head
         self.policy = nn.Sequential(
@@ -213,10 +243,10 @@ class PPONetwork(Network):
             nn.Softmax(dim=-1))
 
         # Define value head
-        self.value = nn.Sequential(nn.Linear(hidden_nodes, 1))
+        self.value = nn.Linear(hidden_nodes, 1)
 
     def buildOptimizer(self, learningRate):
-        self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
+        self.optimizer = optim.Adam(self.parameters(), lr=learningRate, eps=1e-5)
         return self
 
     def forward(self, state):
@@ -270,7 +300,7 @@ class PPOAlgo(Algo):
     def __init__(self):
         super().__init__(Policy(
             batchSize=32,
-            learningRate=0.0001,
+            learningRate=3e-4,
             versionTolerance=9,
             networkUpdateStrategy=NetworkUpdateStrategy.Aggressive))
         self.gamma = 0.99
@@ -287,20 +317,13 @@ class PPOAlgo(Algo):
             prediction = network.getPolicy(state).squeeze(0)
             action.prediction = prediction.cpu().detach().numpy()
             if isTraining:
-                action.index = torch.distributions.Categorical(probs=prediction).sample().item()
+                action.index = torch.distributions.Categorical(
+                    probs=prediction).sample().item()
             else:
                 action.index = prediction.argmax().item()
             return action
 
-    # Discounted Rewards (N-steps)
-    def getDiscountedRewards(self, rewards, dones, lastValue=0):
-        discountedRewards = np.zeros_like(rewards).astype(float)
-        for i in reversed(range(len(rewards))):
-            lastValue = rewards[i] + self.gamma * lastValue * (1 - dones[i])
-            discountedRewards[i] = lastValue
-        return discountedRewards
-
-    def getAdvantages(self, rewards, dones, values, lastValue=0):
+    def getGAE(self, rewards, dones, values, lastValue=0):
         advantages = np.zeros_like(rewards).astype(float)
         gae = 0
         for i in reversed(range(len(rewards))):
@@ -332,23 +355,29 @@ class PPOAlgo(Algo):
             nextStates = np.array([x.nextState for x in memory])
             lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
             lastValue = network.getValue(lastState).item()
-        targetValues = self.getDiscountedRewards(rewards, dones, lastValue)
-        targetValues = torch.FloatTensor(targetValues).to(self.device)
-        # targetValues = Function.normalize(targetValues)
+        # returns = self.getDiscountedRewards(rewards, dones, lastValue)
+        # returns = torch.FloatTensor(returns).to(self.device)
+        # returns = Function.normalize(returns)
 
         action_probs, values = network(states)
         values = values.squeeze(1)
 
-        # advantages = targetValues - values.detach()
-        # print(targetValues, values)
-        # print(advantages)
-        advantages = self.getAdvantages(
+        # GAE (General Advantage Estimation)
+        # https://arxiv.org/abs/1506.02438
+        advantages = self.getGAE(
             rewards, dones, values.cpu().detach().numpy(), lastValue)
         advantages = torch.FloatTensor(advantages).to(self.device)
-        # print(advantages)
-        # advantages = Function.normalize(advantages)
+
+        # from baseline
+        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/ppo2.py
+        returns = advantages + values.detach()
+
+        # Normalize advantages
+        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L139
+        advantages = Function.normalize(advantages)
 
         dist = torch.distributions.Categorical(probs=action_probs)
+
         # porb1 / porb2 = exp(log(prob1) - log(prob2))
         ratios = torch.exp(dist.log_prob(actions) - real_probs)
         surr1 = ratios * advantages
@@ -356,15 +385,19 @@ class PPOAlgo(Algo):
 
         # Maximize Policy Loss (Rewards)
         policy_loss = -torch.min(surr1, surr2).mean()
-        entropy_loss = -dist.entropy().mean()  # Maximize Entropy Loss
+
+        # Maximize Entropy Loss
+        entropy_loss = -dist.entropy().mean()  
+        
         # Minimize Value Loss (Distance to Target)
-        value_loss = F.mse_loss(values, targetValues)
-        loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
-        # print(policy_loss, entropy_loss, value_loss, loss)
+        value_loss = F.mse_loss(values, returns)
 
         network.optimizer.zero_grad()
+        loss = policy_loss + 0 * entropy_loss + 0.5 * value_loss
         loss.backward()
+
         # Chip grad with norm
+        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
         nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
         network.optimizer.step()
 
@@ -400,9 +433,9 @@ class Trainer(Base):
             steps = len(message.memory)
             if message.version >= self.network.version - self.algo.policy.versionTolerance:
                 loss = self.algo.learn(self.network, message.memory)
-                self.conn.send(LearnReport(loss, steps, 0))
+                self.conn.send(LearnReport(loss=loss, steps=steps))
             else:
-                self.conn.send(LearnReport(0, 0, steps))
+                self.conn.send(LearnReport(drops=steps))
 
     def pushNewNetwork(self):
         if self.lastBroadcast is None or self.lastBroadcast.version < self.network.version:
@@ -427,7 +460,7 @@ class Evaluator(Base):
             self.env.observationShape, self.env.actionSpace)
         self.network.version = -1
         self.conn = conn
-        
+
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
         self.report = None
 
@@ -504,7 +537,7 @@ class Agent:
         self.epochs = 1
         self.dropped = 0
         self.lastPrint = 0
-        
+
     def broadcast(self, message):
         for evaluator in self.evaluators:
             evaluator.send(message)
@@ -515,14 +548,16 @@ class Agent:
         # mp.set_start_method("spawn")
 
         # Create Evaluators
-        print(f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
+        print(
+            f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
 
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
-        n_workers = 4
+        n_workers = 5
         for i in range(n_workers):
-            evaluator = EvaluatorProcess(i, self.algo, self.env, self.isTraining).start()
+            evaluator = EvaluatorProcess(
+                i, self.algo, self.env, self.isTraining).start()
             evaluators.append(evaluator)
 
         self.evaluators = np.array(evaluators)
@@ -570,6 +605,7 @@ class Agent:
               end="\b\r")
         self.lastPrint = time.perf_counter()
 
+
 class PipedProcess:
     def __init__(self):
         self.process = None
@@ -609,6 +645,7 @@ class EvaluatorProcess(PipedProcess):
 
     def run(self, conn):
         Evaluator(self.id, self.algo, self.env, conn).start(self.isTraining)
+
 
 class TrainerProcess(PipedProcess):
     def __init__(self, algo, env):

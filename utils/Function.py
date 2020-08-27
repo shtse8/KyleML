@@ -6,13 +6,7 @@ import pickle
 #   數組為正態分佈
 #   計算出最後每個數值的標準差
 def normalize(value):
-    if len(value) == 1:
-        return value - value
-    # print(sys.float_info.min, torch.finfo(torch.float).eps)
-    eps = sys.float_info.min
-    if isinstance(value, torch.Tensor):
-        eps = torch.finfo(torch.float).eps
-    value = (value - value.mean()) / (value.std() + eps)
+    value = (value - value.mean()) / (value.std() + 1e-8)
     return value
 
 

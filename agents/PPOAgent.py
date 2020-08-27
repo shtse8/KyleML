@@ -523,7 +523,8 @@ class Agent:
         self.epochs = 1
         self.dropped = 0
         self.lastPrint = 0
-
+        
+        mp.set_start_method("spawn")
         self.sync = SyncContext()
 
     def broadcast(self, message):
@@ -533,7 +534,6 @@ class Agent:
     def run(self, train: bool = True, episodes: int = 10000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
-        mp.set_start_method("spawn")
         # multiprocessing.connection.BUFSIZE = 2 ** 24
         # Create Evaluators
         print(

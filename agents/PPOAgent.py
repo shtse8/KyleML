@@ -17,6 +17,8 @@ from enum import Enum
 import time
 import sys
 import multiprocessing.connection
+from utils.PipedProcess import PipedProcess
+
 # print("BUFSIZE", multiprocessing.connection.BUFSIZE)
 
 # print(multiprocessing.connection.BUFSIZE)
@@ -613,64 +615,6 @@ class Agent:
               '      ',
               end="\b\r")
         self.lastPrint = time.perf_counter()
-
-class BufferConnection:
-    def __init__(self, connection):
-        self.connection = connection
-        self.buffer = collections.deque(maxlen=1000)
-
-    def _bufferAll(self):
-        while self.connection.poll():
-            self.buffer.append(self.connection.recv())
-
-    def hasMessage(self):
-        return len(self.buffer) > 0
-
-    def poll(self):
-        self._bufferAll()
-        return self.hasMessage()
-
-    def recv(self):
-        # blocking
-        while True:
-            self._bufferAll()
-            if self.hasMessage():
-                break
-            time.sleep(0.01)
-        return self.buffer.popleft()
-
-    def send(self, obj):
-        return self.connection.send(obj)
-
-class PipedProcess:
-    def __init__(self):
-        self.process = None
-        self.conn = None
-        self.started = False
-
-    def start(self):
-        if self.started:
-            raise Exception("Process is started")
-
-        self.started = True
-        connections = mp.Pipe(True)
-        self.conn = BufferConnection(connections[0])
-        child_conn = BufferConnection(connections[1])
-        self.process = mp.Process(target=self.run, args=(child_conn,))
-        self.process.start()
-        return self
-
-    def poll(self):
-        return self.conn.poll()
-
-    def recv(self):
-        return self.conn.recv()
-
-    def send(self, obj):
-        return self.conn.send(obj)
-
-    def run(self, conn):
-        pass
 
 
 class EvaluatorProcess(PipedProcess):

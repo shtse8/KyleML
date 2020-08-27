@@ -363,17 +363,18 @@ class PPOAlgo(Algo):
         values = values.squeeze(1)
 
         # GAE (General Advantage Estimation)
-        # https://arxiv.org/abs/1506.02438
+        # Paper: https://arxiv.org/abs/1506.02438
+        # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
         advantages = self.getGAE(
             rewards, dones, values.cpu().detach().numpy(), lastValue)
         advantages = torch.FloatTensor(advantages).to(self.device)
 
         # from baseline
-        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/ppo2.py
+        # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
         returns = advantages + values.detach()
 
         # Normalize advantages
-        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L139
+        # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
         advantages = Function.normalize(advantages)
 
         dist = torch.distributions.Categorical(probs=action_probs)
@@ -390,7 +391,7 @@ class PPOAlgo(Algo):
         entropy_loss = -dist.entropy().mean()  
         
         # Minimize Value Loss (Distance to Target)
-        value_loss = F.mse_loss(values, returns)
+        value_loss = (returns - values).pow(2).mean()
 
         network.optimizer.zero_grad()
         loss = policy_loss + 0 * entropy_loss + 0.5 * value_loss

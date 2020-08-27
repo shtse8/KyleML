@@ -426,8 +426,6 @@ class Trainer(Base):
         self.network = self.algo.createNetwork(
             self.env.observationShape, self.env.actionSpace).buildOptimizer(self.algo.policy.learningRate)
         self.lastBroadcast = None
-        self.memoryPushBuffer = collections.deque(maxlen=1000)
-
         self.sync = sync
 
     def learn(self):
@@ -487,7 +485,7 @@ class Evaluator(Base):
         return self.network.version >= self.sync.latestVersion.value - self.algo.policy.versionTolerance
 
     def updateNetwork(self):
-        while self.sync.latestVersion == -1:
+        while self.sync.latestVersion.value == -1:
             time.sleep(0.01)
             
         if self.network.version < self.sync.latestVersion.value:
@@ -577,7 +575,7 @@ class Agent:
               f'Loss: {Function.humanize(self.epoch.loss):>6}/ep | ' +
               f'Env: {Function.humanize(len(self.epoch.history)):>6} | ' +
               f'Best: {Function.humanize(self.epoch.bestRewards):>6}, Avg: {Function.humanize(self.epoch.avgRewards):>6} | ' +
-              f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>5}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
+              f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>6}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
               f' {Function.humanizeTime(self.epoch.duration):>5} > {Function.humanizeTime(self.epoch.estimateDuration):}' +
               '      ',
               end="\b\r")

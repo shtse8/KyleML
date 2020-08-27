@@ -313,7 +313,7 @@ class PPOAlgo(Algo):
         action = PredictedAction()
         network.eval()
         with torch.no_grad():
-            state = torch.FloatTensor([state]).to(self.device)
+            state = torch.tensor([state], dtype=torch.float, device=self.device)
             prediction = network.getPolicy(state).squeeze(0)
             action.prediction = prediction.cpu().detach().numpy()
             if isTraining:
@@ -337,28 +337,29 @@ class PPOAlgo(Algo):
     def learn(self, network: Network, memory):
         network.train()
 
-        states = np.array([x.state for x in memory])
-        states = torch.FloatTensor(states).to(self.device)
+        states = np.array([x.state for x in memory])        
+        states = torch.tensor(states, dtype=torch.float, device=self.device)
 
         actions = np.array([x.action.index for x in memory])
-        actions = torch.LongTensor(actions).to(self.device)
+        actions = torch.tensor(actions, dtype=torch.long, device=self.device)
 
         predictions = np.array([x.action.prediction for x in memory])
-        predictions = torch.FloatTensor(predictions).to(self.device).detach()
+        predictions = torch.tensor(predictions, dtype=torch.float, device=self.device)
+
         dones = np.array([x.done for x in memory])
         rewards = np.array([x.reward for x in memory])
-        real_probs = torch.distributions.Categorical(
+        old_log_probs = torch.distributions.Categorical(
             probs=predictions).log_prob(actions)
 
+        
         lastValue = 0
         if not dones[-1]:
-            nextStates = np.array([x.nextState for x in memory])
-            lastState = torch.FloatTensor([nextStates[-1]]).to(self.device)
+            lastState = torch.tensor([memory[-1].nextState], dtype=torch.float, device=self.device)
             lastValue = network.getValue(lastState).item()
         # returns = self.getDiscountedRewards(rewards, dones, lastValue)
-        # returns = torch.FloatTensor(returns).to(self.device)
+        # returns = torch.tensor(returns, dtype=torch.float, device=self.device)
         # returns = Function.normalize(returns)
-
+        
         action_probs, values = network(states)
         values = values.squeeze(1)
 
@@ -367,7 +368,7 @@ class PPOAlgo(Algo):
         # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
         advantages = self.getGAE(
             rewards, dones, values.cpu().detach().numpy(), lastValue)
-        advantages = torch.FloatTensor(advantages).to(self.device)
+        advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
 
         # from baseline
         # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
@@ -380,21 +381,23 @@ class PPOAlgo(Algo):
         dist = torch.distributions.Categorical(probs=action_probs)
 
         # porb1 / porb2 = exp(log(prob1) - log(prob2))
-        ratios = torch.exp(dist.log_prob(actions) - real_probs)
-        surr1 = ratios * advantages
-        surr2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
+        ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
+        policy_losses1 = ratios * advantages
+        policy_losses2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
 
         # Maximize Policy Loss (Rewards)
-        policy_loss = -torch.min(surr1, surr2).mean()
+        policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
 
         # Maximize Entropy Loss
         entropy_loss = -dist.entropy().mean()  
         
-        # Minimize Value Loss (Distance to Target)
+        # Minimize Value Loss  (MSE)
         value_loss = (returns - values).pow(2).mean()
 
+        loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
+
+        tic = time.perf_counter()
         network.optimizer.zero_grad()
-        loss = policy_loss + 0 * entropy_loss + 0.5 * value_loss
         loss.backward()
 
         # Chip grad with norm
@@ -404,7 +407,9 @@ class PPOAlgo(Algo):
 
         # Report
         network.version += 1
-        return loss.item()
+        loss_float = loss.item()
+
+        return loss_float
 
 
 class Base:
@@ -555,7 +560,7 @@ class Agent:
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
-        n_workers = 5
+        n_workers = 2
         for i in range(n_workers):
             evaluator = EvaluatorProcess(
                 i, self.algo, self.env, self.isTraining).start()
@@ -599,6 +604,7 @@ class Agent:
             return
         print(f"#{self.epochs} {Function.humanize(self.epoch.episodes):>6} {self.epoch.hitRate:>7.2%} | " +
               f'Loss: {Function.humanize(self.epoch.loss):>6}/ep | ' +
+              f'Env: {Function.humanize(len(self.epoch.history)):>6} | ' +
               f'Best: {Function.humanize(self.epoch.bestRewards):>6}, Avg: {Function.humanize(self.epoch.avgRewards):>6} | ' +
               f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>5}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
               f' {Function.humanizeTime(self.epoch.duration):>5} > {Function.humanizeTime(self.epoch.estimateDuration):}' +

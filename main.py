@@ -40,7 +40,7 @@ def main():
     args = parser.parse_args()
     print(args)
     signal.signal(signal.SIGINT, signal_handler)
-    print("CUDA:", torch.cuda.is_available())
+    print(f"CUDA: {torch.cuda.is_available()} ({torch.version.cuda})")
         
     # agents = {
         # "dqn": DQNAgent,

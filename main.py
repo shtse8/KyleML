@@ -42,7 +42,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     
     if torch.cuda.is_available():
-        print(f"CUDA {torch.version.cuda}")
+        print(f"CUDA {torch.version.cuda} (Devices: {torch.cuda.device_count()})")
     if torch.backends.cudnn.enabled:
         torch.backends.cudnn.benchmark = True
         print(f"CUDNN {torch.backends.cudnn.version()}")

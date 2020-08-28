@@ -1,3 +1,5 @@
+import __main__
+from pathlib import Path
 import os
 import math
 import torch.multiprocessing as mp
@@ -207,8 +209,9 @@ class BodyLayers(nn.Module):
 
 
 class Network(nn.Module):
-    def __init__(self, inputShape, n_outputs):
+    def __init__(self, inputShape, n_outputs, name="network"):
         super().__init__()
+        self.name = name
         self.optimizer = None
         self.version: int = 1
         self.info: NetworkInfo = None
@@ -240,8 +243,8 @@ class Network(nn.Module):
 
 
 class PPONetwork(Network):
-    def __init__(self, inputShape, n_outputs):
-        super().__init__(inputShape, n_outputs)
+    def __init__(self, inputShape, n_outputs, name=None):
+        super().__init__(inputShape, n_outputs, name)
 
         hidden_nodes = 64
         self.body = BodyLayers(inputShape, hidden_nodes)
@@ -290,7 +293,8 @@ class OffPolicy(Policy):
 
 
 class Algo:
-    def __init__(self, policy: Policy):
+    def __init__(self, name, policy: Policy):
+        self.name = name
         self.policy = policy
         self.device = torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu")
@@ -307,14 +311,14 @@ class Algo:
 
 class PPOAlgo(Algo):
     def __init__(self):
-        super().__init__(OffPolicy(
+        super().__init__("PPO", OffPolicy(
             batchSize=32,
             learningRate=3e-4))
         self.gamma = 0.99
         self.epsClip = 0.2
 
     def createNetwork(self, inputShape, n_outputs) -> Network:
-        return PPONetwork(inputShape, n_outputs).to(self.device)
+        return PPONetwork(inputShape, n_outputs)
 
     def getAction(self, network, state, prediction, mask, isTraining: bool) -> PredictedAction:
         network.eval()
@@ -456,12 +460,11 @@ class Base:
 
 
 class Trainer(Base):
-    def __init__(self, algo: Algo, env, sync):
+    def __init__(self, network, algo: Algo, env, sync):
         super().__init__(algo, env)
         # self.algo.device = torch.device("cpu")
         self.algo.device = sync.getDevice()
-        self.network = self.algo.createNetwork(
-            self.env.observationShape, self.env.actionSpace).buildOptimizer(self.algo.policy.learningRate)
+        self.network = network.buildOptimizer(self.algo.policy.learningRate).to(self.algo.device)
         self.lastBroadcast = None
         self.sync = sync
 
@@ -490,14 +493,13 @@ class Trainer(Base):
 
 
 class Evaluator(Base):
-    def __init__(self, id, algo: Algo, env, sync, delay=0):
+    def __init__(self, id, network, algo: Algo, env, sync, delay=0):
         super().__init__(algo, env.getNew())
         self.id = id
         self.delay = delay
         # self.algo.device = torch.device("cpu")
         self.algo.device = sync.getDevice()
-        self.network = self.algo.createNetwork(
-            self.env.observationShape, self.env.actionSpace)
+        self.network = network.to(self.algo.device)
         self.network.version = -1
 
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
@@ -571,7 +573,9 @@ class Agent:
         self.epochs = 1
         self.dropped = 0
         self.lastPrint = 0
-        
+        self.weightPath = "./weights/"
+        self.networks = []
+
         mp.set_start_method("spawn")
         self.sync = SyncContext()
 
@@ -579,25 +583,28 @@ class Agent:
         for evaluator in self.evaluators:
             evaluator.send(message)
 
-    def run(self, train: bool = True, episodes: int = 10000, delay: float = 0) -> None:
+    def run(self, train: bool = True, load: bool = False, episodes: int = 10000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
+        self.lastSave = time.perf_counter()
         # multiprocessing.connection.BUFSIZE = 2 ** 24
-        # Create Evaluators
+
+        network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace)
+        self.networks.append(network)
+        if not train or load:
+            self.load()
         print(
-            f"Train: {self.isTraining}, Total Episodes: {self.totalEpisodes}, Total Steps: {self.totalSteps}")
+            f"Train: {self.isTraining}, Trained: {Function.humanize(self.totalEpisodes)} episodes, {Function.humanize(self.totalSteps)} steps")
 
         evaluators = []
-        # n_workers = mp.cpu_count() - 1
-        # n_workers = mp.cpu_count() // 2
         n_workers = max(torch.cuda.device_count(), 1)
         for i in range(n_workers):
             evaluator = EvaluatorProcess(
-                i, self.algo, self.env, self.isTraining, self.sync).start()
+                i, network, self.algo, self.env, self.isTraining, self.sync).start()
             evaluators.append(evaluator)
 
         self.evaluators = np.array(evaluators)
-        trainer = TrainerProcess(self.algo, self.env, self.sync).start()
+        trainer = TrainerProcess(network, self.algo, self.env, self.sync).start()
         self.epoch = Epoch(episodes).start()
         while True:
             self.update()
@@ -608,6 +615,8 @@ class Agent:
                     if message.steps > 0:
                         self.epoch.trained(message.loss, message.steps)
                         self.totalSteps += message.steps
+                        if time.perf_counter() - self.lastSave > 60:
+                            self.save()
                         if self.epoch.isEnd:
                             self.update(0)
                             print()
@@ -631,11 +640,47 @@ class Agent:
               end="\b\r")
         self.lastPrint = time.perf_counter()
 
+    def save(self) -> None:
+        try:
+            path = self.getSavePath(True)
+            data = {
+                "totalSteps": self.totalSteps,
+                "totalEpisodes": self.totalEpisodes
+            }
+            for network in self.networks:
+                data[network.name] = network.state_dict()
+            torch.save(data, path)
+            self.lastSave = time.perf_counter()
+            # print("Saved Weights.")
+        except Exception as e:
+            print("Failed to save.", e)
+        
+    def load(self) -> None:
+        try:
+            path = self.getSavePath()
+            print("Loading from path: ", path)
+            data = torch.load(path)
+            # data = torch.load(path, map_location=self.device)
+            self.totalSteps = int(data["totalSteps"]) if "totalSteps" in data else 0
+            self.totalEpisodes = int(data["totalEpisodes"]) if "totalEpisodes" in data else 0
+            for network in self.networks:
+                network.load_state_dict(data[network.name])
+            print("Weights loaded.")
+        except Exception as e:
+            print("Failed to load.", e)
+    
+    def getSavePath(self, makeDir: bool = False) -> str:
+        path = os.path.join(os.path.dirname(__main__.__file__), self.weightPath, self.algo.name.lower(), self.env.name + ".h5")
+        if makeDir:
+            Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
+        return path
+
 
 class EvaluatorProcess(Process):
-    def __init__(self, id, algo, env, isTraining, sync):
+    def __init__(self, id, network, algo, env, isTraining, sync):
         super().__init__()
         self.id = id
+        self.network = network
         self.algo = algo
         self.env = env
         self.isTraining = isTraining
@@ -643,19 +688,20 @@ class EvaluatorProcess(Process):
 
     def run(self):
         # print("Evaluator-" + str(self.id), os.getpid())
-        Evaluator(self.id, self.algo, self.env, self.sync).start(self.isTraining)
+        Evaluator(self.id, self.network, self.algo, self.env, self.sync).start(self.isTraining)
 
 
 class TrainerProcess(Process):
-    def __init__(self, algo, env, sync):
+    def __init__(self, network, algo, env, sync):
         super().__init__()
         self.algo = algo
+        self.network = network
         self.env = env
         self.sync = sync
 
     def run(self):
         # print("Trainer", os.getpid())
-        Trainer(self.algo, self.env, self.sync).start()
+        Trainer(self.network, self.algo, self.env, self.sync).start()
 
 
 # thread safe

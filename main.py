@@ -81,7 +81,7 @@ def main():
     #     agent.load()
 
     agent = Agent(PPOAlgo(), game)
-    agent.run(train=args.train, delay=args.delay)
+    agent.run(train=args.train, load=args.load, delay=args.delay)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ class Transition(object):
         self.nextState = nextState
         self.done: bool = done
         self.prediction = prediction
+        self.advantage = 0
         
     # @property
     # def done(self) -> bool:

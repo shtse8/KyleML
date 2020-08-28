@@ -323,6 +323,26 @@ class PPOAlgo(Algo):
                 action.index = prediction.argmax().item()
             return action
 
+    def processAdvantage(self, network, memory):
+        with torch.no_grad():
+            lastValue = 0
+            if not memory[-1].done:
+                lastState = torch.tensor([memory[-1].nextState], dtype=torch.float, device=self.device)
+                lastValue = network.getValue(lastState).item()
+
+            states = np.array([x.state for x in memory])
+            states = torch.tensor(states, dtype=torch.float, device=self.device)
+
+            values = network.getValue(states).squeeze(1).cpu().detach().numpy()
+            gae = 0
+            for i in reversed(range(len(memory))):
+                transition = memory[i]
+                detlas = transition.reward + self.gamma * \
+                    lastValue * (1 - transition.done) - values[i]
+                gae = detlas + self.gamma * 0.95 * gae * (1 - transition.done)
+                transition.advantage = gae
+                lastValue = values[i]
+
     def getGAE(self, rewards, dones, values, lastValue=0):
         advantages = np.zeros_like(rewards).astype(float)
         gae = 0
@@ -346,15 +366,17 @@ class PPOAlgo(Algo):
         predictions = np.array([x.action.prediction for x in memory])
         predictions = torch.tensor(predictions, dtype=torch.float, device=self.device)
 
-        dones = np.array([x.done for x in memory])
-        rewards = np.array([x.reward for x in memory])
+        advantages = np.array([x.advantage for x in memory])
+        advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
+        # dones = np.array([x.done for x in memory])
+        # rewards = np.array([x.reward for x in memory])
         old_log_probs = torch.distributions.Categorical(
             probs=predictions).log_prob(actions)
 
-        lastValue = 0
-        if not dones[-1]:
-            lastState = torch.tensor([memory[-1].nextState], dtype=torch.float, device=self.device)
-            lastValue = network.getValue(lastState).item()
+        # lastValue = 0
+        # if not dones[-1]:
+        #     lastState = torch.tensor([memory[-1].nextState], dtype=torch.float, device=self.device)
+        #     lastValue = network.getValue(lastState).item()
         # returns = self.getDiscountedRewards(rewards, dones, lastValue)
         # returns = torch.tensor(returns, dtype=torch.float, device=self.device)
         # returns = Function.normalize(returns)
@@ -365,9 +387,9 @@ class PPOAlgo(Algo):
         # GAE (General Advantage Estimation)
         # Paper: https://arxiv.org/abs/1506.02438
         # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
-        advantages = self.getGAE(
-            rewards, dones, values.cpu().detach().numpy(), lastValue)
-        advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
+        # advantages = self.getGAE(
+        #     rewards, dones, values.cpu().detach().numpy(), lastValue)
+        # advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
 
         # from baseline
         # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
@@ -468,6 +490,7 @@ class Evaluator(Base):
 
     def pushMemory(self):
         if self.isValidVersion():
+            self.algo.processAdvantage(self.network, self.memory)
             message = MemoryPush(self.memory, self.network.version)
             self.sync.memoryQueue.put(message)
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)

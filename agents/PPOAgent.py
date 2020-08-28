@@ -64,12 +64,16 @@ class EnvReport(Message):
 
 
 class PredictedAction(object):
-    def __init__(self):
-        self.index = None
-        self.prediction = None
+    def __init__(self, index, prediction):
+        self.index = index
+        self.prediction = prediction
 
     def __int__(self):
         return self.index
+
+    @property
+    def log(self):
+        return math.log(self.prediction[self.index])
 
 
 class Epoch(Message):
@@ -310,18 +314,19 @@ class PPOAlgo(Algo):
         return PPONetwork(inputShape, n_outputs).to(self.device)
 
     def getAction(self, network, state, isTraining: bool) -> PredictedAction:
-        action = PredictedAction()
         network.eval()
         with torch.no_grad():
             state = torch.tensor([state], dtype=torch.float, device=self.device)
             prediction = network.getPolicy(state).squeeze(0)
-            action.prediction = prediction.cpu().detach().numpy()
             if isTraining:
-                action.index = torch.distributions.Categorical(
+                index = torch.distributions.Categorical(
                     probs=prediction).sample().item()
             else:
-                action.index = prediction.argmax().item()
-            return action
+                index = prediction.argmax().item()
+            return PredictedAction(
+                index=index,
+                prediction=prediction.cpu().detach().numpy()
+            )
 
     def processAdvantage(self, network, memory):
         with torch.no_grad():
@@ -358,26 +363,24 @@ class PPOAlgo(Algo):
     def learn(self, network: Network, memory):
         network.train()
 
-        states = np.array([x.state for x in memory])
-        states = torch.tensor(states, dtype=torch.float, device=self.device)
+        with torch.no_grad():
+            states = np.array([x.state for x in memory])
+            states = torch.tensor(states, dtype=torch.float, device=self.device)
 
-        actions = np.array([x.action.index for x in memory])
-        actions = torch.tensor(actions, dtype=torch.long, device=self.device)
+            actions = np.array([x.action.index for x in memory])
+            actions = torch.tensor(actions, dtype=torch.long, device=self.device)
 
-        predictions = np.array([x.action.prediction for x in memory])
-        predictions = torch.tensor(predictions, dtype=torch.float, device=self.device)
+            old_log_probs = np.array([x.action.log for x in memory])
+            old_log_probs = torch.tensor(old_log_probs, dtype=torch.float, device=self.device)
 
-        returns = np.array([x.ret for x in memory])
-        returns = torch.tensor(returns, dtype=torch.float, device=self.device)
+            returns = np.array([x.ret for x in memory])
+            returns = torch.tensor(returns, dtype=torch.float, device=self.device)
 
-        old_values = np.array([x.value for x in memory])
-        old_values = torch.tensor(old_values, dtype=torch.float, device=self.device)
-        advantages = returns - old_values
+            old_values = np.array([x.value for x in memory])
+            old_values = torch.tensor(old_values, dtype=torch.float, device=self.device)
 
-        # dones = np.array([x.done for x in memory])
-        # rewards = np.array([x.reward for x in memory])
-        old_log_probs = torch.distributions.Categorical(
-            probs=predictions).log_prob(actions)
+            advantages = returns - old_values
+
 
         # lastValue = 0
         # if not dones[-1]:

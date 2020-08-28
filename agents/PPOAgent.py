@@ -82,11 +82,12 @@ class Epoch(Message):
         self.epoch_start_time: int = 0
         self.epoch_end_time: int = 0
         self.episodes = 0
-        self.history = collections.deque(maxlen=target_episodes)
-        self.bestRewards = 0
 
         # for stats
+        # self.history = collections.deque(maxlen=target_episodes)
+        self.bestRewards = 0
         self.totalRewards = 0
+        self.envs = 0
 
     def start(self):
         self.epoch_start_time = time.perf_counter()
@@ -126,13 +127,14 @@ class Epoch(Message):
 
     @property
     def avgRewards(self):
-        return self.totalRewards / len(self.history) if len(self.history) > 0 else math.nan
+        return self.totalRewards / self.envs if self.envs > 0 else math.nan
 
     def add(self, report: EnvReport):
         if report.rewards > self.bestRewards:
             self.bestRewards = report.rewards
         self.totalRewards += report.rewards
-        self.history.append(report)
+        self.envs += 1
+        # self.history.append(report)
         return self
 
     def trained(self, loss, steps):
@@ -298,11 +300,9 @@ class Algo:
 
 class PPOAlgo(Algo):
     def __init__(self):
-        super().__init__(Policy(
-            batchSize=32,
-            learningRate=3e-4,
-            versionTolerance=9,
-            networkUpdateStrategy=NetworkUpdateStrategy.Aggressive))
+        super().__init__(OnPolicy(
+            batchSize=2048,
+            learningRate=3e-4))
         self.gamma = 0.99
         self.epsClip = 0.2
 
@@ -337,7 +337,7 @@ class PPOAlgo(Algo):
     def learn(self, network: Network, memory):
         network.train()
 
-        states = np.array([x.state for x in memory])        
+        states = np.array([x.state for x in memory])
         states = torch.tensor(states, dtype=torch.float, device=self.device)
 
         actions = np.array([x.action.index for x in memory])
@@ -351,7 +351,6 @@ class PPOAlgo(Algo):
         old_log_probs = torch.distributions.Categorical(
             probs=predictions).log_prob(actions)
 
-        
         lastValue = 0
         if not dones[-1]:
             lastState = torch.tensor([memory[-1].nextState], dtype=torch.float, device=self.device)
@@ -360,54 +359,56 @@ class PPOAlgo(Algo):
         # returns = torch.tensor(returns, dtype=torch.float, device=self.device)
         # returns = Function.normalize(returns)
         
-        action_probs, values = network(states)
-        values = values.squeeze(1)
+        losses = []
+        for _ in range(4):
+            action_probs, values = network(states)
+            values = values.squeeze(1)
 
-        # GAE (General Advantage Estimation)
-        # Paper: https://arxiv.org/abs/1506.02438
-        # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
-        advantages = self.getGAE(
-            rewards, dones, values.cpu().detach().numpy(), lastValue)
-        advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
+            # GAE (General Advantage Estimation)
+            # Paper: https://arxiv.org/abs/1506.02438
+            # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
+            advantages = self.getGAE(
+                rewards, dones, values.cpu().detach().numpy(), lastValue)
+            advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
 
-        # from baseline
-        # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
-        returns = advantages + values.detach()
+            # from baseline
+            # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
+            returns = advantages + values.detach()
 
-        # Normalize advantages
-        # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
-        advantages = Function.normalize(advantages)
+            # Normalize advantages
+            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
+            advantages = Function.normalize(advantages)
 
-        dist = torch.distributions.Categorical(probs=action_probs)
+            dist = torch.distributions.Categorical(probs=action_probs)
 
-        # porb1 / porb2 = exp(log(prob1) - log(prob2))
-        ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-        policy_losses1 = ratios * advantages
-        policy_losses2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
+            # porb1 / porb2 = exp(log(prob1) - log(prob2))
+            ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
+            policy_losses1 = ratios * advantages
+            policy_losses2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
 
-        # Maximize Policy Loss (Rewards)
-        policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
+            # Maximize Policy Loss (Rewards)
+            policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
 
-        # Maximize Entropy Loss
-        entropy_loss = -dist.entropy().mean()  
-        
-        # Minimize Value Loss  (MSE)
-        value_loss = (returns - values).pow(2).mean()
+            # Maximize Entropy Loss
+            entropy_loss = -dist.entropy().mean()
+            
+            # Minimize Value Loss  (MSE)
+            value_loss = (returns - values).pow(2).mean()
 
-        loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
+            loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
 
-        tic = time.perf_counter()
-        network.optimizer.zero_grad()
-        loss.backward()
+            network.optimizer.zero_grad()
+            loss.backward()
 
-        # Chip grad with norm
-        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
-        nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
-        network.optimizer.step()
+            # Chip grad with norm
+            # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
+            nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
+            network.optimizer.step()
 
+            losses.append(loss.item())
         # Report
         network.version += 1
-        loss_float = loss.item()
+        loss_float = np.mean(losses)
 
         return loss_float
 
@@ -467,12 +468,14 @@ class Evaluator(Base):
         self.report = None
 
         self.sync = sync
+        self.waiting = True
 
     def pushMemory(self):
         if self.isValidVersion():
             message = MemoryPush(self.memory, self.network.version)
             self.sync.memoryQueue.put(message)
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
+        self.waiting = True
         self.updateNetwork()
 
     def commit(self, transition: Transition):
@@ -491,6 +494,11 @@ class Evaluator(Base):
         if self.network.version < self.sync.latestVersion.value:
             networkInfo = NetworkInfo(self.sync.latestStateDict, self.sync.latestVersion.value)
             self.network.loadInfo(networkInfo)
+            self.waiting = False
+
+    def checkUpdate(self):
+        if self.algo.policy.networkUpdateStrategy == NetworkUpdateStrategy.Aggressive or self.network.version < self.sync.latestVersion.value - self.algo.policy.versionTolerance // 2:
+            self.updateNetwork()
 
     def start(self, isTraining=False):
         self.updateNetwork()
@@ -499,6 +507,10 @@ class Evaluator(Base):
             state = self.env.reset()
             done: bool = False
             while not done:
+                self.checkUpdate()
+                if self.waiting:
+                    time.sleep(0.01)
+                    continue
                 action = self.algo.getAction(self.network, state, isTraining)
                 nextState, reward, done = self.env.takeAction(action.index)
                 transition = Transition(state, action, reward, nextState, done)
@@ -514,7 +526,6 @@ class Agent:
         self.evaluators = []
         self.algo = algo
         self.env = env
-        self.history = []
 
         self.totalEpisodes = 0
         self.totalSteps = 0
@@ -529,7 +540,7 @@ class Agent:
         for evaluator in self.evaluators:
             evaluator.send(message)
 
-    def run(self, train: bool = True, episodes: int = 10000, delay: float = 0) -> None:
+    def run(self, train: bool = True, episodes: int = 1000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
         # multiprocessing.connection.BUFSIZE = 2 ** 24
@@ -540,7 +551,7 @@ class Agent:
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
-        n_workers = 2
+        n_workers = 1
         for i in range(n_workers):
             evaluator = EvaluatorProcess(
                 i, self.algo, self.env, self.isTraining, self.sync).start()
@@ -573,7 +584,7 @@ class Agent:
             return
         print(f"#{self.epochs} {Function.humanize(self.epoch.episodes):>6} {self.epoch.hitRate:>7.2%} | " +
               f'Loss: {Function.humanize(self.epoch.loss):>6}/ep | ' +
-              f'Env: {Function.humanize(len(self.epoch.history)):>6} | ' +
+              f'Env: {Function.humanize(self.epoch.envs):>6} | ' +
               f'Best: {Function.humanize(self.epoch.bestRewards):>6}, Avg: {Function.humanize(self.epoch.avgRewards):>6} | ' +
               f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>6}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
               f' {Function.humanizeTime(self.epoch.duration):>5} > {Function.humanizeTime(self.epoch.estimateDuration):}' +

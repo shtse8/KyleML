@@ -382,16 +382,16 @@ class PPOAlgo(Algo):
 
         with torch.no_grad():
             states = np.array([x.state for x in memory])
-            states = torch.tensor(states, dtype=torch.float, device=self.device)
+            states = torch.tensor(states, dtype=torch.float, device=self.device).detach()
 
             actions = np.array([x.action.index for x in memory])
-            actions = torch.tensor(actions, dtype=torch.long, device=self.device)
+            actions = torch.tensor(actions, dtype=torch.long, device=self.device).detach()
 
             old_log_probs = np.array([x.action.log for x in memory])
-            old_log_probs = torch.tensor(old_log_probs, dtype=torch.float, device=self.device)
+            old_log_probs = torch.tensor(old_log_probs, dtype=torch.float, device=self.device).detach()
 
             returns = np.array([x.reward for x in memory])
-            returns = torch.tensor(returns, dtype=torch.float, device=self.device)
+            returns = torch.tensor(returns, dtype=torch.float, device=self.device).detach()
 
         # lastValue = 0
         # if not dones[-1]:
@@ -404,7 +404,7 @@ class PPOAlgo(Algo):
         action_probs, values = network(states)
         values = values.squeeze(1)
 
-        advantages = returns - values
+        advantages = returns - values.detach()
         # GAE (General Advantage Estimation)
         # Paper: https://arxiv.org/abs/1506.02438
         # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64

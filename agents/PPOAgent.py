@@ -300,8 +300,8 @@ class Algo:
 
 class PPOAlgo(Algo):
     def __init__(self):
-        super().__init__(OnPolicy(
-            batchSize=2048,
+        super().__init__(OffPolicy(
+            batchSize=32,
             learningRate=3e-4))
         self.gamma = 0.99
         self.epsClip = 0.2
@@ -358,57 +358,54 @@ class PPOAlgo(Algo):
         # returns = self.getDiscountedRewards(rewards, dones, lastValue)
         # returns = torch.tensor(returns, dtype=torch.float, device=self.device)
         # returns = Function.normalize(returns)
+    
+        action_probs, values = network(states)
+        values = values.squeeze(1)
+
+        # GAE (General Advantage Estimation)
+        # Paper: https://arxiv.org/abs/1506.02438
+        # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
+        advantages = self.getGAE(
+            rewards, dones, values.cpu().detach().numpy(), lastValue)
+        advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
+
+        # from baseline
+        # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
+        returns = advantages + values.detach()
+
+        # Normalize advantages
+        # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
+        advantages = Function.normalize(advantages)
+
+        dist = torch.distributions.Categorical(probs=action_probs)
+
+        # porb1 / porb2 = exp(log(prob1) - log(prob2))
+        ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
+        policy_losses1 = ratios * advantages
+        policy_losses2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
+
+        # Maximize Policy Loss (Rewards)
+        policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
+
+        # Maximize Entropy Loss
+        entropy_loss = -dist.entropy().mean()
         
-        losses = []
-        for _ in range(4):
-            action_probs, values = network(states)
-            values = values.squeeze(1)
+        # Minimize Value Loss  (MSE)
+        value_loss = (returns - values).pow(2).mean()
 
-            # GAE (General Advantage Estimation)
-            # Paper: https://arxiv.org/abs/1506.02438
-            # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
-            advantages = self.getGAE(
-                rewards, dones, values.cpu().detach().numpy(), lastValue)
-            advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
+        loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
 
-            # from baseline
-            # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
-            returns = advantages + values.detach()
+        network.optimizer.zero_grad()
+        loss.backward()
 
-            # Normalize advantages
-            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
-            advantages = Function.normalize(advantages)
+        # Chip grad with norm
+        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
+        nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
+        network.optimizer.step()
 
-            dist = torch.distributions.Categorical(probs=action_probs)
-
-            # porb1 / porb2 = exp(log(prob1) - log(prob2))
-            ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-            policy_losses1 = ratios * advantages
-            policy_losses2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
-
-            # Maximize Policy Loss (Rewards)
-            policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
-
-            # Maximize Entropy Loss
-            entropy_loss = -dist.entropy().mean()
-            
-            # Minimize Value Loss  (MSE)
-            value_loss = (returns - values).pow(2).mean()
-
-            loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
-
-            network.optimizer.zero_grad()
-            loss.backward()
-
-            # Chip grad with norm
-            # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
-            nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
-            network.optimizer.step()
-
-            losses.append(loss.item())
         # Report
         network.version += 1
-        loss_float = np.mean(losses)
+        loss_float = loss.item()
 
         return loss_float
 
@@ -468,14 +465,12 @@ class Evaluator(Base):
         self.report = None
 
         self.sync = sync
-        self.waiting = True
 
     def pushMemory(self):
         if self.isValidVersion():
             message = MemoryPush(self.memory, self.network.version)
             self.sync.memoryQueue.put(message)
         self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
-        self.waiting = True
         self.updateNetwork()
 
     def commit(self, transition: Transition):
@@ -494,7 +489,6 @@ class Evaluator(Base):
         if self.network.version < self.sync.latestVersion.value:
             networkInfo = NetworkInfo(self.sync.latestStateDict, self.sync.latestVersion.value)
             self.network.loadInfo(networkInfo)
-            self.waiting = False
 
     def checkUpdate(self):
         if self.algo.policy.networkUpdateStrategy == NetworkUpdateStrategy.Aggressive or self.network.version < self.sync.latestVersion.value - self.algo.policy.versionTolerance // 2:
@@ -508,9 +502,6 @@ class Evaluator(Base):
             done: bool = False
             while not done:
                 self.checkUpdate()
-                if self.waiting:
-                    time.sleep(0.01)
-                    continue
                 action = self.algo.getAction(self.network, state, isTraining)
                 nextState, reward, done = self.env.takeAction(action.index)
                 transition = Transition(state, action, reward, nextState, done)
@@ -540,7 +531,7 @@ class Agent:
         for evaluator in self.evaluators:
             evaluator.send(message)
 
-    def run(self, train: bool = True, episodes: int = 1000, delay: float = 0) -> None:
+    def run(self, train: bool = True, episodes: int = 10000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
         # multiprocessing.connection.BUFSIZE = 2 ** 24
@@ -551,7 +542,7 @@ class Agent:
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
-        n_workers = 1
+        n_workers = math.min(torch.cuda.device_count(), 1)
         for i in range(n_workers):
             evaluator = EvaluatorProcess(
                 i, self.algo, self.env, self.isTraining, self.sync).start()

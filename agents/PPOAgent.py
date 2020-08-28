@@ -542,7 +542,7 @@ class Agent:
         evaluators = []
         # n_workers = mp.cpu_count() - 1
         # n_workers = mp.cpu_count() // 2
-        n_workers = math.min(torch.cuda.device_count(), 1)
+        n_workers = max(torch.cuda.device_count(), 1)
         for i in range(n_workers):
             evaluator = EvaluatorProcess(
                 i, self.algo, self.env, self.isTraining, self.sync).start()

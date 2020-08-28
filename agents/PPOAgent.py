@@ -341,6 +341,7 @@ class PPOAlgo(Algo):
                     lastValue * (1 - transition.done) - values[i]
                 gae = detlas + self.gamma * 0.95 * gae * (1 - transition.done)
                 transition.advantage = gae
+                transition.value = gae + values[i]
                 lastValue = values[i]
 
     def getGAE(self, rewards, dones, values, lastValue=0):
@@ -368,6 +369,9 @@ class PPOAlgo(Algo):
 
         advantages = np.array([x.advantage for x in memory])
         advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
+
+        returns = np.array([x.value for x in memory])
+        returns = torch.tensor(returns, dtype=torch.float, device=self.device)
         # dones = np.array([x.done for x in memory])
         # rewards = np.array([x.reward for x in memory])
         old_log_probs = torch.distributions.Categorical(
@@ -393,7 +397,7 @@ class PPOAlgo(Algo):
 
         # from baseline
         # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
-        returns = advantages + values.detach()
+        # returns = advantages + old_values
 
         # Normalize advantages
         # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139

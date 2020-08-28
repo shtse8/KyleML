@@ -7,6 +7,7 @@ class Transition(object):
         self.done: bool = done
         self.prediction = prediction
         self.advantage = 0
+        self.value = 0
         
     # @property
     # def done(self) -> bool:

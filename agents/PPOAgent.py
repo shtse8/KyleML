@@ -73,7 +73,10 @@ class PredictedAction(object):
 
     @property
     def log(self):
-        return math.log(self.prediction[self.index])
+        # https://github.com/pytorch/pytorch/blob/master/torch/distributions/utils.py#L72
+        eps = torch.finfo(torch.float).eps
+        prob = min(1-eps, max(eps, self.prediction[self.index]))
+        return math.log(prob)
 
 
 class Epoch(Message):
@@ -295,7 +298,7 @@ class Algo:
     def createNetwork(self) -> Network:
         raise NotImplementedError
 
-    def getAction(self, network, state, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
         raise NotImplementedError
 
     def learn(self, network: Network, memory):
@@ -313,26 +316,38 @@ class PPOAlgo(Algo):
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs).to(self.device)
 
-    def getAction(self, network, state, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, prediction, mask, isTraining: bool) -> PredictedAction:
         network.eval()
         with torch.no_grad():
-            state = torch.tensor([state], dtype=torch.float, device=self.device)
-            prediction = network.getPolicy(state).squeeze(0)
-            if isTraining:
-                index = torch.distributions.Categorical(
-                    probs=prediction).sample().item()
-            else:
-                index = prediction.argmax().item()
+            if prediction is None:
+                state = torch.tensor([state], dtype=torch.float, device=self.device)
+                prediction = network.getPolicy(state).squeeze(0)
+                prediction = prediction.cpu().detach().numpy()
+            # print(prediction, mask)
+            handler = PredictionHandler(prediction.copy(), mask)
+            # print(prediction, mask)
+            index = handler.getRandomAction()
+            # print(index, prediction)
             return PredictedAction(
                 index=index,
-                prediction=prediction.cpu().detach().numpy()
+                prediction=prediction
             )
+            # if isTraining:
+            #     index = torch.distributions.Categorical(
+            #         probs=prediction).sample().item()
+            # else:
+            #     index = prediction.argmax().item()
+            # return PredictedAction(
+            #     index=index,
+            #     prediction=prediction.cpu().detach().numpy()
+            # )
 
     def processAdvantage(self, network, memory):
         with torch.no_grad():
             lastValue = 0
-            if not memory[-1].done:
-                lastState = torch.tensor([memory[-1].nextState], dtype=torch.float, device=self.device)
+            lastMemory = memory[-1]
+            if not lastMemory.done:
+                lastState = torch.tensor([lastMemory.nextState], dtype=torch.float, device=self.device)
                 lastValue = network.getValue(lastState).item()
 
             states = np.array([x.state for x in memory])
@@ -342,11 +357,9 @@ class PPOAlgo(Algo):
             gae = 0
             for i in reversed(range(len(memory))):
                 transition = memory[i]
-                detlas = transition.reward + self.gamma * \
-                    lastValue * (1 - transition.done) - values[i]
+                detlas = transition.reward + self.gamma * lastValue * (1 - transition.done) - values[i]
                 gae = detlas + self.gamma * 0.95 * gae * (1 - transition.done)
-                transition.ret = gae + values[i]
-                transition.value = values[i]
+                transition.reward = gae + values[i]
                 lastValue = values[i]
 
     def getGAE(self, rewards, dones, values, lastValue=0):
@@ -373,14 +386,8 @@ class PPOAlgo(Algo):
             old_log_probs = np.array([x.action.log for x in memory])
             old_log_probs = torch.tensor(old_log_probs, dtype=torch.float, device=self.device)
 
-            returns = np.array([x.ret for x in memory])
+            returns = np.array([x.reward for x in memory])
             returns = torch.tensor(returns, dtype=torch.float, device=self.device)
-
-            old_values = np.array([x.value for x in memory])
-            old_values = torch.tensor(old_values, dtype=torch.float, device=self.device)
-
-            advantages = returns - old_values
-
 
         # lastValue = 0
         # if not dones[-1]:
@@ -393,6 +400,7 @@ class PPOAlgo(Algo):
         action_probs, values = network(states)
         values = values.squeeze(1)
 
+        advantages = returns - values
         # GAE (General Advantage Estimation)
         # Paper: https://arxiv.org/abs/1506.02438
         # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
@@ -534,8 +542,16 @@ class Evaluator(Base):
             done: bool = False
             while not done:
                 self.checkUpdate()
-                action = self.algo.getAction(self.network, state, isTraining)
-                nextState, reward, done = self.env.takeAction(action.index)
+                actionMask = np.ones(self.env.actionSpace, dtype=int)
+                prediction = None
+                while True:
+                    action = self.algo.getAction(self.network, state, prediction, actionMask, isTraining)
+                    nextState, reward, done = self.env.takeAction(action.index)
+                    if not (state == nextState).all():
+                        break
+                    actionMask[action.index] = 0
+                    prediction = action.prediction
+                # print(state, action, reward, nextState, done)
                 transition = Transition(state, action, reward, nextState, done)
                 self.commit(transition)
                 if self.delay > 0:

@@ -340,8 +340,8 @@ class PPOAlgo(Algo):
                 detlas = transition.reward + self.gamma * \
                     lastValue * (1 - transition.done) - values[i]
                 gae = detlas + self.gamma * 0.95 * gae * (1 - transition.done)
-                transition.advantage = gae
-                transition.value = gae + values[i]
+                transition.ret = gae + values[i]
+                transition.value = values[i]
                 lastValue = values[i]
 
     def getGAE(self, rewards, dones, values, lastValue=0):
@@ -367,11 +367,13 @@ class PPOAlgo(Algo):
         predictions = np.array([x.action.prediction for x in memory])
         predictions = torch.tensor(predictions, dtype=torch.float, device=self.device)
 
-        advantages = np.array([x.advantage for x in memory])
-        advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
-
-        returns = np.array([x.value for x in memory])
+        returns = np.array([x.ret for x in memory])
         returns = torch.tensor(returns, dtype=torch.float, device=self.device)
+
+        old_values = np.array([x.value for x in memory])
+        old_values = torch.tensor(old_values, dtype=torch.float, device=self.device)
+        advantages = returns - old_values
+
         # dones = np.array([x.done for x in memory])
         # rewards = np.array([x.reward for x in memory])
         old_log_probs = torch.distributions.Categorical(

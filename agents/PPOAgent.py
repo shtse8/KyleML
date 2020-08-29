@@ -312,7 +312,7 @@ class Algo:
 class PPOAlgo(Algo):
     def __init__(self):
         super().__init__("PPO", OffPolicy(
-            batchSize=128,
+            batchSize=512,
             learningRate=3e-4))
         self.gamma = 0.99
         self.epsClip = 0.2
@@ -451,7 +451,7 @@ class PPOAlgo(Algo):
             # losses.append(loss)
             # Accumulating the loss to the graph
             loss.backward()
-            totalLosses += loss.item()
+            totalLosses += loss.item() * len(minibatch)
             totalSamples += len(minibatch)
         # print(torch.cat(losses), loss)
 

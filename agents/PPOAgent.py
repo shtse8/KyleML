@@ -364,6 +364,7 @@ class PPOAlgo(Algo):
                 detlas = transition.reward + self.gamma * lastValue * (1 - transition.done) - values[i]
                 gae = detlas + self.gamma * 0.95 * gae * (1 - transition.done)
                 transition.reward = gae + values[i]
+                transition.value = values[i]
                 lastValue = values[i]
 
     def getGAE(self, rewards, dones, values, lastValue=0):
@@ -393,6 +394,10 @@ class PPOAlgo(Algo):
             returns = np.array([x.reward for x in memory])
             returns = torch.tensor(returns, dtype=torch.float, device=self.device).detach()
 
+            old_values = np.array([x.value for x in memory])
+            old_values = torch.tensor(old_values, dtype=torch.float, device=self.device).detach()
+
+            advantages = returns - old_values
         # lastValue = 0
         # if not dones[-1]:
         #     lastState = torch.tensor([memory[-1].nextState], dtype=torch.float, device=self.device)
@@ -404,7 +409,6 @@ class PPOAlgo(Algo):
         action_probs, values = network(states)
         values = values.squeeze(1)
 
-        advantages = returns - values.detach()
         # GAE (General Advantage Estimation)
         # Paper: https://arxiv.org/abs/1506.02438
         # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
@@ -424,6 +428,7 @@ class PPOAlgo(Algo):
 
         # porb1 / porb2 = exp(log(prob1) - log(prob2))
         ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
+        # print(ratios)
         policy_losses1 = ratios * advantages
         policy_losses2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
 

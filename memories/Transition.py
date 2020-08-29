@@ -5,7 +5,7 @@ class Transition(object):
         self.reward: float = reward
         self.nextState = nextState
         self.done: bool = done
-
+        self.value = 0
     # @property
     # def done(self) -> bool:
         # return self.nextState == None

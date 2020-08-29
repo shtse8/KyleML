@@ -312,7 +312,7 @@ class Algo:
 class PPOAlgo(Algo):
     def __init__(self):
         super().__init__("PPO", OffPolicy(
-            batchSize=32,
+            batchSize=128,
             learningRate=3e-4))
         self.gamma = 0.99
         self.epsClip = 0.2
@@ -358,11 +358,17 @@ class PPOAlgo(Algo):
             states = torch.tensor(states, dtype=torch.float, device=self.device)
 
             values = network.getValue(states).squeeze(1).cpu().detach().numpy()
+
+            # GAE (General Advantage Estimation)
+            # Paper: https://arxiv.org/abs/1506.02438
+            # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
             gae = 0
             for i in reversed(range(len(memory))):
                 transition = memory[i]
                 detlas = transition.reward + self.gamma * lastValue * (1 - transition.done) - values[i]
                 gae = detlas + self.gamma * 0.95 * gae * (1 - transition.done)
+                # from baseline
+                # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
                 transition.reward = gae + values[i]
                 transition.value = values[i]
                 lastValue = values[i]
@@ -380,82 +386,86 @@ class PPOAlgo(Algo):
 
     def learn(self, network: Network, memory):
         network.train()
-
-        with torch.no_grad():
-            states = np.array([x.state for x in memory])
+        memory = np.array(memory)
+        miniBatchSize = 32
+        n_miniBatch = len(memory) // miniBatchSize
+        totalLosses = 0
+        totalSamples = 0
+        network.optimizer.zero_grad()
+        for i in range(n_miniBatch):
+            startIndex = i * miniBatchSize
+            endIndex = startIndex + miniBatchSize
+            minibatch = memory[startIndex:endIndex]
+            
+            states = np.array([x.state for x in minibatch])
             states = torch.tensor(states, dtype=torch.float, device=self.device).detach()
 
-            actions = np.array([x.action.index for x in memory])
+            actions = np.array([x.action.index for x in minibatch])
             actions = torch.tensor(actions, dtype=torch.long, device=self.device).detach()
 
-            old_log_probs = np.array([x.action.log for x in memory])
+            old_log_probs = np.array([x.action.log for x in minibatch])
             old_log_probs = torch.tensor(old_log_probs, dtype=torch.float, device=self.device).detach()
 
-            returns = np.array([x.reward for x in memory])
+            returns = np.array([x.reward for x in minibatch])
             returns = torch.tensor(returns, dtype=torch.float, device=self.device).detach()
 
-            old_values = np.array([x.value for x in memory])
+            old_values = np.array([x.value for x in minibatch])
             old_values = torch.tensor(old_values, dtype=torch.float, device=self.device).detach()
 
             advantages = returns - old_values
-        # lastValue = 0
-        # if not dones[-1]:
-        #     lastState = torch.tensor([memory[-1].nextState], dtype=torch.float, device=self.device)
-        #     lastValue = network.getValue(lastState).item()
-        # returns = self.getDiscountedRewards(rewards, dones, lastValue)
-        # returns = torch.tensor(returns, dtype=torch.float, device=self.device)
-        # returns = Function.normalize(returns)
-    
-        action_probs, values = network(states)
-        values = values.squeeze(1)
+            # Normalize advantages
+            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
+            # advantages = Function.normalize(advantages)
 
-        # GAE (General Advantage Estimation)
-        # Paper: https://arxiv.org/abs/1506.02438
-        # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
-        # advantages = self.getGAE(
-        #     rewards, dones, values.cpu().detach().numpy(), lastValue)
-        # advantages = torch.tensor(advantages, dtype=torch.float, device=self.device)
+            action_probs, values = network(states)
+            values = values.squeeze(1)
 
-        # from baseline
-        # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
-        # returns = advantages + old_values
+            # PPO2 - Confirm the samples aren't too far from pi.
+            # porb1 / porb2 = exp(log(prob1) - log(prob2))
+            dist = torch.distributions.Categorical(probs=action_probs)
+            ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
+            policy_losses1 = ratios * advantages
+            policy_losses2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
 
-        # Normalize advantages
-        # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
-        advantages = Function.normalize(advantages)
+            # Maximize Policy Loss (Rewards)
+            policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
 
-        dist = torch.distributions.Categorical(probs=action_probs)
+            # Maximize Entropy Loss
+            entropy_loss = -dist.entropy().mean()
+            
+            # Minimize Value Loss  (MSE)
+            # Clip the value to reduce variability during Critic training
+            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
+            value_loss = (returns - values).pow(2).mean()
+            # value_loss1 = (returns - values).pow(2)
+            # valuesClipped = old_values + torch.clamp(values - old_values, -self.epsClip, self.epsClip)
+            # value_loss2 = (returns - valuesClipped).pow(2)
+            # value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
 
-        # porb1 / porb2 = exp(log(prob1) - log(prob2))
-        ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-        # print(ratios)
-        policy_losses1 = ratios * advantages
-        policy_losses2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
+            # Calculating Total loss
+            # Wondering  if we need to divide the number of minibatches to keep the same learning rate?
+            # As the learning rate is a parameter of optimizer, and only one step is called. 
+            # Should be fine to not dividing the number of minibatches.
+            loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) / n_miniBatch
 
-        # Maximize Policy Loss (Rewards)
-        policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
+            # losses.append(loss)
+            # Accumulating the loss to the graph
+            loss.backward()
+            totalLosses += loss.item()
+            totalSamples += len(minibatch)
+        # print(torch.cat(losses), loss)
 
-        # Maximize Entropy Loss
-        entropy_loss = -dist.entropy().mean()
-        
-        # Minimize Value Loss  (MSE)
-        value_loss = (returns - values).pow(2).mean()
-
-        loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
-
-        network.optimizer.zero_grad()
-        loss.backward()
+        # loss = torch.cat(losses).mean()
+        # loss.backward()
 
         # Chip grad with norm
         # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
         nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
+            
         network.optimizer.step()
-
-        # Report
         network.version += 1
-        loss_float = loss.item()
 
-        return loss_float
+        return totalLosses / totalSamples
 
 
 class Base:

@@ -67,7 +67,9 @@ class Puzzle2048(Game):
 
     def takeAction(self, action):
         score = self.game.score
-        self.game.move(action)
+        moved = self.game.move(action)
+        if not moved:
+            raise Exception()
         self.reward = self.game.score - score
         # self.reward = max(-1, min(1, self.reward))
         return super().takeAction(action)

@@ -547,12 +547,13 @@ class Evaluator(Base):
                 actionMask = np.ones(self.env.actionSpace, dtype=int)
                 prediction = None
                 while True:
-                    action = self.algo.getAction(self.network, state, prediction, actionMask, isTraining)
-                    nextState, reward, done = self.env.takeAction(action.index)
-                    if not (state == nextState).all():
+                    try:
+                        action = self.algo.getAction(self.network, state, prediction, actionMask, isTraining)
+                        nextState, reward, done = self.env.takeAction(action.index)
                         break
-                    actionMask[action.index] = 0
-                    prediction = action.prediction
+                    except Exception:
+                        actionMask[action.index] = 0
+                        prediction = action.prediction
                 # print(state, action, reward, nextState, done)
                 transition = Transition(state, action, reward, nextState, done)
                 self.commit(transition)

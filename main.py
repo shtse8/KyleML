@@ -2,6 +2,7 @@ import os
 import sys
 import signal
 import argparse
+import asyncio
 
 
 from games.SimpleSnake import SimpleSnake
@@ -28,7 +29,7 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description='Kyle RL Playground')
     parser.add_argument('--game', default='2048', type=str)
     parser.add_argument('--agent', default='ppo', type=str)
@@ -85,4 +86,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
+    loop.close()

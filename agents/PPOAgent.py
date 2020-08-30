@@ -1,3 +1,4 @@
+import asyncio
 import __main__
 from pathlib import Path
 import os
@@ -19,7 +20,7 @@ from enum import Enum
 import time
 import sys
 import multiprocessing.connection
-from utils.PipedProcess import Process
+from utils.PipedProcess import Process, PipedProcess
 
 
 # def init_layer(m):
@@ -314,10 +315,11 @@ class PPOAlgo(Algo):
         super().__init__("PPO", Policy(
             batchSize=512,
             learningRate=3e-4,
-            versionTolerance=0,
+            versionTolerance=9,
             networkUpdateStrategy=NetworkUpdateStrategy.Aggressive))
         self.gamma = 0.99
         self.epsClip = 0.2
+        self.gaeCoeff = 0.95
 
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs)
@@ -368,7 +370,7 @@ class PPOAlgo(Algo):
             for i in reversed(range(len(memory))):
                 transition = memory[i]
                 detlas = transition.reward + self.gamma * lastValue * (1 - transition.done) - values[i]
-                gae = detlas + self.gamma * 0.95 * gae * (1 - transition.done)
+                gae = detlas + self.gamma * self.gaeCoeff * gae * (1 - transition.done)
                 # from baseline
                 # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
                 transition.advantage = gae
@@ -390,7 +392,7 @@ class PPOAlgo(Algo):
         for i in reversed(range(len(rewards))):
             detlas = rewards[i] + self.gamma * \
                 lastValue * (1 - dones[i]) - values[i]
-            gae = detlas + self.gamma * 0.95 * gae * (1 - dones[i])
+            gae = detlas + self.gamma * self.gaeCoeff * gae * (1 - dones[i])
             advantages[i] = gae
             lastValue = values[i]
         return advantages
@@ -487,22 +489,17 @@ class Base:
 class Trainer(Base):
     def __init__(self, network, algo: Algo, env, sync):
         super().__init__(algo, env)
-        # self.algo.device = torch.device("cpu")
         self.algo.device = sync.getDevice()
-        self.network = network.buildOptimizer(self.algo.policy.learningRate).to(self.algo.device)
+        self.network = network
         self.lastBroadcast = None
         self.sync = sync
+        self.evaluators = []
 
-    def learn(self):
-        while not self.sync.memoryQueue.empty():
-            message = self.sync.memoryQueue.get()
-            steps = len(message.memory)
-            if message.version >= self.network.version - self.algo.policy.versionTolerance:
-                loss = self.algo.learn(self.network, message.memory)
-                report = LearnReport(loss=loss, steps=steps)
-            else:
-                report = LearnReport(drops=steps)
-            self.sync.reportQueue.put(report)
+    def learn(self, memory):
+        steps = len(memory)
+        loss = self.algo.learn(self.network, memory)
+        report = LearnReport(loss=loss, steps=steps)
+        self.sync.reportQueue.put(report)
 
     def pushNewNetwork(self):
         if self.lastBroadcast is None or self.lastBroadcast.version < self.network.version:
@@ -511,69 +508,76 @@ class Trainer(Base):
             self.sync.latestVersion.value = networkInfo.version
             self.lastBroadcast = networkInfo
 
-    def start(self, isTraining=False):
+    async def start(self, isTraining=False):
+        evaluators = []
+        n_workers = max(torch.cuda.device_count(), 1)
+        n_workers = 2
+        for i in range(n_workers):
+            evaluator = EvaluatorProcess(self.network, self.algo, self.env, self.sync).start()
+            evaluators.append(evaluator)
+
+        self.evaluators = np.array(evaluators)
+
+        self.network = self.network.buildOptimizer(self.algo.policy.learningRate).to(self.algo.device)
         while True:
-            self.learn()
+            # push new network
             self.pushNewNetwork()
+            # collect samples
+            memory = collections.deque(maxlen=512)
+            for evaulator in self.evaluators:
+                promise = evaulator.call("roll", (256,))
+                response = await promise
+                # print("Response", response.result)
+                # print("Rolled Memory: ", len(response.result))
+                memory.extend(response.result)
+            
+            # learn
+            self.learn(memory)
 
 
 class Evaluator(Base):
-    def __init__(self, id, network, algo: Algo, env, sync, delay=0):
+    def __init__(self, network, algo: Algo, env, sync):
         super().__init__(algo, env.getNew())
-        self.id = id
-        self.delay = delay
         # self.algo.device = torch.device("cpu")
         self.algo.device = sync.getDevice()
         self.network = network.to(self.algo.device)
         self.network.version = -1
-
-        self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
-        self.report = None
-
         self.sync = sync
 
-    def pushMemory(self):
-        if self.isValidVersion():
-            self.algo.processAdvantage(self.network, self.memory)
-            message = MemoryPush(self.memory, self.network.version)
-            self.sync.memoryQueue.put(message)
-        self.memory = collections.deque(maxlen=self.algo.policy.batchSize)
-        self.updateNetwork()
-
-    def commit(self, transition: Transition):
-        self.report.rewards += transition.reward
-        self.memory.append(transition)
-        if len(self.memory) >= self.algo.policy.batchSize:
-            self.pushMemory()
-
-    def isValidVersion(self):
-        return self.network.version >= self.sync.latestVersion.value - self.algo.policy.versionTolerance
+        self.report = None
+        self.generator = None
 
     def updateNetwork(self):
-        while self.sync.latestVersion.value == -1:
-            time.sleep(0.01)
-            
         if self.network.version < self.sync.latestVersion.value:
             networkInfo = NetworkInfo(self.sync.latestStateDict, self.sync.latestVersion.value)
             self.network.loadInfo(networkInfo)
 
-    def checkUpdate(self):
-        if self.algo.policy.networkUpdateStrategy == NetworkUpdateStrategy.Aggressive or self.network.version < self.sync.latestVersion.value - self.algo.policy.versionTolerance // 2:
-            self.updateNetwork()
-
-    def start(self, isTraining=False):
+    def roll(self, num):
+        if self.generator is None:
+            self.generator = self.transitionGenerator()
         self.updateNetwork()
+        memory = collections.deque(maxlen=num)
+        for _ in range(num):
+            transition = next(self.generator)
+            memory.append(transition)
+
+        # push memory
+        self.algo.processAdvantage(self.network, memory)
+        return memory
+        # message = MemoryPush(memory, self.network.version)
+        # self.sync.memoryQueue.put(message)
+
+    def transitionGenerator(self):
         while True:
             self.report = EnvReport()
             state = self.env.reset()
             done: bool = False
             while not done:
-                self.checkUpdate()
                 actionMask = np.ones(self.env.actionSpace, dtype=int)
                 prediction = None
                 while True:
                     try:
-                        action = self.algo.getAction(self.network, state, prediction, actionMask, isTraining)
+                        action = self.algo.getAction(self.network, state, prediction, actionMask, False)
                         nextState, reward, done = self.env.takeAction(action.index)
                         break
                     except Exception:
@@ -581,12 +585,10 @@ class Evaluator(Base):
                         prediction = action.prediction
                 # print(state, action, reward, nextState, done)
                 transition = Transition(state, action, reward, nextState, done)
-                self.commit(transition)
-                if self.delay > 0:
-                    time.sleep(self.delay)
+                self.report.rewards += transition.reward
+                yield transition
                 state = nextState
             self.sync.reportQueue.put(self.report)
-
 
 class Agent:
     def __init__(self, algo: Algo, env):
@@ -622,14 +624,6 @@ class Agent:
         print(
             f"Train: {self.isTraining}, Trained: {Function.humanize(self.totalEpisodes)} episodes, {Function.humanize(self.totalSteps)} steps")
 
-        evaluators = []
-        n_workers = max(torch.cuda.device_count(), 1)
-        for i in range(n_workers):
-            evaluator = EvaluatorProcess(
-                i, network, self.algo, self.env, self.isTraining, self.sync).start()
-            evaluators.append(evaluator)
-
-        self.evaluators = np.array(evaluators)
         trainer = TrainerProcess(network, self.algo, self.env, self.sync).start()
         self.epoch = Epoch(episodes).start()
         while True:
@@ -702,20 +696,57 @@ class Agent:
         return path
 
 
-class EvaluatorProcess(Process):
-    def __init__(self, id, network, algo, env, isTraining, sync):
+class MethodCallRequest(Message):
+    def __init__(self, method, args):
+        self.method = method
+        self.args = args
+
+
+class MethodCallResult(Message):
+    def __init__(self, result):
+        self.result = result
+
+class Promise:
+    def __init__(self):
+        self.result = None
+
+class EvaluatorProcess(PipedProcess):
+    def __init__(self, network, algo, env, sync):
         super().__init__()
-        self.id = id
         self.network = network
         self.algo = algo
         self.env = env
-        self.isTraining = isTraining
         self.sync = sync
+        self.object = None
+        self.isRunning = True
 
-    def run(self):
-        # print("Evaluator-" + str(self.id), os.getpid())
-        Evaluator(self.id, self.network, self.algo, self.env, self.sync).start(self.isTraining)
+    async def asyncRun(self, conn):
+        # print("Evaluator", os.getpid(), conn)
+        self.object = Evaluator(self.network, self.algo, self.env, self.sync)
+        while self.isRunning:
+            if conn.poll():
+                message = conn.recv()
+                if isinstance(message, MethodCallRequest):
+                    # print("MMethodCallRequest", message.method)
+                    result = getattr(self.object, message.method)(*message.args)
+                    conn.send(MethodCallResult(result))
 
+    def call(self, method, args=()):
+        # print("Call", method)
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self.send(MethodCallRequest(method, args))
+
+        async def waitResponse():
+            while True:
+                if self.poll():
+                    message = self.recv()
+                    future.set_result(message)
+                    break
+                await asyncio.sleep(0)
+
+        loop.create_task(waitResponse())
+        return future
 
 class TrainerProcess(Process):
     def __init__(self, network, algo, env, sync):
@@ -725,9 +756,9 @@ class TrainerProcess(Process):
         self.env = env
         self.sync = sync
 
-    def run(self):
+    async def asyncRun(self):
         # print("Trainer", os.getpid())
-        Trainer(self.network, self.algo, self.env, self.sync).start()
+        await Trainer(self.network, self.algo, self.env, self.sync).start()
 
 
 # thread safe

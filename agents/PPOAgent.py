@@ -511,7 +511,6 @@ class Trainer(Base):
     async def start(self, isTraining=False):
         evaluators = []
         n_workers = max(torch.cuda.device_count(), 1)
-        n_workers = 2
         for i in range(n_workers):
             evaluator = EvaluatorProcess(self.network, self.algo, self.env, self.sync).start()
             evaluators.append(evaluator)
@@ -519,13 +518,15 @@ class Trainer(Base):
         self.evaluators = np.array(evaluators)
 
         self.network = self.network.buildOptimizer(self.algo.policy.learningRate).to(self.algo.device)
+        n_samples = 512
+        evaulator_samples = math.ceil(n_samples / n_workers)
         while True:
             # push new network
             self.pushNewNetwork()
             # collect samples
-            memory = collections.deque(maxlen=512)
+            memory = collections.deque(maxlen=n_samples)
             for evaulator in self.evaluators:
-                promise = evaulator.call("roll", (256,))
+                promise = evaulator.call("roll", (evaulator_samples,))
                 response = await promise
                 # print("Response", response.result)
                 # print("Rolled Memory: ", len(response.result))

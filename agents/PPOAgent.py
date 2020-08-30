@@ -311,9 +311,11 @@ class Algo:
 
 class PPOAlgo(Algo):
     def __init__(self):
-        super().__init__("PPO", OffPolicy(
+        super().__init__("PPO", Policy(
             batchSize=512,
-            learningRate=3e-4))
+            learningRate=3e-4,
+            versionTolerance=0,
+            networkUpdateStrategy=NetworkUpdateStrategy.Aggressive))
         self.gamma = 0.99
         self.epsClip = 0.2
 
@@ -469,7 +471,7 @@ class PPOAlgo(Algo):
         # Chip grad with norm
         # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
         nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
-            
+  
         network.optimizer.step()
         network.version += 1
 

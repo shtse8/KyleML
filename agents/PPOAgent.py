@@ -95,7 +95,7 @@ class Epoch(Message):
 
         # for stats
         # self.history = collections.deque(maxlen=target_episodes)
-        self.bestRewards = 0
+        self.bestRewards = -math.inf
         self.totalRewards = 0
         self.envs = 0
 
@@ -512,7 +512,7 @@ class Trainer(Base):
         evaluators = []
         n_workers = max(torch.cuda.device_count(), 1)
         for i in range(n_workers):
-            evaluator = EvaluatorProcess(self.network, self.algo, self.env, self.sync).start()
+            evaluator = EvaluatorService(self.network, self.algo, self.env, self.sync).start()
             evaluators.append(evaluator)
 
         self.evaluators = np.array(evaluators)
@@ -710,20 +710,16 @@ class MethodCallResult(Message):
 class Promise:
     def __init__(self):
         self.result = None
-
-class EvaluatorProcess(PipedProcess):
-    def __init__(self, network, algo, env, sync):
+        
+class Service(PipedProcess):
+    def __init__(self, factory):
         super().__init__()
-        self.network = network
-        self.algo = algo
-        self.env = env
-        self.sync = sync
-        self.object = None
+        self.factory = factory
         self.isRunning = True
 
     async def asyncRun(self, conn):
         # print("Evaluator", os.getpid(), conn)
-        self.object = Evaluator(self.network, self.algo, self.env, self.sync)
+        self.object = self.factory()
         while self.isRunning:
             if conn.poll():
                 message = conn.recv()
@@ -748,6 +744,17 @@ class EvaluatorProcess(PipedProcess):
 
         loop.create_task(waitResponse())
         return future
+    
+class EvaluatorService(Service):
+    def __init__(self, network, algo, env, sync):
+        self.network = network
+        self.algo = algo
+        self.env = env
+        self.sync = sync
+        super().__init__(self.factory)
+
+    def factory(self):
+        return Evaluator(self.network, self.algo, self.env, self.sync)
 
 class TrainerProcess(Process):
     def __init__(self, network, algo, env, sync):

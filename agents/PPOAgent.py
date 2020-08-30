@@ -244,8 +244,8 @@ class Network(nn.Module):
 
 
 class PPONetwork(Network):
-    def __init__(self, inputShape, n_outputs, name=None):
-        super().__init__(inputShape, n_outputs, name)
+    def __init__(self, inputShape, n_outputs):
+        super().__init__(inputShape, n_outputs)
 
         hidden_nodes = 512
         self.body = BodyLayers(inputShape, hidden_nodes)
@@ -557,12 +557,7 @@ class Evaluator(Base):
         if self.generator is None:
             self.generator = self.transitionGenerator()
         self.updateNetwork()
-        memory = collections.deque(maxlen=num)
-        for _ in range(num):
-            transition = next(self.generator)
-            memory.append(transition)
-
-        # push memory
+        memory = np.array([next(self.generator) for _ in range(num)])
         self.algo.processAdvantage(self.network, memory)
         return memory
         # message = MemoryPush(memory, self.network.version)
@@ -635,6 +630,7 @@ class Agent:
                 if isinstance(message, LearnReport):
                     if message.steps > 0:
                         self.epoch.trained(message.loss, message.steps)
+                        self.totalEpisodes += 1
                         self.totalSteps += message.steps
                         if time.perf_counter() - self.lastSave > 60:
                             self.save()
@@ -647,6 +643,8 @@ class Agent:
                         self.epoch.drops += message.drops
                 elif isinstance(message, EnvReport):
                     self.epoch.add(message)
+                    
+            time.sleep(0.01)
 
     def update(self, freq=.1) -> None:
         if time.perf_counter() - self.lastPrint < freq:
@@ -710,7 +708,7 @@ class MethodCallResult(Message):
 class Promise:
     def __init__(self):
         self.result = None
-        
+
 class Service(PipedProcess):
     def __init__(self, factory):
         super().__init__()
@@ -744,7 +742,7 @@ class Service(PipedProcess):
 
         loop.create_task(waitResponse())
         return future
-    
+
 class EvaluatorService(Service):
     def __init__(self, network, algo, env, sync):
         self.network = network

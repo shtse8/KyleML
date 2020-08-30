@@ -511,7 +511,6 @@ class Trainer(Base):
     async def start(self, isTraining=False):
         evaluators = []
         n_workers = max(torch.cuda.device_count(), 1)
-        n_workers = 2
         for i in range(n_workers):
             evaluator = EvaluatorProcess(self.network, self.algo, self.env, self.sync).start()
             evaluators.append(evaluator)

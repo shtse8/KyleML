@@ -525,13 +525,13 @@ class Trainer(Base):
             self.pushNewNetwork()
             # collect samples
             memory = collections.deque(maxlen=n_samples)
-            for evaulator in self.evaluators:
-                promise = evaulator.call("roll", (evaulator_samples,))
+            promises = np.array([x.call("roll", (evaulator_samples,)) for x in self.evaluators])
+            promises, _ = await asyncio.wait(promises)
+            for promise in promises:
                 response = await promise
                 # print("Response", response.result)
                 # print("Rolled Memory: ", len(response.result))
                 memory.extend(response.result)
-            
             # learn
             self.learn(memory)
 

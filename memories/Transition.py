@@ -6,6 +6,7 @@ class Transition(object):
         self.nextState = nextState
         self.done: bool = done
         self.value = 0
+        self.advantage = 0
     # @property
     # def done(self) -> bool:
         # return self.nextState == None

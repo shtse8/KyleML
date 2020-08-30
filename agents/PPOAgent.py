@@ -246,7 +246,7 @@ class PPONetwork(Network):
     def __init__(self, inputShape, n_outputs, name=None):
         super().__init__(inputShape, n_outputs, name)
 
-        hidden_nodes = 64
+        hidden_nodes = 512
         self.body = BodyLayers(inputShape, hidden_nodes)
 
         # Define policy head
@@ -369,9 +369,18 @@ class PPOAlgo(Algo):
                 gae = detlas + self.gamma * 0.95 * gae * (1 - transition.done)
                 # from baseline
                 # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
+                transition.advantage = gae
                 transition.reward = gae + values[i]
                 transition.value = values[i]
                 lastValue = values[i]
+
+            
+            # Normalize advantages
+            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
+            advantages = np.array([x.advantage for x in memory])
+            advantages = Function.normalize(advantages)
+            for transition, advantage in zip(memory, advantages):
+                transition.advantage = advantage
 
     def getGAE(self, rewards, dones, values, lastValue=0):
         advantages = np.zeros_like(rewards).astype(float)
@@ -412,10 +421,9 @@ class PPOAlgo(Algo):
             old_values = np.array([x.value for x in minibatch])
             old_values = torch.tensor(old_values, dtype=torch.float, device=self.device).detach()
 
-            advantages = returns - old_values
-            # Normalize advantages
-            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
-            # advantages = Function.normalize(advantages)
+            # advantages = returns - old_values
+            advantages = np.array([x.advantage for x in minibatch])
+            advantages = torch.tensor(advantages, dtype=torch.float, device=self.device).detach()
 
             action_probs, values = network(states)
             values = values.squeeze(1)
@@ -436,11 +444,11 @@ class PPOAlgo(Algo):
             # Minimize Value Loss  (MSE)
             # Clip the value to reduce variability during Critic training
             # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
-            value_loss = (returns - values).pow(2).mean()
-            # value_loss1 = (returns - values).pow(2)
-            # valuesClipped = old_values + torch.clamp(values - old_values, -self.epsClip, self.epsClip)
-            # value_loss2 = (returns - valuesClipped).pow(2)
-            # value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
+            # value_loss = (returns - values).pow(2).mean()
+            value_loss1 = (returns - values).pow(2)
+            valuesClipped = old_values + torch.clamp(values - old_values, -self.epsClip, self.epsClip)
+            value_loss2 = (returns - valuesClipped).pow(2)
+            value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
 
             # Calculating Total loss
             # Wondering  if we need to divide the number of minibatches to keep the same learning rate?
@@ -599,7 +607,7 @@ class Agent:
         for evaluator in self.evaluators:
             evaluator.send(message)
 
-    def run(self, train: bool = True, load: bool = False, episodes: int = 10000, delay: float = 0) -> None:
+    def run(self, train: bool = True, load: bool = False, episodes: int = 1000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
         self.lastSave = time.perf_counter()

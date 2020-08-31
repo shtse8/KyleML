@@ -448,11 +448,12 @@ class PPOAlgo(Algo):
             # Minimize Value Loss  (MSE)
             # Clip the value to reduce variability during Critic training
             # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
-            # value_loss = (returns - values).pow(2).mean()
-            value_loss1 = (returns - values).pow(2)
-            valuesClipped = old_values + torch.clamp(values - old_values, -self.epsClip, self.epsClip)
-            value_loss2 = (returns - valuesClipped).pow(2)
-            value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
+            value_loss = (returns - values).pow(2).mean()
+            #value_loss1 = (returns - values).pow(2)
+            #valuesClipped = old_values + torch.clamp(values - old_values, -self.epsClip, self.epsClip)
+            #value_loss2 = (returns - valuesClipped).pow(2)
+            #value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
+            #print(value_loss1, valuesClipped)
 
             # Calculating Total loss
             # Wondering  if we need to divide the number of minibatches to keep the same learning rate?
@@ -518,7 +519,7 @@ class Trainer(Base):
         self.evaluators = np.array(evaluators)
 
         self.network = self.network.buildOptimizer(self.algo.policy.learningRate).to(self.algo.device)
-        n_samples = 512
+        n_samples = 512 * n_workers
         evaulator_samples = math.ceil(n_samples / n_workers)
         while True:
             # push new network
@@ -678,13 +679,13 @@ class Agent:
         try:
             path = self.getSavePath()
             print("Loading from path: ", path)
-            data = torch.load(path)
+            data = torch.load(path, map_location='cpu')
             # data = torch.load(path, map_location=self.device)
             self.totalSteps = int(data["totalSteps"]) if "totalSteps" in data else 0
             self.totalEpisodes = int(data["totalEpisodes"]) if "totalEpisodes" in data else 0
             for network in self.networks:
+                print(f"{network.name} weights loaded.")
                 network.load_state_dict(data[network.name])
-            print("Weights loaded.")
         except Exception as e:
             print("Failed to load.", e)
     

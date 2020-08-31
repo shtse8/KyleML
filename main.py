@@ -13,6 +13,7 @@ from games.CartPole import CartPole
 from games.Breakout import Breakout
 from games.mario import Mario
 from games.Pong import Pong
+from games.gymgame import GymGame
 # from agents.DQNAgent import DQNAgent
 # from agents.A2CAgent import A2CAgent
 # from agents.A3CAgent import A3CAgent
@@ -56,13 +57,14 @@ async def main():
     # }
 
     games = {
-        "snake": Snake,
-        "simplesnake": SimpleSnake,
-        "cartpole": CartPole,
-        "2048": Puzzle2048,
-        "mario": Mario,
-        "pong": Pong,
-        "breakout": Breakout,
+        "snake": lambda: Snake(),
+        "simplesnake": lambda: SimpleSnake(),
+        "cartpole": lambda: CartPole(),
+        "2048": lambda: Puzzle2048(),
+        "mario": lambda: Mario(),
+        "pong": lambda: Pong(),
+        "breakout": lambda: Breakout(),
+        "blackjack": lambda: GymGame("Blackjack-v0")
     }
 
     if args.game in games:

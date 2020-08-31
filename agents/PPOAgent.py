@@ -304,7 +304,7 @@ class Algo:
     def createNetwork(self) -> Network:
         raise NotImplementedError
 
-    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, isTraining: bool) -> PredictedAction:
         raise NotImplementedError
 
     def learn(self, network: Network, memory):
@@ -325,31 +325,20 @@ class PPOAlgo(Algo):
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs)
 
-    def getAction(self, network, state, prediction, mask, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, isTraining: bool) -> PredictedAction:
         network.eval()
         with torch.no_grad():
-            if prediction is None:
-                state = torch.tensor([state], dtype=torch.float, device=self.device)
-                prediction = network.getPolicy(state).squeeze(0)
-                prediction = prediction.cpu().detach().numpy()
-            # print(prediction, mask)
-            handler = PredictionHandler(prediction.copy(), mask)
-            # print(prediction, mask)
-            index = handler.getRandomAction()
-            # print(index, prediction)
+            state = torch.tensor([state], dtype=torch.float, device=self.device)
+            prediction = network.getPolicy(state).squeeze(0)
+            if isTraining:
+                index = torch.distributions.Categorical(
+                    probs=prediction).sample().item()
+            else:
+                index = prediction.argmax().item()
             return PredictedAction(
                 index=index,
-                prediction=prediction
+                prediction=prediction.cpu().detach().numpy()
             )
-            # if isTraining:
-            #     index = torch.distributions.Categorical(
-            #         probs=prediction).sample().item()
-            # else:
-            #     index = prediction.argmax().item()
-            # return PredictedAction(
-            #     index=index,
-            #     prediction=prediction.cpu().detach().numpy()
-            # )
 
     def processAdvantage(self, network, memory):
         with torch.no_grad():
@@ -573,17 +562,8 @@ class Evaluator(Base):
             state = self.env.reset()
             done: bool = False
             while not done:
-                actionMask = np.ones(self.env.actionSpace, dtype=int)
-                prediction = None
-                while True:
-                    try:
-                        action = self.algo.getAction(self.network, state, prediction, actionMask, False)
-                        nextState, reward, done = self.env.takeAction(action.index)
-                        break
-                    except Exception:
-                        actionMask[action.index] = 0
-                        prediction = action.prediction
-                # print(state, action, reward, nextState, done)
+                action = self.algo.getAction(self.network, state, True)
+                nextState, reward, done = self.env.takeAction(action.index)
                 transition = Transition(state, action, reward, nextState, done)
                 self.report.rewards += transition.reward
                 yield transition

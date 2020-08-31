@@ -14,6 +14,7 @@ from utils.PredictionHandler import PredictionHandler
 from .Agent import Agent
 from memories.Transition import Transition
 from memories.SimpleMemory import SimpleMemory
+from games.GameFactory import GameFactory
 import collections
 import numpy as np
 from enum import Enum
@@ -482,14 +483,14 @@ class PPOAlgo(Algo):
 
 
 class Base:
-    def __init__(self, algo: Algo, env):
+    def __init__(self, algo: Algo):
         self.algo: Algo = algo
-        self.env = env
 
 
 class Trainer(Base):
-    def __init__(self, network, algo: Algo, env, sync):
-        super().__init__(algo, env)
+    def __init__(self, network, algo: Algo, gameFactory: GameFactory, sync):
+        super().__init__(algo)
+        self.gameFactory = gameFactory
         self.algo.device = sync.getDevice()
         self.network = network
         self.lastBroadcast = None
@@ -513,7 +514,7 @@ class Trainer(Base):
         evaluators = []
         n_workers = max(torch.cuda.device_count(), 1)
         for i in range(n_workers):
-            evaluator = EvaluatorService(self.network, self.algo, self.env, self.sync).start()
+            evaluator = EvaluatorService(self.network, self.algo, self.gameFactory, self.sync).start()
             evaluators.append(evaluator)
 
         self.evaluators = np.array(evaluators)
@@ -538,8 +539,10 @@ class Trainer(Base):
 
 
 class Evaluator(Base):
-    def __init__(self, network, algo: Algo, env, sync):
-        super().__init__(algo, env.getNew())
+    def __init__(self, network, algo: Algo, gameFactory, sync):
+        super().__init__(algo)
+        self.gameFactory = gameFactory
+        self.env = gameFactory.get()
         # self.algo.device = torch.device("cpu")
         self.algo.device = sync.getDevice()
         self.network = network.to(self.algo.device)
@@ -588,10 +591,10 @@ class Evaluator(Base):
             self.sync.reportQueue.put(self.report)
 
 class Agent:
-    def __init__(self, algo: Algo, env):
+    def __init__(self, algo: Algo, gameFactory: GameFactory):
         self.evaluators = []
         self.algo = algo
-        self.env = env
+        self.gameFactory = gameFactory
 
         self.totalEpisodes = 0
         self.totalSteps = 0
@@ -614,14 +617,15 @@ class Agent:
         self.lastSave = time.perf_counter()
         # multiprocessing.connection.BUFSIZE = 2 ** 24
 
-        network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace)
+        env = self.gameFactory.get()
+        network = self.algo.createNetwork(env.observationShape, env.actionSpace)
         self.networks.append(network)
         if not train or load:
             self.load()
         print(
             f"Train: {self.isTraining}, Trained: {Function.humanize(self.totalEpisodes)} episodes, {Function.humanize(self.totalSteps)} steps")
 
-        trainer = TrainerProcess(network, self.algo, self.env, self.sync).start()
+        trainer = TrainerProcess(network, self.algo, self.gameFactory, self.sync).start()
         self.epoch = Epoch(episodes).start()
         while True:
             self.update()
@@ -690,7 +694,7 @@ class Agent:
             print("Failed to load.", e)
     
     def getSavePath(self, makeDir: bool = False) -> str:
-        path = os.path.join(os.path.dirname(__main__.__file__), self.weightPath, self.algo.name.lower(), self.env.name + ".h5")
+        path = os.path.join(os.path.dirname(__main__.__file__), self.weightPath, self.algo.name.lower(), self.gameFactory.name + ".h5")
         if makeDir:
             Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
         return path
@@ -745,27 +749,27 @@ class Service(PipedProcess):
         return future
 
 class EvaluatorService(Service):
-    def __init__(self, network, algo, env, sync):
+    def __init__(self, network, algo, gameFactory, sync):
         self.network = network
         self.algo = algo
-        self.env = env
+        self.gameFactory = gameFactory
         self.sync = sync
         super().__init__(self.factory)
 
     def factory(self):
-        return Evaluator(self.network, self.algo, self.env, self.sync)
+        return Evaluator(self.network, self.algo, self.gameFactory, self.sync)
 
 class TrainerProcess(Process):
-    def __init__(self, network, algo, env, sync):
+    def __init__(self, network, algo, gameFactory, sync):
         super().__init__()
         self.algo = algo
         self.network = network
-        self.env = env
+        self.gameFactory = gameFactory
         self.sync = sync
 
     async def asyncRun(self):
         # print("Trainer", os.getpid())
-        await Trainer(self.network, self.algo, self.env, self.sync).start()
+        await Trainer(self.network, self.algo, self.gameFactory, self.sync).start()
 
 
 # thread safe

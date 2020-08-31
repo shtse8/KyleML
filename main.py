@@ -5,18 +5,10 @@ import argparse
 import asyncio
 
 
-from games.SimpleSnake import SimpleSnake
-from games.Snake import Snake
-from games.puzzle2048 import Puzzle2048
-# from games.CartPole import CartPole
-from games.CartPole import CartPole
-from games.Breakout import Breakout
-from games.mario import Mario
-from games.Pong import Pong
-from games.gymgame import GymGame
 # from agents.DQNAgent import DQNAgent
 # from agents.A2CAgent import A2CAgent
 # from agents.A3CAgent import A3CAgent
+from games.GameFactory import GameFactory
 from agents.PPOAgent import Agent, PPOAlgo
 import torch
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -56,25 +48,8 @@ async def main():
         # "ppo": PPOAgent
     # }
 
-    games = {
-        "snake": lambda: Snake(),
-        "simplesnake": lambda: SimpleSnake(),
-        "cartpole": lambda: CartPole(),
-        "2048": lambda: Puzzle2048(),
-        "mario": lambda: Mario(),
-        "pong": lambda: Pong(),
-        "breakout": lambda: Breakout(),
-        "blackjack": lambda: GymGame("Blackjack-v0")
-    }
-
-    if args.game in games:
-        game = games[args.game]()
-    else:
-        raise ValueError("Unknown Game " + args.game)
-
-    if args.render:
-        game.render()
-
+    gameFactory = GameFactory(args.game)
+    
     # if args.agent in agents:
     #     agent = agents[args.agent](game)
     # else:
@@ -83,7 +58,7 @@ async def main():
     # if args.load or not args.train:
     #     agent.load()
 
-    agent = Agent(PPOAlgo(), game)
+    agent = Agent(PPOAlgo(), gameFactory)
     agent.run(train=args.train, load=args.load, delay=args.delay)
 
 

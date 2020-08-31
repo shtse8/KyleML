@@ -156,20 +156,22 @@ class Epoch(Message):
             self.end()
         return self
 
+# ConvLSTM
+# https://github.com/czifan/ConvLSTM.pytorch/blob/master/networks/ConvLSTM.py
+
 
 class ConvLayers(nn.Module):
     def __init__(self, inputShape, n_outputs):
         super().__init__()
         self.layers = nn.Sequential(
+            # [C, H, W] -> [32, H, W]
             nn.Conv2d(inputShape[0], 32, kernel_size=1, stride=1),
             nn.ReLU(),
-            # nn.MaxPool2d(1),
             nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # nn.MaxPool2d(1),
             nn.Conv2d(64, 64, kernel_size=1, stride=1),
             nn.ReLU(),
-            # nn.MaxPool2d(1),
+            # [64, H, W] -> [64 * H * W]
             nn.Flatten(),
             nn.Linear(64 * inputShape[1] * inputShape[2], n_outputs),
             nn.ReLU())
@@ -177,9 +179,6 @@ class ConvLayers(nn.Module):
     def forward(self, x):
         # x = x.permute(0, 3, 1, 2)  # [B, H, W, C] => [B, C, H, W]
         return self.layers(x)
-
-
-
 
 class FCLayers(nn.Module):
     def __init__(self, n_inputs, n_outputs):
@@ -267,25 +266,26 @@ class LSTMLayers(nn.Module):
         # print(x)
         return x
 
+
 class PPONetwork(Network):
     def __init__(self, inputShape, n_outputs):
         super().__init__(inputShape, n_outputs)
 
         hidden_nodes = 256
+        semi_hidden_nodes = hidden_nodes // 2
         self.body = nn.Sequential(
-            InputLayers(inputShape, hidden_nodes),
-            LSTMLayers(hidden_nodes, hidden_nodes))
+            InputLayers(inputShape, hidden_nodes))
 
         # Define policy head
         self.policy = nn.Sequential(
-            FCLayers(hidden_nodes, hidden_nodes),
-            nn.Linear(hidden_nodes, n_outputs),
+            FCLayers(hidden_nodes, semi_hidden_nodes),
+            nn.Linear(semi_hidden_nodes, n_outputs),
             nn.Softmax(dim=-1))
 
         # Define value head
         self.value = nn.Sequential(
-            FCLayers(hidden_nodes, hidden_nodes),
-            nn.Linear(hidden_nodes, 1))
+            FCLayers(hidden_nodes, semi_hidden_nodes),
+            nn.Linear(semi_hidden_nodes, 1))
 
     def buildOptimizer(self, learningRate):
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate, eps=1e-5)

@@ -29,9 +29,6 @@ class GymGame(Game):
             state = np.einsum('ijk->kij', state)
         return state
 
-    def getNew(self):
-        return self.__class__(self.id)
-
     def reset(self):
         self.state = self.game.reset()
         self.state = self._processState(self.state)

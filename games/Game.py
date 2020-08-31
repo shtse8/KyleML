@@ -21,9 +21,6 @@ class Game(object):
     def isDone(self) -> bool:
         return False
 
-    def getNew(self):
-        return self.__class__()
-
     def render(self) -> None:
         raise NotImplementedError()
 

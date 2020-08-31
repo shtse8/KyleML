@@ -175,28 +175,24 @@ class ConvLayers(nn.Module):
             nn.ReLU())
 
     def forward(self, x):
+        # x = x.permute(0, 3, 1, 2)  # [B, H, W, C] => [B, C, H, W]
         return self.layers(x)
 
 
 
 
 class FCLayers(nn.Module):
-    def __init__(self, n_inputs, n_outputs, hidden_nodes=0):
+    def __init__(self, n_inputs, n_outputs):
         super().__init__()
-        if hidden_nodes == 0:
-            hidden_nodes = n_outputs
-
         self.layers = nn.Sequential(
-                nn.Linear(n_inputs, hidden_nodes),
-                nn.ReLU(),
-                nn.Linear(hidden_nodes, n_outputs),
-                nn.ReLU())
+                nn.Linear(n_inputs, n_outputs),
+                nn.Tanh())
 
     def forward(self, x):
         return self.layers(x)
 
 
-class BodyLayers(nn.Module):
+class InputLayers(nn.Module):
     def __init__(self, inputShape, n_outputs):
         super().__init__()
         if type(inputShape) is tuple and len(inputShape) == 3:
@@ -244,20 +240,52 @@ class Network(nn.Module):
         return info.version > self.version
 
 
+class LSTMLayers(nn.Module):
+    def __init__(self, inputShape, n_outputs):
+        super().__init__()
+        self.lstm = nn.LSTM(inputShape, n_outputs)
+    #     self.n_outputs = n_outputs
+    #     self.hidden_cell = None
+
+    # def get_init_state(self, batch_size, device):
+    #     self.hidden_cell = (torch.zeros(1, batch_size, self.n_outputs).to(device),
+    #                         torch.zeros(1, batch_size, self.n_outputs).to(device))
+    
+    def forward(self, x):
+        x = x.unsqueeze(0)
+        # batch_size = x.shape[1]
+        # print("batch_size", batch_size)
+        # device = x.device
+        # if self.hidden_cell is None or batch_size != self.hidden_cell[0].shape[1]:
+        #     self.get_init_state(batch_size, device)
+        # if terminal is not None:
+        #     self.hidden_cell = [value * (1. - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
+        # x, self.hidden_cell = self.lstm(x, self.hidden_cell)
+        # x = self.hidden_cell[0][-1]
+        x, _ = self.lstm(x)
+        x = x.squeeze(0)
+        # print(x)
+        return x
+
 class PPONetwork(Network):
     def __init__(self, inputShape, n_outputs):
         super().__init__(inputShape, n_outputs)
 
-        hidden_nodes = 512
-        self.body = BodyLayers(inputShape, hidden_nodes)
+        hidden_nodes = 256
+        self.body = nn.Sequential(
+            InputLayers(inputShape, hidden_nodes),
+            LSTMLayers(hidden_nodes, hidden_nodes))
 
         # Define policy head
         self.policy = nn.Sequential(
+            FCLayers(hidden_nodes, hidden_nodes),
             nn.Linear(hidden_nodes, n_outputs),
             nn.Softmax(dim=-1))
 
         # Define value head
-        self.value = nn.Linear(hidden_nodes, 1)
+        self.value = nn.Sequential(
+            FCLayers(hidden_nodes, hidden_nodes),
+            nn.Linear(hidden_nodes, 1))
 
     def buildOptimizer(self, learningRate):
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate, eps=1e-5)

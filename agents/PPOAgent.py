@@ -165,11 +165,11 @@ class ConvLayers(nn.Module):
         super().__init__()
         self.layers = nn.Sequential(
             # [C, H, W] -> [32, H, W]
-            nn.Conv2d(inputShape[0], 32, kernel_size=1, stride=1),
+            nn.Conv2d(inputShape[0], 32, kernel_size=8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=1, stride=1),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
             nn.ReLU(),
             # [64, H, W] -> [64 * H * W]
             nn.Flatten(),
@@ -181,25 +181,30 @@ class ConvLayers(nn.Module):
         return self.layers(x)
 
 class FCLayers(nn.Module):
-    def __init__(self, n_inputs, n_outputs):
+    def __init__(self, n_inputs, n_outputs, num_layers=1, hidden_nodes=128):
         super().__init__()
-        self.layers = nn.Sequential(
-                nn.Linear(n_inputs, n_outputs),
-                nn.Tanh())
+        self.layers = nn.ModuleList()
+        for i in range(num_layers):
+            in_nodes = n_inputs if i == 0 else hidden_nodes
+            out_nodes = n_outputs if i == num_layers - 1 else hidden_nodes
+            self.layers.append(nn.Linear(in_nodes, out_nodes))
+            self.layers.append(nn.Tanh())
 
     def forward(self, x):
-        return self.layers(x)
+        for m in self.layers:
+            x = m(x)
+        return x
 
 
-class InputLayers(nn.Module):
-    def __init__(self, inputShape, n_outputs):
+class BodyLayers(nn.Module):
+    def __init__(self, inputShape, n_outputs, hidden_nodes=128):
         super().__init__()
         if type(inputShape) is tuple and len(inputShape) == 3:
             self.layers = ConvLayers(inputShape, n_outputs)
         else:
             if type(inputShape) is tuple and len(inputShape) == 1:
                 inputShape = inputShape[0]
-            self.layers = FCLayers(inputShape, n_outputs)
+            self.layers = FCLayers(inputShape, n_outputs, hidden_nodes=hidden_nodes)
 
     def forward(self, x):
         return self.layers(x)
@@ -271,10 +276,9 @@ class PPONetwork(Network):
     def __init__(self, inputShape, n_outputs):
         super().__init__(inputShape, n_outputs)
 
-        hidden_nodes = 256
+        hidden_nodes = 128
         semi_hidden_nodes = hidden_nodes // 2
-        self.body = nn.Sequential(
-            InputLayers(inputShape, hidden_nodes))
+        self.body = nn.Sequential(BodyLayers(inputShape, hidden_nodes))
 
         # Define policy head
         self.policy = nn.Sequential(
@@ -288,7 +292,7 @@ class PPONetwork(Network):
             nn.Linear(semi_hidden_nodes, 1))
 
     def buildOptimizer(self, learningRate):
-        self.optimizer = optim.Adam(self.parameters(), lr=learningRate, eps=1e-5)
+        self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
         return self
 
     def forward(self, state):
@@ -305,7 +309,8 @@ class PPONetwork(Network):
 
 
 class Policy:
-    def __init__(self, batchSize, learningRate, versionTolerance, networkUpdateStrategy):
+    def __init__(self, sampleSize, batchSize, learningRate, versionTolerance, networkUpdateStrategy):
+        self.sampleSize = sampleSize
         self.batchSize = batchSize
         self.versionTolerance = versionTolerance
         self.learningRate = learningRate
@@ -342,7 +347,8 @@ class Algo:
 class PPOAlgo(Algo):
     def __init__(self):
         super().__init__("PPO", Policy(
-            batchSize=512,
+            sampleSize=256,
+            batchSize=256,
             learningRate=3e-4,
             versionTolerance=9,
             networkUpdateStrategy=NetworkUpdateStrategy.Aggressive))
@@ -418,7 +424,7 @@ class PPOAlgo(Algo):
     def learn(self, network: Network, memory):
         network.train()
         memory = np.array(memory)
-        miniBatchSize = 32
+        miniBatchSize = self.policy.batchSize
         n_miniBatch = len(memory) // miniBatchSize
         totalLosses = 0
         totalSamples = 0
@@ -537,8 +543,8 @@ class Trainer(Base):
         self.evaluators = np.array(evaluators)
 
         self.network = self.network.buildOptimizer(self.algo.policy.learningRate).to(self.algo.device)
-        n_samples = 512 * n_workers
-        evaulator_samples = math.ceil(n_samples / n_workers)
+        n_samples = self.algo.policy.sampleSize * n_workers
+        evaulator_samples = self.algo.policy.sampleSize
         while True:
             # push new network
             self.pushNewNetwork()
@@ -548,7 +554,6 @@ class Trainer(Base):
             # https://docs.python.org/3/library/asyncio-task.html#asyncio.as_completed
             for promise in asyncio.as_completed(promises):
                 response = await promise  # earliest result
-                # print("Response", response.result)
                 # print("Rolled Memory: ", len(response.result))
                 memory.extend(response.result)
             # learn
@@ -627,6 +632,7 @@ class Agent:
 
         env = self.gameFactory.get()
         network = self.algo.createNetwork(env.observationShape, env.actionSpace)
+        network.share_memory()
         self.networks.append(network)
         if not train or load:
             self.load()

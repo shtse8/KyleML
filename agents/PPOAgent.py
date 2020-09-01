@@ -245,9 +245,9 @@ class Network(nn.Module):
 
 
 class LSTMLayers(nn.Module):
-    def __init__(self, inputShape, n_outputs):
+    def __init__(self, n_inputs, n_outputs, num_layers=1):
         super().__init__()
-        self.lstm = nn.LSTM(inputShape, n_outputs)
+        self.lstm = nn.LSTM(n_inputs, n_outputs, num_layers=num_layers)
     #     self.n_outputs = n_outputs
     #     self.hidden_cell = None
 
@@ -278,7 +278,9 @@ class PPONetwork(Network):
 
         hidden_nodes = 128
         semi_hidden_nodes = hidden_nodes // 2
-        self.body = nn.Sequential(BodyLayers(inputShape, hidden_nodes))
+        self.body = nn.Sequential(
+            BodyLayers(inputShape, hidden_nodes),
+            LSTMLayers(hidden_nodes, hidden_nodes))
 
         # Define policy head
         self.policy = nn.Sequential(

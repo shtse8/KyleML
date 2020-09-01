@@ -248,19 +248,21 @@ class LSTMLayers(nn.Module):
     def __init__(self, n_inputs, n_outputs, num_layers=1):
         super().__init__()
         self.lstm = nn.LSTM(n_inputs, n_outputs, num_layers=num_layers)
-    #     self.n_outputs = n_outputs
-    #     self.hidden_cell = None
+        # self.n_outputs = n_outputs
+        self.hidden_cell = None
 
     # def get_init_state(self, batch_size, device):
-    #     self.hidden_cell = (torch.zeros(1, batch_size, self.n_outputs).to(device),
-    #                         torch.zeros(1, batch_size, self.n_outputs).to(device))
+        # (num_layers * bidirectional, batch_size, outputs)
+        # self.hidden_cell = (torch.zeros(1, 1, self.n_outputs).to(device),
+        #                     torch.zeros(1, 1, self.n_outputs).to(device))
     
     def forward(self, x):
+        # (B, N) -> (1, B, N) = (B, S, N)
         x = x.unsqueeze(0)
         # batch_size = x.shape[1]
-        # print("batch_size", batch_size)
+        # print("x.shape", x.shape)
         # device = x.device
-        # if self.hidden_cell is None or batch_size != self.hidden_cell[0].shape[1]:
+        # if self.hidden_cell is None:
         #     self.get_init_state(batch_size, device)
         # if terminal is not None:
         #     self.hidden_cell = [value * (1. - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
@@ -268,7 +270,7 @@ class LSTMLayers(nn.Module):
         # x = self.hidden_cell[0][-1]
         x, _ = self.lstm(x)
         x = x.squeeze(0)
-        # print(x)
+        # print(self.hidden_cell[0].shape, self.hidden_cell[1].shape)
         return x
 
 

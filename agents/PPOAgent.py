@@ -279,21 +279,18 @@ class PPONetwork(Network):
         super().__init__(inputShape, n_outputs)
 
         hidden_nodes = 128
-        semi_hidden_nodes = hidden_nodes // 2
+        # semi_hidden_nodes = hidden_nodes // 2
         self.body = nn.Sequential(
             BodyLayers(inputShape, hidden_nodes),
-            LSTMLayers(hidden_nodes, hidden_nodes))
+            FCLayers(hidden_nodes, hidden_nodes))
 
         # Define policy head
         self.policy = nn.Sequential(
-            FCLayers(hidden_nodes, semi_hidden_nodes),
-            nn.Linear(semi_hidden_nodes, n_outputs),
+            nn.Linear(hidden_nodes, n_outputs),
             nn.Softmax(dim=-1))
 
         # Define value head
-        self.value = nn.Sequential(
-            FCLayers(hidden_nodes, semi_hidden_nodes),
-            nn.Linear(semi_hidden_nodes, 1))
+        self.value = nn.Linear(hidden_nodes, 1)
 
     def buildOptimizer(self, learningRate):
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
@@ -343,7 +340,10 @@ class Algo:
 
 
 class PPOAlgo(Algo):
-    def __init__(self, config=PPOConfig()):
+    def __init__(self, config=PPOConfig(
+        sampleSize=256,
+        batchSize=256
+    )):
         super().__init__("PPO", config)
 
     def createNetwork(self, inputShape, n_outputs) -> Network:
@@ -383,8 +383,8 @@ class PPOAlgo(Algo):
             gae = 0
             for i in reversed(range(len(memory))):
                 transition = memory[i]
-                detlas = transition.reward + self.gamma * lastValue * (1 - transition.done) - values[i]
-                gae = detlas + self.gamma * self.gaeCoeff * gae * (1 - transition.done)
+                detlas = transition.reward + self.config.gamma * lastValue * (1 - transition.done) - values[i]
+                gae = detlas + self.config.gamma * self.config.gaeCoeff * gae * (1 - transition.done)
                 # from baseline
                 # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
                 transition.advantage = gae
@@ -404,9 +404,9 @@ class PPOAlgo(Algo):
         advantages = np.zeros_like(rewards).astype(float)
         gae = 0
         for i in reversed(range(len(rewards))):
-            detlas = rewards[i] + self.gamma * \
+            detlas = rewards[i] + self.config.gamma * \
                 lastValue * (1 - dones[i]) - values[i]
-            gae = detlas + self.gamma * self.gaeCoeff * gae * (1 - dones[i])
+            gae = detlas + self.config.gamma * self.gaeCoeff * gae * (1 - dones[i])
             advantages[i] = gae
             lastValue = values[i]
         return advantages
@@ -414,14 +414,13 @@ class PPOAlgo(Algo):
     def learn(self, network: Network, memory):
         network.train()
         memory = np.array(memory)
-        miniBatchSize = self.config.batchSize
-        n_miniBatch = len(memory) // miniBatchSize
+        n_miniBatch = len(memory) // self.config.batchSize
         totalLosses = 0
         totalSamples = 0
         network.optimizer.zero_grad()
         for i in range(n_miniBatch):
-            startIndex = i * miniBatchSize
-            endIndex = startIndex + miniBatchSize
+            startIndex = i * self.config.batchSize
+            endIndex = startIndex + self.config.batchSize
             minibatch = memory[startIndex:endIndex]
             
             states = np.array([x.state for x in minibatch])
@@ -451,7 +450,7 @@ class PPOAlgo(Algo):
             dist = torch.distributions.Categorical(probs=action_probs)
             ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
             policy_losses1 = ratios * advantages
-            policy_losses2 = ratios.clamp(1 - self.epsClip, 1 + self.epsClip) * advantages
+            policy_losses2 = ratios.clamp(1 - self.config.epsClip, 1 + self.config.epsClip) * advantages
 
             # Maximize Policy Loss (Rewards)
             policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
@@ -464,7 +463,7 @@ class PPOAlgo(Algo):
             # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
             value_loss = (returns - values).pow(2).mean()
             #value_loss1 = (returns - values).pow(2)
-            #valuesClipped = old_values + torch.clamp(values - old_values, -self.epsClip, self.epsClip)
+            #valuesClipped = old_values + torch.clamp(values - old_values, -self.config.epsClip, self.config.epsClip)
             #value_loss2 = (returns - valuesClipped).pow(2)
             #value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
             #print(value_loss1, valuesClipped)
@@ -532,9 +531,9 @@ class Trainer(Base):
 
         self.evaluators = np.array(evaluators)
 
-        self.network = self.network.buildOptimizer(self.algo.policy.learningRate).to(self.algo.device)
-        n_samples = self.algo.policy.sampleSize * n_workers
-        evaulator_samples = self.algo.policy.sampleSize
+        self.network = self.network.buildOptimizer(self.algo.config.learningRate).to(self.algo.device)
+        n_samples = self.algo.config.sampleSize * n_workers
+        evaulator_samples = self.algo.config.sampleSize
         while True:
             # push new network
             self.pushNewNetwork()

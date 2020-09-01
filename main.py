@@ -59,7 +59,7 @@ async def main():
     #     agent.load()
 
     agent = Agent(PPOAlgo(), gameFactory)
-    agent.run(train=args.train, load=args.load, delay=args.delay)
+    await agent.run(train=args.train, load=args.load, delay=args.delay)
 
 
 if __name__ == "__main__":

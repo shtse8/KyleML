@@ -163,18 +163,27 @@ class Epoch(Message):
 class ConvLayers(nn.Module):
     def __init__(self, inputShape, n_outputs):
         super().__init__()
-        self.layers = nn.Sequential(
-            # [C, H, W] -> [32, H, W]
-            nn.Conv2d(inputShape[0], 32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            # [64, H, W] -> [64 * H * W]
-            nn.Flatten(),
-            nn.Linear(64 * inputShape[1] * inputShape[2], n_outputs),
-            nn.ReLU())
+        if min(inputShape[1], inputShape[2]) < 8:
+            # small CNN
+            self.layers = nn.Sequential(
+                nn.Conv2d(inputShape[0], 16, kernel_size=1, stride=1),
+                nn.ReLU(),
+                nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+                nn.ReLU(),
+                nn.Flatten(),
+                nn.Linear(32 * inputShape[1] * inputShape[2], n_outputs))
+        else:
+            self.layers = nn.Sequential(
+                # [C, H, W] -> [32, H, W]
+                nn.Conv2d(inputShape[0], 32, kernel_size=8, stride=4),
+                nn.ReLU(),
+                nn.Conv2d(32, 64, kernel_size=4, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(64, 64, kernel_size=3, stride=1),
+                nn.ReLU(),
+                # [64, H, W] -> [64 * H * W]
+                nn.Flatten(),
+                nn.Linear(64 * inputShape[1] * inputShape[2], n_outputs))
 
     def forward(self, x):
         # x = x.permute(0, 3, 1, 2)  # [B, H, W, C] => [B, C, H, W]
@@ -613,7 +622,7 @@ class Agent:
         for evaluator in self.evaluators:
             evaluator.send(message)
 
-    def run(self, train: bool = True, load: bool = False, episodes: int = 1000, delay: float = 0) -> None:
+    async def run(self, train: bool = True, load: bool = False, episodes: int = 1000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
         self.lastSave = time.perf_counter()
@@ -652,7 +661,7 @@ class Agent:
                 elif isinstance(message, EnvReport):
                     self.epoch.add(message)
                     
-            time.sleep(0.01)
+            await asyncio.sleep(0.01)
 
     def update(self, freq=.1) -> None:
         if time.perf_counter() - self.lastPrint < freq:

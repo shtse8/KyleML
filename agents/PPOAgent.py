@@ -312,29 +312,23 @@ class PPONetwork(Network):
         return self.value(output)
 
 
-class Policy:
-    def __init__(self, sampleSize, batchSize, learningRate, versionTolerance, networkUpdateStrategy):
+class Config:
+    def __init__(self, sampleSize=512, batchSize=32, learningRate=3e-4):
         self.sampleSize = sampleSize
         self.batchSize = batchSize
-        self.versionTolerance = versionTolerance
         self.learningRate = learningRate
-        self.networkUpdateStrategy = networkUpdateStrategy
 
-
-class OnPolicy(Policy):
-    def __init__(self, batchSize, learningRate):
-        super().__init__(batchSize, learningRate, 0, NetworkUpdateStrategy.Aggressive)
-
-
-class OffPolicy(Policy):
-    def __init__(self, batchSize, learningRate):
-        super().__init__(batchSize, learningRate, math.inf, NetworkUpdateStrategy.Lazy)
-
+class PPOConfig(Config):
+    def __init__(self, sampleSize=512, batchSize=32, learningRate=3e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+        super().__init__(sampleSize, batchSize, learningRate)
+        self.gamma = gamma
+        self.epsClip = epsClip
+        self.gaeCoeff = gaeCoeff
 
 class Algo:
-    def __init__(self, name, policy: Policy):
+    def __init__(self, name, config: Config):
         self.name = name
-        self.policy = policy
+        self.config = config
         self.device = torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -349,16 +343,8 @@ class Algo:
 
 
 class PPOAlgo(Algo):
-    def __init__(self):
-        super().__init__("PPO", Policy(
-            sampleSize=256,
-            batchSize=256,
-            learningRate=3e-4,
-            versionTolerance=9,
-            networkUpdateStrategy=NetworkUpdateStrategy.Aggressive))
-        self.gamma = 0.99
-        self.epsClip = 0.2
-        self.gaeCoeff = 0.95
+    def __init__(self, config=PPOConfig()):
+        super().__init__("PPO", config)
 
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs)
@@ -428,7 +414,7 @@ class PPOAlgo(Algo):
     def learn(self, network: Network, memory):
         network.train()
         memory = np.array(memory)
-        miniBatchSize = self.policy.batchSize
+        miniBatchSize = self.config.batchSize
         n_miniBatch = len(memory) // miniBatchSize
         totalLosses = 0
         totalSamples = 0

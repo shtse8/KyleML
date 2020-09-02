@@ -432,8 +432,7 @@ class PPOAlgo(Algo):
         network.train()
         memory = np.array(memory)
         n_miniBatch = len(memory) // self.config.batchSize
-        totalLosses = 0
-        totalSamples = 0
+        totalLoss = 0
         network.optimizer.zero_grad()
         for i in range(n_miniBatch):
             startIndex = i * self.config.batchSize
@@ -500,17 +499,12 @@ class PPOAlgo(Algo):
             # Wondering  if we need to divide the number of minibatches to keep the same learning rate?
             # As the learning rate is a parameter of optimizer, and only one step is called. 
             # Should be fine to not dividing the number of minibatches.
-            loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) / n_miniBatch
+            weight = len(minibatch) / len(memory)
+            loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) * weight
 
-            # losses.append(loss)
             # Accumulating the loss to the graph
             loss.backward()
-            totalLosses += loss.item() * len(minibatch)
-            totalSamples += len(minibatch)
-        # print(torch.cat(losses), loss)
-
-        # loss = torch.cat(losses).mean()
-        # loss.backward()
+            totalLoss += loss
 
         # Chip grad with norm
         # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
@@ -519,7 +513,7 @@ class PPOAlgo(Algo):
         network.optimizer.step()
         network.version += 1
 
-        return totalLosses / totalSamples
+        return totalLoss
 
 
 class Base:
@@ -602,19 +596,16 @@ class Evaluator(Base):
     def loop(self, num):
         # auto reset
         if not self.started:
-            self.reset()
+            self.env.reset()
+            self.started = True
         elif self.env.isDone():
             for agent in self.agents:
                 report = agent.done(False)
                 self.sync.reportQueue.put(report)
-            self.reset()
+            self.env.reset()
         
         memoryCount = min([len(x.memory) for x in self.agents])
         return memoryCount < num
-
-    def reset(self):
-        self.env.reset()
-        self.started = True
 
     def roll(self, num):
         self.updateNetwork()

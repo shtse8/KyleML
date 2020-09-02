@@ -27,12 +27,17 @@ class Vector:
 
 
 class TicTacToe:
-    def __init__(self) -> None:
-        self.size = 3
+    def __init__(self, size=3, players=2) -> None:
+        self.players = players
+        self.size = size
         self.cells = np.zeros((self.size, self.size))
         self.turn = 0
+        self.isEnd = False
 
     def step(self, playerId, pos: int) -> None:
+        if self.isEnd:
+            raise Exception("Game over.")
+
         if self.turn != playerId:
             raise Exception("Not your turn.")
 
@@ -43,7 +48,11 @@ class TicTacToe:
 
         self.setCell(vector, playerId)
         if self.checkWin(vector):
+            self.isEnd = True
             return True
+
+        # next turn
+        self.turn = (self.turn + 1) % self.players
 
         return False
 

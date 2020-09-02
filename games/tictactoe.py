@@ -1,6 +1,6 @@
 import numpy as np
 import math
-from .src.tictactoe import TicTacToe as TicTacToeSrc
+from .src.tictactoe import TicTacToe as Src
 from .Game import Game
 import pygame
 
@@ -9,15 +9,14 @@ class Puzzle2048(Game):
     def __init__(self, size: int = 4):
         super().__init__()
         self.name: str = "tictactoe"
-        self.game = TicTacToeSrc()
+        self.game = Src()
         self.size = self.game.size
         self.observationShape: tuple = (1, self.size, self.size)
         self.actionSpace: int = self.size * self.size
         self.reward: float = 0
 
     def reset(self):
-        self.game = TicTacToeSrc(self.size)
-        return self.getState()
+        self.game = Src(self.size)
 
     def getState(self):
         return self.game.cells
@@ -34,8 +33,8 @@ class Puzzle2048(Game):
     def takeAction(self, action):
         result = self.game.step(action)
         if result:
+            # reward for both players?
             self.reward = 1
-        return super().takeAction(action)
 
     def getDone(self) -> bool:
         return self.game.isEnd

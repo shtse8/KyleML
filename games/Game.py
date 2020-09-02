@@ -2,16 +2,26 @@ class Game(object):
     def __init__(self):
         self.rendered = False
 
-    def reset(self):
-        return self.getState()
+    def getPlayerCount(self):
+        raise NotImplementedError()
 
-    def getActionMask(self):
+    def canStep(self, playerId):
+        raise NotImplementedError()
+
+    def reset(self) -> None:
+        raise NotImplementedError()
+
+    def getMask(self):
         raise NotImplementedError()
 
     def getState(self):
-        return []
+        raise NotImplementedError()
 
-    def takeAction(self, action) -> tuple:
+    def _step(self, action) -> None:
+        raise NotImplementedError()
+
+    def step(self, action) -> tuple:
+        self._step(action)
         self.update()
         return self.getState(), self.getReward(), self.getDone()
 
@@ -19,7 +29,7 @@ class Game(object):
         return 0
 
     def isDone(self) -> bool:
-        return False
+        raise NotImplementedError()
 
     def render(self) -> None:
         raise NotImplementedError()

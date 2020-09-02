@@ -68,8 +68,9 @@ class EnvReport(Message):
 
 
 class PredictedAction(object):
-    def __init__(self, index, prediction):
+    def __init__(self, index, mask, prediction):
         self.index = index
+        self.mask = mask
         self.prediction = prediction
 
     def __int__(self):
@@ -79,6 +80,8 @@ class PredictedAction(object):
     def log(self):
         # https://github.com/pytorch/pytorch/blob/master/torch/distributions/utils.py#L72
         eps = torch.finfo(torch.float).eps
+        prob = np.array([p if self.mask[i] else eps for i, p in enumerate(self.prediction)])
+        prob = prob / prob.sum()
         prob = min(1-eps, max(eps, self.prediction[self.index]))
         return math.log(prob)
 
@@ -341,7 +344,7 @@ class Algo:
     def createNetwork(self) -> Network:
         raise NotImplementedError
 
-    def getAction(self, network, state, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
         raise NotImplementedError
 
     def learn(self, network: Network, memory):
@@ -358,11 +361,16 @@ class PPOAlgo(Algo):
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs)
 
-    def getAction(self, network, state, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
         network.eval()
         with torch.no_grad():
-            state = torch.tensor([state], dtype=torch.float, device=self.device)
-            prediction = network.getPolicy(state).squeeze(0)
+            stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
+            maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
+            prediction = network.getPolicy(stateTensor)
+            eps = torch.finfo(prediction.dtype).eps
+            prediction = prediction.masked_fill(~maskTensor, eps)
+            prediction = prediction / prediction.sum()
+            prediction = prediction.squeeze(0)
             if isTraining:
                 index = torch.distributions.Categorical(
                     probs=prediction).sample().item()
@@ -370,6 +378,7 @@ class PPOAlgo(Algo):
                 index = prediction.argmax().item()
             return PredictedAction(
                 index=index,
+                mask=mask,
                 prediction=prediction.cpu().detach().numpy()
             )
 
@@ -438,6 +447,9 @@ class PPOAlgo(Algo):
             actions = np.array([x.action.index for x in minibatch])
             actions = torch.tensor(actions, dtype=torch.long, device=self.device).detach()
 
+            masks = np.array([x.action.mask for x in minibatch])
+            masks = torch.tensor(masks, dtype=torch.bool, device=self.device).detach()
+
             old_log_probs = np.array([x.action.log for x in minibatch])
             old_log_probs = torch.tensor(old_log_probs, dtype=torch.float, device=self.device).detach()
 
@@ -451,13 +463,21 @@ class PPOAlgo(Algo):
             advantages = np.array([x.advantage for x in minibatch])
             advantages = torch.tensor(advantages, dtype=torch.float, device=self.device).detach()
 
-            action_probs, values = network(states)
+            probs, values = network(states)
             values = values.squeeze(1)
 
             # PPO2 - Confirm the samples aren't too far from pi.
             # porb1 / porb2 = exp(log(prob1) - log(prob2))
-            dist = torch.distributions.Categorical(probs=action_probs)
+            # action_probs
+            
+            # mask probs
+            eps = torch.finfo(probs.dtype).eps
+            probs = probs.masked_fill(~masks, eps)
+            probs = probs / probs.sum()
+
+            dist = torch.distributions.Categorical(probs=probs)
             ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
+            # print(ratios)
             policy_losses1 = ratios * advantages
             policy_losses2 = ratios.clamp(1 - self.config.epsClip, 1 + self.config.epsClip) * advantages
 
@@ -590,11 +610,13 @@ class Evaluator(Base):
     def transitionGenerator(self):
         while True:
             self.report = EnvReport()
-            state = self.env.reset()
+            self.env.reset()
+            state = self.env.getState()
             done: bool = False
             while not done:
-                action = self.algo.getAction(self.network, state, True)
-                nextState, reward, done = self.env.takeAction(action.index)
+                mask = self.env.getMask(state)
+                action = self.algo.getAction(self.network, state, mask, True)
+                nextState, reward, done = self.env.step(action.index)
                 transition = Transition(state, action, reward, nextState, done)
                 self.report.rewards += transition.reward
                 yield transition

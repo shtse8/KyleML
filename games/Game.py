@@ -23,7 +23,7 @@ class Game(object):
     def step(self, action) -> tuple:
         self._step(action)
         self.update()
-        return self.getState(), self.getReward(), self.getDone()
+        return self.getState(), self.getReward(), self.isDone()
 
     def getReward(self) -> float:
         return 0

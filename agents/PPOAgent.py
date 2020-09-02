@@ -67,7 +67,7 @@ class EnvReport(Message):
         self.rewards = 0
 
 
-class PredictedAction(object):
+class Action(object):
     def __init__(self, index, mask, prediction):
         self.index = index
         self.mask = mask
@@ -80,7 +80,7 @@ class PredictedAction(object):
     def log(self):
         # https://github.com/pytorch/pytorch/blob/master/torch/distributions/utils.py#L72
         eps = torch.finfo(torch.float).eps
-        prob = np.array([p if self.mask[i] else eps for i, p in enumerate(self.prediction)])
+        prob = np.array([p if self.mask[i] else 0 for i, p in enumerate(self.prediction)])
         prob = prob / prob.sum()
         prob = min(1-eps, max(eps, self.prediction[self.index]))
         return math.log(prob)
@@ -344,7 +344,7 @@ class Algo:
     def createNetwork(self) -> Network:
         raise NotImplementedError
 
-    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, mask, isTraining: bool) -> Action:
         raise NotImplementedError
 
     def learn(self, network: Network, memory):
@@ -361,14 +361,13 @@ class PPOAlgo(Algo):
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs)
 
-    def getAction(self, network, state, mask, isTraining: bool) -> PredictedAction:
+    def getAction(self, network, state, mask, isTraining: bool) -> Action:
         network.eval()
         with torch.no_grad():
             stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
             maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
             prediction = network.getPolicy(stateTensor)
-            eps = torch.finfo(prediction.dtype).eps
-            prediction = prediction.masked_fill(~maskTensor, eps)
+            prediction = prediction.masked_fill(~maskTensor, 0)
             prediction = prediction / prediction.sum()
             prediction = prediction.squeeze(0)
             if isTraining:
@@ -376,7 +375,7 @@ class PPOAlgo(Algo):
                     probs=prediction).sample().item()
             else:
                 index = prediction.argmax().item()
-            return PredictedAction(
+            return Action(
                 index=index,
                 mask=mask,
                 prediction=prediction.cpu().detach().numpy()
@@ -589,41 +588,85 @@ class Evaluator(Base):
         self.network.version = -1
         self.sync = sync
 
-        self.report = None
-        self.generator = None
+        self.playerCount = 1
+        self.agents = np.array([Agent(i, self.env, network, algo) for i in range(self.playerCount)])
+        # for agent in self.agents:
+        #     agent.onStep = self.stepListener
+        self.started = False
 
     def updateNetwork(self):
         if self.network.version < self.sync.latestVersion.value:
             networkInfo = NetworkInfo(self.sync.latestStateDict, self.sync.latestVersion.value)
             self.network.loadInfo(networkInfo)
 
-    def roll(self, num):
-        if self.generator is None:
-            self.generator = self.transitionGenerator()
-        self.updateNetwork()
-        memory = np.array([next(self.generator) for _ in range(num)])
-        self.algo.processAdvantage(self.network, memory)
-        return memory
-        # message = MemoryPush(memory, self.network.version)
-        # self.sync.memoryQueue.put(message)
+    def loop(self, num):
+        # auto reset
+        if not self.started:
+            self.reset()
+        elif self.env.isDone():
+            for agent in self.agents:
+                report = agent.done(False)
+                self.sync.reportQueue.put(report)
+            self.reset()
+        
+        memoryCount = min([len(x.memory) for x in self.agents])
+        return memoryCount < num
 
-    def transitionGenerator(self):
-        while True:
-            self.report = EnvReport()
-            self.env.reset()
-            state = self.env.getState()
-            done: bool = False
-            while not done:
-                mask = self.env.getMask(state)
-                action = self.algo.getAction(self.network, state, mask, True)
-                nextState, reward, done = self.env.step(action.index)
-                transition = Transition(state, action, reward, nextState, done)
-                self.report.rewards += transition.reward
-                yield transition
-                state = nextState
-            self.sync.reportQueue.put(self.report)
+    def reset(self):
+        self.env.reset()
+        self.started = True
+
+    def roll(self, num):
+        self.updateNetwork()
+        self.generateTransitions(num)
+        memory = []
+        for agent in self.agents:
+            memory.extend(agent.resetMemory())
+        return np.array(memory)
+
+    def generateTransitions(self, num):
+        while self.loop(num):
+            for agent in self.agents:
+                agent.step()
+
 
 class Agent:
+    def __init__(self, id, env, network, algo):
+        self.id = id
+        self.env = env
+        self.memory = collections.deque(maxlen=1000)
+        self.report = EnvReport()
+        self.network = network
+        self.algo = algo
+        self.onStep = None
+
+    def step(self) -> None:
+        if not self.env.isDone() and self.env.canStep(self.id):
+            state = self.env.getState()
+            mask = self.env.getMask(state)
+            action = self.algo.getAction(self.network, state, mask, True)
+            nextState, reward, done = self.env.step(action.index)
+            transition = Transition(state, action, reward, nextState, done)
+            self.memory.append(transition)
+            self.report.rewards += transition.reward
+            if self.onStep is not None:
+                self.onStep(self)
+
+    def done(self, isWinner):
+        report = self.report
+        # set last memory to done, as we may not be the last one to take action.
+        self.memory[-1].done = True
+        self.report = EnvReport()
+        return report
+
+    def resetMemory(self):
+        memory = self.memory
+        self.algo.processAdvantage(self.network, memory)
+        self.memory = collections.deque(maxlen=1000)
+        return memory
+
+
+class RL:
     def __init__(self, algo: Algo, gameFactory: GameFactory):
         self.evaluators = []
         self.algo = algo

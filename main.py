@@ -9,7 +9,7 @@ import asyncio
 # from agents.A2CAgent import A2CAgent
 # from agents.A3CAgent import A3CAgent
 from games.GameFactory import GameFactory
-from agents.PPOAgent import Agent, PPOAlgo
+from agents.PPOAgent import RL, PPOAlgo
 import torch
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
@@ -58,8 +58,8 @@ async def main():
     # if args.load or not args.train:
     #     agent.load()
 
-    agent = Agent(PPOAlgo(), gameFactory)
-    await agent.run(train=args.train, load=args.load, delay=args.delay)
+    rl = RL(PPOAlgo(), gameFactory)
+    await rl.run(train=args.train, load=args.load, delay=args.delay)
 
 
 if __name__ == "__main__":

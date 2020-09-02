@@ -34,6 +34,9 @@ class Puzzle2048(Game):
             65536: (234, 120, 33),
         }
 
+    def canStep(self, playerId):
+        return True
+
     def reset(self):
         self.game = Src(self.size)
 
@@ -72,10 +75,13 @@ class Puzzle2048(Game):
         score = self.game.score
         moved = self.game.move(action)
         if not moved:
+            state = self.getState()
+            mask = self.getMask(state)
+            print(state, mask, action)
             raise Exception("Invalid move")
         self.reward = self.game.score - score
 
-    def getDone(self) -> bool:
+    def isDone(self) -> bool:
         return self.game.isGameTerminated()
 
     def getReward(self) -> float:

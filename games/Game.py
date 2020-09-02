@@ -2,38 +2,62 @@ class Game(object):
     def __init__(self):
         self.rendered = False
 
-    def getPlayerCount(self):
-        raise NotImplementedError()
+    # Game methods
+    def getPlayer(self, playerId: int):
+        return GamePlayer(self, playerId)
 
-    def canStep(self, playerId):
+    def getPlayerCount(self):
         raise NotImplementedError()
 
     def reset(self) -> None:
         raise NotImplementedError()
 
-    def getMask(self):
+    def isDone(self) -> bool:
         raise NotImplementedError()
 
-    def getState(self):
+    # Player Methods
+    def canStep(self, playerId):
         raise NotImplementedError()
 
-    def _step(self, action) -> None:
+    def getMask(self, playerId: int):
         raise NotImplementedError()
 
-    def step(self, action) -> tuple:
+    def getState(self, playerId: int):
+        raise NotImplementedError()
+
+    def _step(self, playerId: int, action) -> None:
+        raise NotImplementedError()
+
+    def step(self, playerId: int, action) -> tuple:
         self._step(action)
         self.update()
         return self.getState(), self.getReward(), self.isDone()
 
     def getReward(self) -> float:
-        return 0
-
-    def isDone(self) -> bool:
         raise NotImplementedError()
 
+    # UI Methods
     def render(self) -> None:
         raise NotImplementedError()
 
     def update(self) -> None:
         raise NotImplementedError()
+
+
+class GamePlayer:
+    def __init__(self, game: Game, playerId: int):
+        self.game = game
+        self.playerId = playerId
+
+    def getState(self):
+        return self.game.getState(self.playerId)
+
+    def canStep(self):
+        return self.game.canStep(self.playerId)
+
+    def getMask(self, state):
+        return self.game.mask(self.playerId, state)
+
+    def step(self, action) -> tuple:
+        return self.game.step(self.playerId, action)
 

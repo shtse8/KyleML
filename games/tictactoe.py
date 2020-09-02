@@ -18,20 +18,30 @@ class Puzzle2048(Game):
     def reset(self):
         self.game = Src(self.size)
 
-    def getState(self):
-        return self.game.cells
+    def getState(self, playerId):
+        # 0 - Empty
+        # 1 - Self
+        # 2 - Opponent
+        state = np.zeros(self.observationShape)
+        for x, rows in enumerate(self.game.cells):
+            for y, cell in enumerate(rows):
+                if cell == playerId:
+                    state[0][x][y] = 1
+                elif cell != 0:
+                    state[0][x][y] = 2
+        return state
 
-    def getActionMask(self, state):
+    def getMask(self, playerId, state):
         mask = np.zeros(self.actionSpace, dtype=int)
-        for a in self.actionSpace:
-            vector = self.game.toVector(a)
+        for i in range(len(self.actionSpace)):
+            vector = self.game.toVector(i)
             cell = self.game.getCell(vector)
             if cell == 0:
-                mask = 1
+                mask[i] = 1
         return mask
 
-    def takeAction(self, action):
-        result = self.game.step(action)
+    def step(self, playerId, action):
+        result = self.game.step(playerId, action)
         if result:
             # reward for both players?
             self.reward = 1

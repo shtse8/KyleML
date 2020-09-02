@@ -31,7 +31,7 @@ class TicTacToe:
         self.players = players
         self.size = size
         self.cells = np.zeros((self.size, self.size))
-        self.turn = 0
+        self.turn = 1
         self.isEnd = False
 
     def step(self, playerId, pos: int) -> None:
@@ -52,7 +52,7 @@ class TicTacToe:
             return True
 
         # next turn
-        self.turn = (self.turn + 1) % self.players
+        self.turn = self.turn % self.players + 1
 
         return False
 

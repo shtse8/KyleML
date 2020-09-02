@@ -583,7 +583,7 @@ class Evaluator(Base):
         self.sync = sync
 
         self.playerCount = 1
-        self.agents = np.array([Agent(i, self.env, network, algo) for i in range(self.playerCount)])
+        self.agents = np.array([Agent(i + 1, self.env, network, algo) for i in range(self.playerCount)])
         # for agent in self.agents:
         #     agent.onStep = self.stepListener
         self.started = False
@@ -630,13 +630,14 @@ class Agent:
         self.network = network
         self.algo = algo
         self.onStep = None
+        self.player = self.env.getPlayer(self.id)
 
     def step(self) -> None:
-        if not self.env.isDone() and self.env.canStep(self.id):
-            state = self.env.getState()
-            mask = self.env.getMask(state)
+        if not self.env.isDone() and self.player.canStep():
+            state = self.player.getState()
+            mask = self.player.getMask(state)
             action = self.algo.getAction(self.network, state, mask, True)
-            nextState, reward, done = self.env.step(action.index)
+            nextState, reward, done = self.player.step(action.index)
             transition = Transition(state, action, reward, nextState, done)
             self.memory.append(transition)
             self.report.rewards += transition.reward

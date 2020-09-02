@@ -34,13 +34,16 @@ class Puzzle2048(Game):
             65536: (234, 120, 33),
         }
 
+    def getPlayerCount(self):
+        return 1
+        
     def canStep(self, playerId):
         return True
 
     def reset(self):
         self.game = Src(self.size)
 
-    def getState(self):
+    def getState(self, playerId: int):
         state = np.zeros(self.observationShape, dtype=int)
         # state = np.zeros((1, self.size, self.size), dtype=int)
         for _, _, cell in self.game.grid.eachCell():
@@ -48,7 +51,7 @@ class Puzzle2048(Game):
                 state[0][cell.x][cell.y] = math.log2(cell.value)
         return state
 
-    def getMask(self, state):
+    def getMask(self, playerId: int, state):
         actions = [
             (0, -1),  # Up
             (1, 0),  # Right
@@ -71,7 +74,7 @@ class Puzzle2048(Game):
                                 break
         return mask
 
-    def _step(self, action) -> None:
+    def _step(self, playerId: int, action) -> None:
         score = self.game.score
         moved = self.game.move(action)
         if not moved:

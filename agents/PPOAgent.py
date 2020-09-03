@@ -262,31 +262,13 @@ class Network(nn.Module):
 class LSTMLayers(nn.Module):
     def __init__(self, n_inputs, n_outputs, num_layers=1):
         super().__init__()
+        self.n_outputs = n_outputs
         self.lstm = nn.LSTM(n_inputs, n_outputs, num_layers=num_layers)
-        # self.n_outputs = n_outputs
-        self.hidden_cell = None
 
-    # def get_init_state(self, batch_size, device):
-        # (num_layers * bidirectional, batch_size, outputs)
-        # self.hidden_cell = (torch.zeros(1, 1, self.n_outputs).to(device),
-        #                     torch.zeros(1, 1, self.n_outputs).to(device))
-    
-    def forward(self, x):
-        # (B, N) -> (1, B, N) = (B, S, N)
-        x = x.unsqueeze(0)
-        # batch_size = x.shape[1]
-        # print("x.shape", x.shape)
-        # device = x.device
-        # if self.hidden_cell is None:
-        #     self.get_init_state(batch_size, device)
-        # if terminal is not None:
-        #     self.hidden_cell = [value * (1. - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
-        # x, self.hidden_cell = self.lstm(x, self.hidden_cell)
-        # x = self.hidden_cell[0][-1]
-        x, _ = self.lstm(x)
-        x = x.squeeze(0)
-        # print(self.hidden_cell[0].shape, self.hidden_cell[1].shape)
-        return x
+    def forward(self, x, h):
+        # (B, N) -> (1, B, N)
+        x, h = self.lstm(x.unsqueeze(0), (h[0].unsqueeze(0), h[1].unsqueeze(0)))
+        return x.squeeze(0), (h[0].squeeze(0), h[1].squeeze(0))
 
 
 class PPONetwork(Network):
@@ -297,7 +279,7 @@ class PPONetwork(Network):
         # semi_hidden_nodes = hidden_nodes // 2
         self.body = BodyLayers(inputShape, hidden_nodes)
 
-        self.lstm = nn.LSTM(hidden_nodes, hidden_nodes, num_layers=1)
+        self.lstm = LSTMLayers(hidden_nodes, hidden_nodes, num_layers=1)
 
         # Define policy head
         self.policy = nn.Sequential(
@@ -307,15 +289,17 @@ class PPONetwork(Network):
         # Define value head
         self.value = nn.Linear(hidden_nodes, 1)
 
+    def getHiddenStates(self, device):
+        return (torch.zeros((1, self.lstm.n_outputs), device=device),
+            torch.zeros((1, self.lstm.n_outputs), device=device))
+            
     def buildOptimizer(self, learningRate):
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
         return self
 
     def _body(self, x, hiddenStates = None):
         x = self.body(x)
-        x = x.unsqueeze(0)
         x, hiddenStates = self.lstm(x, hiddenStates)
-        x = x.squeeze(0)
         return x, hiddenStates
 
     def forward(self, x, hiddenStates = None):
@@ -338,7 +322,7 @@ class Config:
         self.learningRate = learningRate
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=32, learningRate=3e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=32, learningRate=1e-3, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -376,22 +360,18 @@ class PPOAlgo(Algo):
         with torch.no_grad():
             stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
             maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
-            prediction, next_hiddenStates = network.getPolicy(stateTensor, hiddenStates)
+            prediction, nextHiddenStates = network.getPolicy(stateTensor, hiddenStates)
             prediction = prediction.masked_fill(~maskTensor, 0)
             prediction = prediction / prediction.sum()
             prediction = prediction.squeeze(0)
             dist = torch.distributions.Categorical(probs=prediction)
-            # print(hiddenStates[0].squeeze(0).squeeze(0).shape)
-            if isTraining:
-                index = dist.sample()
-            else:
-                index = dist.mode()
+            index = dist.sample() if isTraining else dist.mode()
             return Action(
                 index=index.item(),
                 mask=mask,
                 prediction=prediction.cpu().detach().numpy(),
-                hiddenStates=(hiddenStates[0].squeeze(0).squeeze(0).cpu().detach().numpy(), hiddenStates[1].squeeze(0).squeeze(0).cpu().detach().numpy())
-            ), next_hiddenStates
+                hiddenStates=(hiddenStates[0].squeeze(0).cpu().detach().numpy(), hiddenStates[1].squeeze(0).cpu().detach().numpy())
+            ), nextHiddenStates
 
     def processAdvantage(self, network, memory):
         with torch.no_grad():
@@ -399,8 +379,8 @@ class PPOAlgo(Algo):
             lastMemory = memory[-1]
             if not lastMemory.done:
                 lastState = torch.tensor([lastMemory.nextState], dtype=torch.float, device=self.device)
-                hiddenStates = (torch.tensor([lastMemory.next_hiddenStates[0]], dtype=torch.float, device=self.device).unsqueeze(0),
-                    torch.tensor([lastMemory.next_hiddenStates[1]], dtype=torch.float, device=self.device).unsqueeze(0))
+                hiddenStates = (torch.tensor([lastMemory.nextHiddenStates[0]], dtype=torch.float, device=self.device),
+                    torch.tensor([lastMemory.nextHiddenStates[1]], dtype=torch.float, device=self.device))
                 # print(hiddenStates)
                 lastValue, _ = network.getValue(lastState, hiddenStates)
                 lastValue = lastValue.item()
@@ -412,7 +392,7 @@ class PPOAlgo(Algo):
             hiddenStates1 = torch.tensor(hiddenStates1, dtype=torch.float, device=self.device).detach()
             hiddenStates2 = np.array([x.action.hiddenStates[1] for x in memory])
             hiddenStates2 = torch.tensor(hiddenStates2, dtype=torch.float, device=self.device).detach()
-            hiddenStates = (hiddenStates1.unsqueeze(0), hiddenStates2.unsqueeze(0))
+            hiddenStates = (hiddenStates1, hiddenStates2)
 
             values, _ = network.getValue(states, hiddenStates)
             values = values.squeeze(1).cpu().detach().numpy()
@@ -489,7 +469,7 @@ class PPOAlgo(Algo):
             hiddenStates1 = torch.tensor(hiddenStates1, dtype=torch.float, device=self.device).detach()
             hiddenStates2 = np.array([x.action.hiddenStates[1] for x in minibatch])
             hiddenStates2 = torch.tensor(hiddenStates2, dtype=torch.float, device=self.device).detach()
-            hiddenStates = (hiddenStates1.unsqueeze(0), hiddenStates2.unsqueeze(0))
+            hiddenStates = (hiddenStates1, hiddenStates2)
             # print(hiddenStates[0].shape)
             probs, values, hiddenStates = network(states, hiddenStates)
             values = values.squeeze(1)
@@ -519,12 +499,13 @@ class PPOAlgo(Algo):
             # Clip the value to reduce variability during Critic training
             # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
             # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/algo/ppo.py#L69-L75
-            value_loss = (returns - values).pow(2).mean()
-            #value_loss1 = (returns - values).pow(2)
-            #valuesClipped = old_values + torch.clamp(values - old_values, -self.config.epsClip, self.config.epsClip)
-            #value_loss2 = (returns - valuesClipped).pow(2)
-            #value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
-            #print(value_loss1, valuesClipped)
+            value_loss1 = (returns - values).pow(2)
+            valuesClipped = old_values + torch.clamp(values - old_values, -self.config.epsClip, self.config.epsClip)
+            value_loss2 = (returns - valuesClipped).pow(2)
+            value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
+
+            # MSE Loss
+            # value_loss = (returns - values).pow(2).mean()
 
             # Calculating Total loss
             # Wondering  if we need to divide the number of minibatches to keep the same learning rate?
@@ -662,17 +643,17 @@ class Agent:
         self.algo = algo
         self.onStep = None
         self.player = self.env.getPlayer(self.id)
-        self.hiddenStates = (torch.zeros((1, 1, 128), device=self.algo.device),
-            torch.zeros((1, 1, 128), device=self.algo.device))
+        self.hiddenStates = self.network.getHiddenStates(self.algo.device)
 
     def step(self) -> None:
         if not self.env.isDone() and self.player.canStep():
             state = self.player.getState()
             mask = self.player.getMask(state)
-            action, self.hiddenStates = self.algo.getAction(self.network, state, mask, True, self.hiddenStates)
-            next_hiddenStates = (self.hiddenStates[0].squeeze(0).squeeze(0).cpu().detach().numpy(), self.hiddenStates[1].squeeze(0).squeeze(0).cpu().detach().numpy())
+            action, nextHiddenStates = self.algo.getAction(self.network, state, mask, True, self.hiddenStates)
+            nextHiddenStatesNumpy = (nextHiddenStates[0].squeeze(0).cpu().detach().numpy(), nextHiddenStates[1].squeeze(0).cpu().detach().numpy())
+            self.hiddenStates = nextHiddenStates
             nextState, reward, done = self.player.step(action.index)
-            transition = Transition(state, action, reward, nextState, done, next_hiddenStates)
+            transition = Transition(state, action, reward, nextState, nextHiddenStatesNumpy, done)
             self.memory.append(transition)
             self.report.rewards += transition.reward
             if self.onStep is not None:

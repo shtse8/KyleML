@@ -159,10 +159,6 @@ class Epoch(Message):
             self.end()
         return self
 
-# ConvLSTM
-# https://github.com/czifan/ConvLSTM.pytorch/blob/master/networks/ConvLSTM.py
-
-
 class ConvLayers(nn.Module):
     def __init__(self, inputShape, n_outputs):
         super().__init__()
@@ -258,16 +254,19 @@ class Network(nn.Module):
         return info.version > self.version
 
 
-class LSTMLayers(nn.Module):
+class GRULayers(nn.Module):
     def __init__(self, n_inputs, n_outputs, num_layers=1):
         super().__init__()
         self.n_outputs = n_outputs
-        self.lstm = nn.LSTM(n_inputs, n_outputs, num_layers=num_layers)
+        self.gru = nn.GRU(n_inputs, n_outputs, num_layers=num_layers)
+
+    def getInitHiddenState(self, device):
+        return torch.zeros(self.n_outputs, device=device)
 
     def forward(self, x, h):
         # (B, N) -> (1, B, N)
-        x, h = self.lstm(x.unsqueeze(0), (h[0].unsqueeze(0), h[1].unsqueeze(0)))
-        return x.squeeze(0), (h[0].squeeze(0), h[1].squeeze(0))
+        x, h = self.gru(x.unsqueeze(0), h.unsqueeze(0))
+        return x.squeeze(0), h.squeeze(0)
 
 
 class PPONetwork(Network):
@@ -278,7 +277,7 @@ class PPONetwork(Network):
         # semi_hidden_nodes = hidden_nodes // 2
         self.body = BodyLayers(inputShape, hidden_nodes)
 
-        self.lstm = LSTMLayers(hidden_nodes, hidden_nodes, num_layers=1)
+        self.gru = GRULayers(hidden_nodes, hidden_nodes, num_layers=1)
 
         # Define policy head
         self.policy = nn.Sequential(
@@ -288,17 +287,17 @@ class PPONetwork(Network):
         # Define value head
         self.value = nn.Linear(hidden_nodes, 1)
 
-    def getHiddenStates(self, device):
-        return (torch.zeros((1, self.lstm.n_outputs), device=device),
-            torch.zeros((1, self.lstm.n_outputs), device=device))
             
     def buildOptimizer(self, learningRate):
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
         return self
 
+    def getInitHiddenState(self, device):
+        return self.gru.getInitHiddenState(device)
+
     def _body(self, x, hiddenStates = None):
         x = self.body(x)
-        x, hiddenStates = self.lstm(x, hiddenStates)
+        x, hiddenStates = self.gru(x, hiddenStates)
         return x, hiddenStates
 
     def forward(self, x, hiddenStates = None):
@@ -321,7 +320,7 @@ class Config:
         self.learningRate = learningRate
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=32, learningRate=1e-3, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=32, learningRate=3e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -354,12 +353,12 @@ class PPOAlgo(Algo):
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs)
 
-    def getAction(self, network, state, mask, isTraining: bool, hiddenStates = None) -> Action:
+    def getAction(self, network, state, mask, isTraining: bool, hiddenState = None) -> Action:
         network.eval()
         with torch.no_grad():
             stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
             maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
-            prediction, nextHiddenStates = network.getPolicy(stateTensor, hiddenStates)
+            prediction, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0))
             prediction = prediction.masked_fill(~maskTensor, 0)
             prediction = prediction / prediction.sum()
             prediction = prediction.squeeze(0)
@@ -369,7 +368,7 @@ class PPOAlgo(Algo):
                 index=index.item(),
                 mask=mask,
                 prediction=prediction.cpu().detach().numpy()
-            ), nextHiddenStates
+            ), nextHiddenState.squeeze(0)
 
     def processAdvantage(self, network, memory):
         with torch.no_grad():
@@ -377,22 +376,16 @@ class PPOAlgo(Algo):
             lastMemory = memory[-1]
             if not lastMemory.done:
                 lastState = torch.tensor([lastMemory.nextState], dtype=torch.float, device=self.device)
-                hiddenStates = (torch.tensor([lastMemory.nextHiddenStates[0]], dtype=torch.float, device=self.device),
-                    torch.tensor([lastMemory.nextHiddenStates[1]], dtype=torch.float, device=self.device))
-                # print(hiddenStates)
-                lastValue, _ = network.getValue(lastState, hiddenStates)
+                hiddenState = torch.tensor([lastMemory.nextHiddenState], dtype=torch.float, device=self.device)
+                lastValue, _ = network.getValue(lastState, hiddenState)
                 lastValue = lastValue.item()
 
             states = np.array([x.state for x in memory])
             states = torch.tensor(states, dtype=torch.float, device=self.device)
 
-            hiddenStates1 = np.array([x.hiddenStates[0] for x in memory])
-            hiddenStates1 = torch.tensor(hiddenStates1, dtype=torch.float, device=self.device).detach()
-            hiddenStates2 = np.array([x.hiddenStates[1] for x in memory])
-            hiddenStates2 = torch.tensor(hiddenStates2, dtype=torch.float, device=self.device).detach()
-            hiddenStates = (hiddenStates1, hiddenStates2)
-
-            values, _ = network.getValue(states, hiddenStates)
+            hiddenState = np.array([x.hiddenState for x in memory])
+            hiddenState = torch.tensor(hiddenState, dtype=torch.float, device=self.device).detach()
+            values, _ = network.getValue(states, hiddenState)
             values = values.squeeze(1).cpu().detach().numpy()
 
             # GAE (General Advantage Estimation)
@@ -463,12 +456,8 @@ class PPOAlgo(Algo):
             advantages = torch.tensor(advantages, dtype=torch.float, device=self.device).detach()
 
 
-            hiddenStates1 = np.array([x.hiddenStates[0] for x in minibatch])
-            hiddenStates1 = torch.tensor(hiddenStates1, dtype=torch.float, device=self.device).detach()
-            hiddenStates2 = np.array([x.hiddenStates[1] for x in minibatch])
-            hiddenStates2 = torch.tensor(hiddenStates2, dtype=torch.float, device=self.device).detach()
-            hiddenStates = (hiddenStates1, hiddenStates2)
-            # print(hiddenStates[0].shape)
+            hiddenStates = np.array([x.hiddenState for x in minibatch])
+            hiddenStates = torch.tensor(hiddenStates, dtype=torch.float, device=self.device).detach()
             probs, values, hiddenStates = network(states, hiddenStates)
             values = values.squeeze(1)
 
@@ -639,18 +628,17 @@ class Agent:
         self.algo = algo
         self.onStep = None
         self.player = self.env.getPlayer(self.id)
-        self.hiddenStates = self.network.getHiddenStates(self.algo.device)
+        self.hiddenState = self.network.getInitHiddenState(self.algo.device)
 
     def step(self) -> None:
         if not self.env.isDone() and self.player.canStep():
             state = self.player.getState()
             mask = self.player.getMask(state)
-            action, nextHiddenStates = self.algo.getAction(self.network, state, mask, True, self.hiddenStates)
-            hiddenStates = (self.hiddenStates[0].squeeze(0).cpu().detach().numpy(), self.hiddenStates[1].squeeze(0).cpu().detach().numpy())
-            nextHiddenStatesNumpy = (nextHiddenStates[0].squeeze(0).cpu().detach().numpy(), nextHiddenStates[1].squeeze(0).cpu().detach().numpy())
+            hiddenState = self.hiddenState
+            action, nextHiddenState = self.algo.getAction(self.network, state, mask, True, hiddenState)
             nextState, reward, done = self.player.step(action.index)
-            transition = Transition(state, hiddenStates, action, reward, nextState, nextHiddenStatesNumpy, done)
-            self.hiddenStates = nextHiddenStates
+            transition = Transition(state, hiddenState.cpu().detach().numpy(), action, reward, nextState, nextHiddenState.cpu().detach().numpy(), done)
+            self.hiddenStates = nextHiddenState
             self.memory.append(transition)
             self.report.rewards += transition.reward
             if self.onStep is not None:
@@ -660,7 +648,7 @@ class Agent:
         report = self.report
         # set last memory to done, as we may not be the last one to take action.
         self.memory[-1].done = True
-        self.hiddenStates = self.network.getHiddenStates(self.algo.device)
+        self.hiddenState = self.network.getInitHiddenState(self.algo.device)
         self.report = EnvReport()
         return report
 

@@ -455,14 +455,12 @@ class PPOAlgo(Algo):
             advantages = np.array([x.advantage for x in minibatch])
             advantages = torch.tensor(advantages, dtype=torch.float, device=self.device).detach()
 
-
             hiddenStates = np.array([x.hiddenState for x in minibatch])
             hiddenStates = torch.tensor(hiddenStates, dtype=torch.float, device=self.device).detach()
             probs, values, hiddenStates = network(states, hiddenStates)
             values = values.squeeze(1)
 
             # mask probs
-            eps = torch.finfo(probs.dtype).eps
             probs = probs.masked_fill(~masks, 0)
             probs = probs / probs.sum()
 
@@ -579,7 +577,7 @@ class Evaluator(Base):
         self.network.version = -1
         self.sync = sync
 
-        self.playerCount = 1
+        self.playerCount = self.env.getPlayerCount()
         self.agents = np.array([Agent(i + 1, self.env, network, algo) for i in range(self.playerCount)])
         # for agent in self.agents:
         #     agent.onStep = self.stepListener
@@ -597,7 +595,7 @@ class Evaluator(Base):
             self.started = True
         elif self.env.isDone():
             for agent in self.agents:
-                report = agent.done(False)
+                report = agent.done()
                 self.sync.reportQueue.put(report)
             self.env.reset()
         
@@ -633,6 +631,8 @@ class Agent:
     def step(self) -> None:
         if not self.env.isDone() and self.player.canStep():
             state = self.player.getState()
+            if self.id == 1:
+                print(state)
             mask = self.player.getMask(state)
             hiddenState = self.hiddenState
             action, nextHiddenState = self.algo.getAction(self.network, state, mask, True, hiddenState)
@@ -644,10 +644,16 @@ class Agent:
             if self.onStep is not None:
                 self.onStep(self)
 
-    def done(self, isWinner):
+    def done(self):
         report = self.report
         # set last memory to done, as we may not be the last one to take action.
-        self.memory[-1].done = True
+        doneReward = self.player.getDoneReward()
+        if len(self.memory) > 0:
+            lastMemory = self.memory[-1]
+            lastMemory.done = True
+            lastMemory.reward += doneReward
+        report.rewards += doneReward
+        # print(lastMemory.reward)
         self.hiddenState = self.network.getInitHiddenState(self.algo.device)
         self.report = EnvReport()
         return report

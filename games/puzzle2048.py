@@ -36,7 +36,7 @@ class Puzzle2048(Game):
 
     def getPlayerCount(self):
         return 1
-        
+      
     def canStep(self, playerId):
         return True
 

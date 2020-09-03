@@ -27,6 +27,9 @@ class Game(object):
     def getState(self, playerId: int):
         raise NotImplementedError()
 
+    def getDoneReward(self, playerId: int) -> float:
+        return 0.
+
     def _step(self, playerId: int, action) -> None:
         raise NotImplementedError()
 
@@ -40,10 +43,10 @@ class Game(object):
 
     # UI Methods
     def render(self) -> None:
-        raise NotImplementedError()
+        pass
 
     def update(self) -> None:
-        raise NotImplementedError()
+        pass
 
 
 class GamePlayer:
@@ -62,4 +65,7 @@ class GamePlayer:
 
     def step(self, action) -> tuple:
         return self.game.step(self.playerId, action)
+
+    def getDoneReward(self) -> float:
+        return self.game.getDoneReward(self.playerId)
 

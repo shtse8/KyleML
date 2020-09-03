@@ -3,6 +3,7 @@ from .Snake import Snake
 from .puzzle2048 import Puzzle2048
 from .mario import Mario
 from .gymgame import GymGame
+from .tictactoe import TicTacToe
 
 class GameFactory:
     def __init__(self, name: str):
@@ -33,4 +34,6 @@ class GameFactory:
             return GymGame("VideoPinball-v0")
         if self.name == "simple-pinball":
             return GymGame("VideoPinball-ram-v0")
+        if self.name == "tictactoe":
+            return TicTacToe()
         raise ValueError("Unknown Game " + self.name)

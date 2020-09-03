@@ -32,6 +32,7 @@ class TicTacToe:
         self.size = size
         self.cells = np.zeros((self.size, self.size))
         self.turn = 1
+        self.winner = 0
         self.isEnd = False
 
     def step(self, playerId, pos: int) -> None:
@@ -47,14 +48,14 @@ class TicTacToe:
             raise Exception("Invalid Move")
 
         self.setCell(vector, playerId)
-        if self.checkWin(vector):
+        if 0 not in self.cells.flatten():
             self.isEnd = True
-            return True
-
-        # next turn
-        self.turn = self.turn % self.players + 1
-
-        return False
+        elif self.checkWin(vector):
+            self.winner = self.turn
+            self.isEnd = True
+        else:
+            # next turn
+            self.turn = self.turn % self.players + 1
 
     def setCell(self, vector: Vector, id: int) -> None:
         self.cells[vector.x][vector.y] = id

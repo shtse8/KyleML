@@ -1,6 +1,7 @@
 class Transition(object):
-    def __init__(self, state, action: int, reward: float, nextState, nextHiddenStates, done: bool) -> None:
+    def __init__(self, state, hiddenStates, action: int, reward: float, nextState, nextHiddenStates, done: bool) -> None:
         self.state = state
+        self.hiddenStates = hiddenStates
         self.action: int = action
         self.reward: float = reward
         self.nextState = nextState

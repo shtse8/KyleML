@@ -68,11 +68,10 @@ class EnvReport(Message):
 
 
 class Action(object):
-    def __init__(self, index, mask, prediction, hiddenStates):
+    def __init__(self, index, mask, prediction):
         self.index = index
         self.mask = mask
         self.prediction = prediction
-        self.hiddenStates = hiddenStates
 
     def __int__(self):
         return self.index
@@ -369,8 +368,7 @@ class PPOAlgo(Algo):
             return Action(
                 index=index.item(),
                 mask=mask,
-                prediction=prediction.cpu().detach().numpy(),
-                hiddenStates=(hiddenStates[0].squeeze(0).cpu().detach().numpy(), hiddenStates[1].squeeze(0).cpu().detach().numpy())
+                prediction=prediction.cpu().detach().numpy()
             ), nextHiddenStates
 
     def processAdvantage(self, network, memory):
@@ -388,9 +386,9 @@ class PPOAlgo(Algo):
             states = np.array([x.state for x in memory])
             states = torch.tensor(states, dtype=torch.float, device=self.device)
 
-            hiddenStates1 = np.array([x.action.hiddenStates[0] for x in memory])
+            hiddenStates1 = np.array([x.hiddenStates[0] for x in memory])
             hiddenStates1 = torch.tensor(hiddenStates1, dtype=torch.float, device=self.device).detach()
-            hiddenStates2 = np.array([x.action.hiddenStates[1] for x in memory])
+            hiddenStates2 = np.array([x.hiddenStates[1] for x in memory])
             hiddenStates2 = torch.tensor(hiddenStates2, dtype=torch.float, device=self.device).detach()
             hiddenStates = (hiddenStates1, hiddenStates2)
 
@@ -465,24 +463,22 @@ class PPOAlgo(Algo):
             advantages = torch.tensor(advantages, dtype=torch.float, device=self.device).detach()
 
 
-            hiddenStates1 = np.array([x.action.hiddenStates[0] for x in minibatch])
+            hiddenStates1 = np.array([x.hiddenStates[0] for x in minibatch])
             hiddenStates1 = torch.tensor(hiddenStates1, dtype=torch.float, device=self.device).detach()
-            hiddenStates2 = np.array([x.action.hiddenStates[1] for x in minibatch])
+            hiddenStates2 = np.array([x.hiddenStates[1] for x in minibatch])
             hiddenStates2 = torch.tensor(hiddenStates2, dtype=torch.float, device=self.device).detach()
             hiddenStates = (hiddenStates1, hiddenStates2)
             # print(hiddenStates[0].shape)
             probs, values, hiddenStates = network(states, hiddenStates)
             values = values.squeeze(1)
 
-            # PPO2 - Confirm the samples aren't too far from pi.
-            # porb1 / porb2 = exp(log(prob1) - log(prob2))
-            # action_probs
-            
             # mask probs
             eps = torch.finfo(probs.dtype).eps
-            probs = probs.masked_fill(~masks, eps)
+            probs = probs.masked_fill(~masks, 0)
             probs = probs / probs.sum()
 
+            # PPO2 - Confirm the samples aren't too far from pi.
+            # porb1 / porb2 = exp(log(prob1) - log(prob2))
             dist = torch.distributions.Categorical(probs=probs)
             ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
             # print(ratios)
@@ -650,10 +646,11 @@ class Agent:
             state = self.player.getState()
             mask = self.player.getMask(state)
             action, nextHiddenStates = self.algo.getAction(self.network, state, mask, True, self.hiddenStates)
+            hiddenStates = (self.hiddenStates[0].squeeze(0).cpu().detach().numpy(), self.hiddenStates[1].squeeze(0).cpu().detach().numpy())
             nextHiddenStatesNumpy = (nextHiddenStates[0].squeeze(0).cpu().detach().numpy(), nextHiddenStates[1].squeeze(0).cpu().detach().numpy())
-            self.hiddenStates = nextHiddenStates
             nextState, reward, done = self.player.step(action.index)
-            transition = Transition(state, action, reward, nextState, nextHiddenStatesNumpy, done)
+            transition = Transition(state, hiddenStates, action, reward, nextState, nextHiddenStatesNumpy, done)
+            self.hiddenStates = nextHiddenStates
             self.memory.append(transition)
             self.report.rewards += transition.reward
             if self.onStep is not None:
@@ -663,6 +660,7 @@ class Agent:
         report = self.report
         # set last memory to done, as we may not be the last one to take action.
         self.memory[-1].done = True
+        self.hiddenStates = self.network.getHiddenStates(self.algo.device)
         self.report = EnvReport()
         return report
 

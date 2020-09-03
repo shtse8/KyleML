@@ -1,3 +1,5 @@
+# TODO: rewards should be based on player
+
 class Game(object):
     def __init__(self):
         self.rendered = False
@@ -29,9 +31,9 @@ class Game(object):
         raise NotImplementedError()
 
     def step(self, playerId: int, action) -> tuple:
-        self._step(action)
+        self._step(playerId, action)
         self.update()
-        return self.getState(), self.getReward(), self.isDone()
+        return self.getState(playerId), self.getReward(), self.isDone()
 
     def getReward(self) -> float:
         raise NotImplementedError()
@@ -56,7 +58,7 @@ class GamePlayer:
         return self.game.canStep(self.playerId)
 
     def getMask(self, state):
-        return self.game.mask(self.playerId, state)
+        return self.game.getMask(self.playerId, state)
 
     def step(self, action) -> tuple:
         return self.game.step(self.playerId, action)

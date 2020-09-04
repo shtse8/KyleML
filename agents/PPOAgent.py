@@ -1,5 +1,6 @@
 import asyncio
 import __main__
+import types
 from pathlib import Path
 import os
 import math
@@ -10,6 +11,7 @@ import torch.optim as optim
 import torch.nn as nn
 import torch
 import utils.Function as Function
+from utils.multiprocessing import Proxy
 from utils.PredictionHandler import PredictionHandler
 from .Agent import Agent
 from memories.Transition import Transition
@@ -20,6 +22,7 @@ import numpy as np
 from enum import Enum
 import time
 import sys
+from multiprocessing.managers import NamespaceProxy, SyncManager
 import multiprocessing.connection
 from utils.PipedProcess import Process, PipedProcess
 
@@ -37,21 +40,9 @@ class Message:
         pass
 
 
-class NetworkUpdateStrategy(Enum):
-    Aggressive = 1
-    Lazy = 2
-
-
 class NetworkInfo(Message):
     def __init__(self, stateDict, version):
         self.stateDict = stateDict
-        self.version = version
-
-
-class MemoryPush(Message):
-    def __init__(self, memory, version):
-        super().__init__()
-        self.memory = memory
         self.version = version
 
 
@@ -87,8 +78,9 @@ class Action(object):
 
 
 class Epoch(Message):
-    def __init__(self, target_episodes):
-        self.target_episodes = target_episodes
+    def __init__(self, ):
+        self.num = 0
+        self.target_episodes = 0
         self.steps: int = 0
         self.drops: int = 0
         self.rewards: float = 0
@@ -103,9 +95,24 @@ class Epoch(Message):
         self.totalRewards = 0
         self.envs = 0
 
-    def start(self):
+    def start(self, target_episodes):
         self.epoch_start_time = time.perf_counter()
+        self.target_episodes = target_episodes
+        self.steps = 0
+        self.drops = 0
+        self.rewards = 0
+        self.total_loss = 0
+        self.epoch_start_time = 0
+        self.epoch_end_time = 0
+        self.episodes = 0
+        self.bestRewards = -math.inf
+        self.totalRewards = 0
+        self.envs = 0
+        self.num += 1
         return self
+
+    def restart(self):
+        return self.start(self.target_episodes)
 
     def end(self):
         self.epoch_end_time = time.perf_counter()
@@ -159,6 +166,7 @@ class Epoch(Message):
             self.end()
         return self
 
+
 class ConvLayers(nn.Module):
     def __init__(self, inputShape, n_outputs):
         super().__init__()
@@ -189,6 +197,7 @@ class ConvLayers(nn.Module):
     def forward(self, x):
         # x = x.permute(0, 3, 1, 2)  # [B, H, W, C] => [B, C, H, W]
         return self.layers(x)
+
 
 class FCLayers(nn.Module):
     def __init__(self, n_inputs, n_outputs, num_layers=1, hidden_nodes=128):
@@ -236,7 +245,7 @@ class Network(nn.Module):
             # print("Update Cache", self.version)
             stateDict = self.state_dict()
             for key, value in stateDict.items():
-                stateDict[key] = value.cpu() #.detach().numpy()
+                stateDict[key] = value.cpu()  #.detach().numpy()
             self.info = NetworkInfo(stateDict, self.version)
 
     def getInfo(self) -> NetworkInfo:
@@ -511,35 +520,49 @@ class PPOAlgo(Algo):
         return totalLoss
 
 
-class Base:
-    def __init__(self, algo: Algo):
-        self.algo: Algo = algo
-
-
-class Trainer(Base):
-    def __init__(self, network, algo: Algo, gameFactory: GameFactory, sync):
-        super().__init__(algo)
+class Trainer:
+    def __init__(self, algo: Algo, gameFactory: GameFactory, sync):
+        self.algo = algo
         self.gameFactory = gameFactory
         self.algo.device = sync.getDevice()
-        self.network = network
-        self.lastBroadcast = None
+        self.weightPath = "./weights/"
         self.sync = sync
         self.evaluators = []
+        self.network = None
+        self.networks = []
+        self.epoch = None
+        self.lastSave = 0
 
     def learn(self, memory):
         steps = len(memory)
         loss = self.algo.learn(self.network, memory)
-        report = LearnReport(loss=loss, steps=steps)
-        self.sync.reportQueue.put(report)
+        # learn report handling
+        self.sync.epoch.trained(loss, steps)
+        self.sync.totalEpisodes.value += 1
+        self.sync.totalSteps.value += steps
+        if self.sync.epoch.isEnd:
+            # self.update(0)
+            print()
+            # reset epoch
+            self.sync.epoch.restart()
+
+        # update sync
+        # self.sync.epoch.value = self.epoch
 
     def pushNewNetwork(self):
-        if self.lastBroadcast is None or self.lastBroadcast.version < self.network.version:
-            networkInfo = self.network.getInfo()
+        networkInfo = self.network.getInfo()
+        if networkInfo.version > self.sync.latestVersion.value:
             self.sync.latestStateDict.update(networkInfo.stateDict)
             self.sync.latestVersion.value = networkInfo.version
-            self.lastBroadcast = networkInfo
 
-    async def start(self, isTraining=False):
+    async def start(self, episodes=1000, load=False):
+        
+        env = self.gameFactory.get()
+        self.network = self.algo.createNetwork(env.observationShape, env.actionSpace)
+        self.networks.append(self.network)
+        if load:
+            self.load()
+
         evaluators = []
         n_workers = max(torch.cuda.device_count(), 1)
         for i in range(n_workers):
@@ -551,6 +574,11 @@ class Trainer(Base):
         self.network = self.network.buildOptimizer(self.algo.config.learningRate).to(self.algo.device)
         n_samples = self.algo.config.sampleSize * n_workers
         evaulator_samples = self.algo.config.sampleSize
+
+        self.sync.epoch.start(episodes)
+        self.lastSave = time.perf_counter()
+        loop = asyncio.get_running_loop()
+        loop.create_task(self.reportQueueHandling())
         while True:
             # push new network
             self.pushNewNetwork()
@@ -562,13 +590,59 @@ class Trainer(Base):
                 response = await promise  # earliest result
                 # print("Rolled Memory: ", len(response.result))
                 memory.extend(response.result)
+
             # learn
             self.learn(memory)
+                    
+            if time.perf_counter() - self.lastSave > 60:
+                self.save()
 
+    async def reportQueueHandling(self):
+        while True:
+            if not self.sync.reportQueue.empty():
+                message = self.sync.reportQueue.get()
+                if isinstance(message, EnvReport):
+                    self.sync.epoch.add(message)
+            await asyncio.sleep(0)
 
-class Evaluator(Base):
+    def save(self) -> None:
+        try:
+            path = self.getSavePath(True)
+            data = {
+                "totalSteps": self.sync.totalSteps.value,
+                "totalEpisodes": self.sync.totalEpisodes.value
+            }
+            for network in self.networks:
+                data[network.name] = network.state_dict()
+            torch.save(data, path)
+            self.lastSave = time.perf_counter()
+            # print("Saved Weights.")
+        except Exception as e:
+            print("Failed to save.", e)
+        
+    def load(self) -> None:
+        try:
+            path = self.getSavePath()
+            print("Loading from path: ", path)
+            data = torch.load(path, map_location='cpu')
+            # data = torch.load(path, map_location=self.device)
+            self.sync.totalSteps.value = int(data["totalSteps"]) if "totalSteps" in data else 0
+            self.sync.totalEpisodes.value = int(data["totalEpisodes"]) if "totalEpisodes" in data else 0
+            for network in self.networks:
+                print(f"{network.name} weights loaded.")
+                network.load_state_dict(data[network.name])
+        except Exception as e:
+            print("Failed to load.", e)
+    
+    def getSavePath(self, makeDir: bool = False) -> str:
+        path = os.path.join(self.weightPath, self.algo.name.lower(), self.gameFactory.name + ".h5")
+        if makeDir:
+            Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
+        return path
+
+class Evaluator:
     def __init__(self, network, algo: Algo, gameFactory, sync):
-        super().__init__(algo)
+        self.algo = algo
         self.gameFactory = gameFactory
         self.env = gameFactory.get()
         # self.algo.device = torch.device("cpu")
@@ -579,8 +653,6 @@ class Evaluator(Base):
 
         self.playerCount = self.env.getPlayerCount()
         self.agents = np.array([Agent(i + 1, self.env, network, algo) for i in range(self.playerCount)])
-        # for agent in self.agents:
-        #     agent.onStep = self.stepListener
         self.started = False
 
     def updateNetwork(self):
@@ -599,7 +671,8 @@ class Evaluator(Base):
                 self.sync.reportQueue.put(report)
             self.env.reset()
         
-        memoryCount = min([len(x.memory) for x in self.agents])
+        # memoryCount = min([len(x.memory) for x in self.agents])
+        memoryCount = sum([len(x.memory) for x in self.agents])
         return memoryCount < num
 
     def roll(self, num):
@@ -607,10 +680,13 @@ class Evaluator(Base):
         self.generateTransitions(num)
         memory = []
         for agent in self.agents:
-            memory.extend(agent.resetMemory())
+            self.algo.processAdvantage(self.network, agent.memory)
+            memory.extend(agent.memory)
         return np.array(memory)
 
     def generateTransitions(self, num):
+        for agent in self.agents:
+            agent.resetMemory(num)
         while self.loop(num):
             for agent in self.agents:
                 agent.step()
@@ -620,160 +696,97 @@ class Agent:
     def __init__(self, id, env, network, algo):
         self.id = id
         self.env = env
-        self.memory = collections.deque(maxlen=1000)
+        self.memory = None
         self.report = EnvReport()
         self.network = network
         self.algo = algo
-        self.onStep = None
         self.player = self.env.getPlayer(self.id)
         self.hiddenState = self.network.getInitHiddenState(self.algo.device)
 
     def step(self) -> None:
         if not self.env.isDone() and self.player.canStep():
             state = self.player.getState()
-            if self.id == 1:
-                print(state)
             mask = self.player.getMask(state)
             hiddenState = self.hiddenState
             action, nextHiddenState = self.algo.getAction(self.network, state, mask, True, hiddenState)
             nextState, reward, done = self.player.step(action.index)
-            transition = Transition(state, hiddenState.cpu().detach().numpy(), action, reward, nextState, nextHiddenState.cpu().detach().numpy(), done)
+            transition = Transition(
+                state=state, 
+                hiddenState=hiddenState.cpu().detach().numpy(), 
+                action=action, 
+                reward=reward, 
+                nextState=nextState, 
+                nextHiddenState=nextHiddenState.cpu().detach().numpy(),
+                done=done)
             self.hiddenStates = nextHiddenState
             self.memory.append(transition)
+            # action reward
             self.report.rewards += transition.reward
-            if self.onStep is not None:
-                self.onStep(self)
 
     def done(self):
         report = self.report
-        # set last memory to done, as we may not be the last one to take action.
+
+        # game episode reward
         doneReward = self.player.getDoneReward()
+
+        # set last memory to done, as we may not be the last one to take action.
+        # do nothing if last memory has been processed.
         if len(self.memory) > 0:
             lastMemory = self.memory[-1]
             lastMemory.done = True
             lastMemory.reward += doneReward
         report.rewards += doneReward
-        # print(lastMemory.reward)
+        
+        # reset env variables
         self.hiddenState = self.network.getInitHiddenState(self.algo.device)
         self.report = EnvReport()
+
         return report
 
-    def resetMemory(self):
-        memory = self.memory
-        self.algo.processAdvantage(self.network, memory)
-        self.memory = collections.deque(maxlen=1000)
-        return memory
+    def resetMemory(self, num):
+        self.memory = collections.deque(maxlen=num)
 
 
 class RL:
     def __init__(self, algo: Algo, gameFactory: GameFactory):
-        self.evaluators = []
         self.algo = algo
         self.gameFactory = gameFactory
 
-        self.totalEpisodes = 0
-        self.totalSteps = 0
-        self.epochs = 1
-        self.dropped = 0
         self.lastPrint = 0
-        self.weightPath = "./weights/"
         self.networks = []
 
         mp.set_start_method("spawn")
         self.sync = SyncContext()
 
-    def broadcast(self, message):
-        for evaluator in self.evaluators:
-            evaluator.send(message)
-
     async def run(self, train: bool = True, load: bool = False, episodes: int = 1000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
         self.lastSave = time.perf_counter()
+        self.workingPath = os.path.dirname(__main__.__file__)
         # multiprocessing.connection.BUFSIZE = 2 ** 24
 
-        env = self.gameFactory.get()
-        network = self.algo.createNetwork(env.observationShape, env.actionSpace)
-        network.share_memory()
-        self.networks.append(network)
-        if not train or load:
-            self.load()
-        print(
-            f"Train: {self.isTraining}, Trained: {Function.humanize(self.totalEpisodes)} episodes, {Function.humanize(self.totalSteps)} steps")
-
-        trainer = TrainerProcess(network, self.algo, self.gameFactory, self.sync).start()
-        self.epoch = Epoch(episodes).start()
+        trainer = TrainerProcess(self.algo, self.gameFactory, self.sync, episodes, load).start()
+        print(f"Train: {self.isTraining}, Trained: {Function.humanize(self.sync.totalEpisodes.value)} episodes, {Function.humanize(self.sync.totalSteps.value)} steps")
+        
         while True:
             self.update()
-
-            while not self.sync.reportQueue.empty():
-                message = self.sync.reportQueue.get()
-                if isinstance(message, LearnReport):
-                    if message.steps > 0:
-                        self.epoch.trained(message.loss, message.steps)
-                        self.totalEpisodes += 1
-                        self.totalSteps += message.steps
-                        if time.perf_counter() - self.lastSave > 60:
-                            self.save()
-                        if self.epoch.isEnd:
-                            self.update(0)
-                            print()
-                            self.epoch = Epoch(episodes).start()
-                            self.epochs += 1
-                    else:
-                        self.epoch.drops += message.drops
-                elif isinstance(message, EnvReport):
-                    self.epoch.add(message)
-                    
             await asyncio.sleep(0.01)
 
     def update(self, freq=.1) -> None:
         if time.perf_counter() - self.lastPrint < freq:
             return
-        print(f"#{self.epochs} {Function.humanize(self.epoch.episodes):>6} {self.epoch.hitRate:>7.2%} | " +
-              f'Loss: {Function.humanize(self.epoch.loss):>6}/ep | ' +
-              f'Env: {Function.humanize(self.epoch.envs):>6} | ' +
-              f'Best: {Function.humanize(self.epoch.bestRewards):>6}, Avg: {Function.humanize(self.epoch.avgRewards):>6} | ' +
-              f'Steps: {Function.humanize(self.epoch.steps / self.epoch.duration):>6}/s | Episodes: {1 / self.epoch.durationPerEpisode:>6.2f}/s | ' +
-              f' {Function.humanizeTime(self.epoch.duration):>5} > {Function.humanizeTime(self.epoch.estimateDuration):}' +
-              '      ',
-              end="\b\r")
+        epoch = self.sync.epoch
+        if epoch is not None:
+            print(f"#{epoch.num} {Function.humanize(epoch.episodes):>6} {epoch.hitRate:>7.2%} | " +
+                f'Loss: {Function.humanize(epoch.loss):>6}/ep | ' +
+                f'Env: {Function.humanize(epoch.envs):>6} | ' +
+                f'Best: {Function.humanize(epoch.bestRewards):>6}, Avg: {Function.humanize(epoch.avgRewards):>6} | ' +
+                f'Steps: {Function.humanize(epoch.steps / epoch.duration):>6}/s | Episodes: {1 / epoch.durationPerEpisode:>6.2f}/s | ' +
+                f' {Function.humanizeTime(epoch.duration):>5} > {Function.humanizeTime(epoch.estimateDuration):}' +
+                '      ',
+                end="\b\r")
         self.lastPrint = time.perf_counter()
 
-    def save(self) -> None:
-        try:
-            path = self.getSavePath(True)
-            data = {
-                "totalSteps": self.totalSteps,
-                "totalEpisodes": self.totalEpisodes
-            }
-            for network in self.networks:
-                data[network.name] = network.state_dict()
-            torch.save(data, path)
-            self.lastSave = time.perf_counter()
-            # print("Saved Weights.")
-        except Exception as e:
-            print("Failed to save.", e)
-        
-    def load(self) -> None:
-        try:
-            path = self.getSavePath()
-            print("Loading from path: ", path)
-            data = torch.load(path, map_location='cpu')
-            # data = torch.load(path, map_location=self.device)
-            self.totalSteps = int(data["totalSteps"]) if "totalSteps" in data else 0
-            self.totalEpisodes = int(data["totalEpisodes"]) if "totalEpisodes" in data else 0
-            for network in self.networks:
-                print(f"{network.name} weights loaded.")
-                network.load_state_dict(data[network.name])
-        except Exception as e:
-            print("Failed to load.", e)
-    
-    def getSavePath(self, makeDir: bool = False) -> str:
-        path = os.path.join(os.path.dirname(__main__.__file__), self.weightPath, self.algo.name.lower(), self.gameFactory.name + ".h5")
-        if makeDir:
-            Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
-        return path
 
 
 class MethodCallRequest(Message):
@@ -806,22 +819,20 @@ class Service(PipedProcess):
                     # print("MMethodCallRequest", message.method)
                     result = getattr(self.object, message.method)(*message.args)
                     conn.send(MethodCallResult(result))
+            await asyncio.sleep(0)
+
+    async def waitResponse(self, future):
+        while not self.poll():
+            await asyncio.sleep(0)
+        message = self.recv()
+        future.set_result(message)
 
     def call(self, method, args=()):
         # print("Call", method)
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self.send(MethodCallRequest(method, args))
-
-        async def waitResponse():
-            while True:
-                if self.poll():
-                    message = self.recv()
-                    future.set_result(message)
-                    break
-                await asyncio.sleep(0)
-
-        loop.create_task(waitResponse())
+        loop.create_task(self.waitResponse(future))
         return future
 
 class EvaluatorService(Service):
@@ -836,26 +847,38 @@ class EvaluatorService(Service):
         return Evaluator(self.network, self.algo, self.gameFactory, self.sync)
 
 class TrainerProcess(Process):
-    def __init__(self, network, algo, gameFactory, sync):
+    def __init__(self, algo, gameFactory, sync, episodes, load):
         super().__init__()
         self.algo = algo
-        self.network = network
         self.gameFactory = gameFactory
         self.sync = sync
+        self.episodes = episodes
+        self.load = load
 
     async def asyncRun(self):
         # print("Trainer", os.getpid())
-        await Trainer(self.network, self.algo, self.gameFactory, self.sync).start()
+        await Trainer(self.algo, self.gameFactory, self.sync).start(self.episodes, self.load)
+
 
 
 # thread safe
 class SyncContext:
+    ProxyEpoch = Proxy(Epoch)
+
     def __init__(self):
-        self.latestStateDict = mp.Manager().dict()
-        self.latestVersion = mp.Value('i', -1)
-        self.memoryQueue = mp.Queue(maxsize=1000)
-        self.reportQueue = mp.Queue(maxsize=1000)
-        self.deviceIndex = mp.Value('i', 0)
+        # manager = mp.Manager()
+        SyncManager.register('Epoch', Epoch, self.ProxyEpoch)
+        manager = SyncManager()
+        manager.start()
+        
+        self.latestStateDict = manager.dict()
+        self.latestVersion = manager.Value('i', -1)
+        self.memoryQueue = manager.Queue(maxsize=1000)
+        self.reportQueue = manager.Queue(maxsize=1000)
+        self.deviceIndex = manager.Value('i', 0)
+        self.totalEpisodes = manager.Value('i', 0)
+        self.totalSteps = manager.Value('i', 0)
+        self.epoch = manager.Epoch()
 
     def getDevice(self):
         deviceName = "cpu"
@@ -864,3 +887,4 @@ class SyncContext:
             deviceName = "cuda:" + str(cudaId)
             self.deviceIndex.value = self.deviceIndex.value + 1
         return torch.device(deviceName)
+

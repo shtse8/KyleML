@@ -39,3 +39,4 @@ def humanizeTime(value):
 
 def getSize(obj):
     return len(pickle.dumps(obj))
+

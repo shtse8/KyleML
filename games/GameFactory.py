@@ -4,6 +4,7 @@ from .puzzle2048 import Puzzle2048
 from .mario import Mario
 from .gymgame import GymGame
 from .tictactoe import TicTacToe
+from .gomoku import Gomoku
 
 class GameFactory:
     def __init__(self, name: str):
@@ -36,4 +37,6 @@ class GameFactory:
             return GymGame("VideoPinball-ram-v0")
         if self.name == "tictactoe":
             return TicTacToe()
+        if self.name == "gomoku":
+            return Gomoku()
         raise ValueError("Unknown Game " + self.name)

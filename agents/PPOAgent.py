@@ -197,7 +197,7 @@ class Epoch:
 class ConvLayers(nn.Module):
     def __init__(self, inputShape, n_outputs):
         super().__init__()
-        if min(inputShape[1], inputShape[2]) < 8:
+        if min(inputShape[1], inputShape[2]) < 20:
             # small CNN
             self.layers = nn.Sequential(
                 nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
@@ -719,6 +719,8 @@ class Agent:
     def step(self) -> None:
         if not self.env.isDone() and self.player.canStep():
             state = self.player.getState()
+            # if self.id == 1:
+            #     print(state)
             mask = self.player.getMask(state)
             hiddenState = self.hiddenState
             action, nextHiddenState = self.algo.getAction(self.network, state, mask, True, hiddenState)
@@ -741,7 +743,8 @@ class Agent:
 
         # game episode reward
         doneReward = self.player.getDoneReward()
-
+        # if self.id == 1:
+        #     print(doneReward)
         # set last memory to done, as we may not be the last one to take action.
         # do nothing if last memory has been processed.
         if len(self.memory) > 0:

@@ -14,7 +14,7 @@ def Proxy(target, moduel=None):
         if isinstance(result, types.MethodType):
             def wrapper(*args, **kwargs):
                 tic = time.perf_counter()
-                self._callmethod(key, args)
+                self._callmethod(key, args, kwargs)
                 if key == "add":
                     print("p", time.perf_counter() - tic)
             return wrapper

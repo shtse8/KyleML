@@ -6,20 +6,21 @@ import pygame
 
 
 class TicTacToe(Game):
-    def __init__(self, size: int = 4):
+    def __init__(self, size: int = 3, winSize: int = 3):
         super().__init__()
         self.name: str = "tictactoe"
-        self.game = Src()
-        self.size = self.game.size
-        self.observationShape: tuple = (1, self.size, self.size)
-        self.actionSpace: int = self.size * self.size
+        self.size = size
+        self.winSize = winSize
+        self.game = Src(size, winSize)
+        self.observationShape: tuple = (1, size, size)
+        self.actionSpace: int = size * size
         self.reward: float = 0
 
     def getPlayerCount(self):
         return 2
 
     def reset(self):
-        self.game = Src()
+        self.game = Src(self.size, self.winSize)
 
     def getDoneReward(self, playerId) -> float:
         if not self.isDone():

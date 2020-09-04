@@ -27,9 +27,10 @@ class Vector:
 
 
 class TicTacToe:
-    def __init__(self, size=3, players=2) -> None:
+    def __init__(self, size=3, winSize=3, players=2) -> None:
         self.players = players
         self.size = size
+        self.winSize = winSize
         self.cells = np.zeros((self.size, self.size))
         self.turn = 1
         self.winner = 0
@@ -93,7 +94,7 @@ class TicTacToe:
                     if not self.isInbound(v) or self.getCell(v) != mark:
                         break
                     len += 1
-                    if len >= self.size:
+                    if len >= self.winSize:
                         return True
 
         return False

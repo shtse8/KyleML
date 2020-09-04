@@ -24,6 +24,7 @@ import time
 import sys
 from multiprocessing.managers import NamespaceProxy, SyncManager
 import multiprocessing.connection
+from multiprocessing.connection import Pipe
 from utils.PipedProcess import Process, PipedProcess
 
 
@@ -76,10 +77,49 @@ class Action(object):
         prob = min(1-eps, max(eps, self.prediction[self.index]))
         return math.log(prob)
 
-
-class Epoch(Message):
-    def __init__(self, ):
+class EpochManager:
+    def __init__(self):
         self.num = 0
+        self.epoch = None
+        self.history = []
+        self.eventHandlers = {}
+
+    def on(self, eventName, handler):
+        if eventName not in self.eventHandlers:
+            self.eventHandlers[eventName] = []
+        self.eventHandlers[eventName].append(handler)
+
+    def emit(self, eventName):
+        if eventName not in self.eventHandlers:
+            return
+        for handler in self.eventHandlers[eventName]:
+            handler()
+
+    def start(self, num):
+        self.epoch = Epoch().start(num)
+        self.num += 1
+        return self
+
+    def restart(self):
+        self.history.append(self.epoch)
+        self.emit("restart")
+        self.start(self.epoch.target_episodes)
+        return self
+
+    def add(self, reports):
+        self.epoch.add(reports)
+        self.emit("add")
+        return self
+
+    def trained(self, loss, steps):
+        self.epoch.trained(loss, steps)
+        self.emit("trained")
+        if self.epoch.isEnd:
+            self.restart()
+        return self
+
+class Epoch:
+    def __init__(self):
         self.target_episodes = 0
         self.steps: int = 0
         self.drops: int = 0
@@ -98,21 +138,7 @@ class Epoch(Message):
     def start(self, target_episodes):
         self.epoch_start_time = time.perf_counter()
         self.target_episodes = target_episodes
-        self.steps = 0
-        self.drops = 0
-        self.rewards = 0
-        self.total_loss = 0
-        self.epoch_start_time = 0
-        self.epoch_end_time = 0
-        self.episodes = 0
-        self.bestRewards = -math.inf
-        self.totalRewards = 0
-        self.envs = 0
-        self.num += 1
         return self
-
-    def restart(self):
-        return self.start(self.target_episodes)
 
     def end(self):
         self.epoch_end_time = time.perf_counter()
@@ -150,12 +176,13 @@ class Epoch(Message):
     def avgRewards(self):
         return self.totalRewards / self.envs if self.envs > 0 else math.nan
 
-    def add(self, report: EnvReport):
-        if report.rewards > self.bestRewards:
-            self.bestRewards = report.rewards
-        self.totalRewards += report.rewards
-        self.envs += 1
-        # self.history.append(report)
+    def add(self, reports):
+        for report in reports:
+            if report.rewards > self.bestRewards:
+                self.bestRewards = report.rewards
+            self.totalRewards += report.rewards
+            self.envs += 1
+            # self.history.append(report)
         return self
 
     def trained(self, loss, steps):
@@ -530,24 +557,15 @@ class Trainer:
         self.evaluators = []
         self.network = None
         self.networks = []
-        self.epoch = None
         self.lastSave = 0
 
     def learn(self, memory):
         steps = len(memory)
         loss = self.algo.learn(self.network, memory)
         # learn report handling
-        self.sync.epoch.trained(loss, steps)
+        self.sync.epochManager.trained(loss, steps)
         self.sync.totalEpisodes.value += 1
         self.sync.totalSteps.value += steps
-        if self.sync.epoch.isEnd:
-            # self.update(0)
-            print()
-            # reset epoch
-            self.sync.epoch.restart()
-
-        # update sync
-        # self.sync.epoch.value = self.epoch
 
     def pushNewNetwork(self):
         networkInfo = self.network.getInfo()
@@ -575,10 +593,8 @@ class Trainer:
         n_samples = self.algo.config.sampleSize * n_workers
         evaulator_samples = self.algo.config.sampleSize
 
-        self.sync.epoch.start(episodes)
+        self.sync.epochManager.start(episodes)
         self.lastSave = time.perf_counter()
-        loop = asyncio.get_running_loop()
-        loop.create_task(self.reportQueueHandling())
         while True:
             # push new network
             self.pushNewNetwork()
@@ -590,20 +606,12 @@ class Trainer:
                 response = await promise  # earliest result
                 # print("Rolled Memory: ", len(response.result))
                 memory.extend(response.result)
-
+            # print("learn")
             # learn
             self.learn(memory)
                     
             if time.perf_counter() - self.lastSave > 60:
                 self.save()
-
-    async def reportQueueHandling(self):
-        while True:
-            if not self.sync.reportQueue.empty():
-                message = self.sync.reportQueue.get()
-                if isinstance(message, EnvReport):
-                    self.sync.epoch.add(message)
-            await asyncio.sleep(0)
 
     def save(self) -> None:
         try:
@@ -631,6 +639,7 @@ class Trainer:
             for network in self.networks:
                 print(f"{network.name} weights loaded.")
                 network.load_state_dict(data[network.name])
+            print(f"Trained: {Function.humanize(self.sync.totalEpisodes.value)} episodes, {Function.humanize(self.sync.totalSteps.value)} steps")
         except Exception as e:
             print("Failed to load.", e)
     
@@ -655,6 +664,8 @@ class Evaluator:
         self.agents = np.array([Agent(i + 1, self.env, network, algo) for i in range(self.playerCount)])
         self.started = False
 
+        self.reports = []
+
     def updateNetwork(self):
         if self.network.version < self.sync.latestVersion.value:
             networkInfo = NetworkInfo(self.sync.latestStateDict, self.sync.latestVersion.value)
@@ -666,9 +677,9 @@ class Evaluator:
             self.env.reset()
             self.started = True
         elif self.env.isDone():
+            # reports = []
             for agent in self.agents:
-                report = agent.done()
-                self.sync.reportQueue.put(report)
+                self.reports.append(agent.done())
             self.env.reset()
         
         # memoryCount = min([len(x.memory) for x in self.agents])
@@ -690,6 +701,8 @@ class Evaluator:
         while self.loop(num):
             for agent in self.agents:
                 agent.step()
+        self.sync.epochManager.add(self.reports)
+        self.reports = []
 
 
 class Agent:
@@ -758,6 +771,16 @@ class RL:
         mp.set_start_method("spawn")
         self.sync = SyncContext()
 
+    def epochManagerRestartHandler(self):
+        self.update(0, "\n")
+        # pass
+
+    def epochManagerTrainedHandler(self):
+        self.update(0)
+
+    def epochManagerAddHandler(self):
+        self.update(0)
+
     async def run(self, train: bool = True, load: bool = False, episodes: int = 1000, delay: float = 0) -> None:
         self.delay = delay
         self.isTraining = train
@@ -765,27 +788,30 @@ class RL:
         self.workingPath = os.path.dirname(__main__.__file__)
         # multiprocessing.connection.BUFSIZE = 2 ** 24
 
+        print(f"Train: {self.isTraining}"),
         trainer = TrainerProcess(self.algo, self.gameFactory, self.sync, episodes, load).start()
-        print(f"Train: {self.isTraining}, Trained: {Function.humanize(self.sync.totalEpisodes.value)} episodes, {Function.humanize(self.sync.totalSteps.value)} steps")
-        
+        self.sync.epochManager.on("restart", self.epochManagerRestartHandler)
+        # self.sync.epochManager.on("trained", self.epochManagerTrainedHandler)
+        # self.sync.epochManager.on("add", self.epochManagerAddHandler)
+
         while True:
             self.update()
             await asyncio.sleep(0.01)
 
-    def update(self, freq=.1) -> None:
+    def update(self, freq=.1, end="\b\r") -> None:
         if time.perf_counter() - self.lastPrint < freq:
             return
-        epoch = self.sync.epoch
+        epoch = self.sync.epochManager.epoch
         if epoch is not None:
-            print(f"#{epoch.num} {Function.humanize(epoch.episodes):>6} {epoch.hitRate:>7.2%} | " +
+            print(f"#{self.sync.epochManager.num} {Function.humanize(epoch.episodes):>6} {epoch.hitRate:>7.2%} | " +
                 f'Loss: {Function.humanize(epoch.loss):>6}/ep | ' +
                 f'Env: {Function.humanize(epoch.envs):>6} | ' +
                 f'Best: {Function.humanize(epoch.bestRewards):>6}, Avg: {Function.humanize(epoch.avgRewards):>6} | ' +
                 f'Steps: {Function.humanize(epoch.steps / epoch.duration):>6}/s | Episodes: {1 / epoch.durationPerEpisode:>6.2f}/s | ' +
                 f' {Function.humanizeTime(epoch.duration):>5} > {Function.humanizeTime(epoch.estimateDuration):}' +
                 '      ',
-                end="\b\r")
-        self.lastPrint = time.perf_counter()
+                end=end)
+            self.lastPrint = time.perf_counter()
 
 
 
@@ -808,31 +834,33 @@ class Service(PipedProcess):
         super().__init__()
         self.factory = factory
         self.isRunning = True
+        self.callPipes = Pipe(True)
+        self.eventPipes = Pipe(False)
 
     async def asyncRun(self, conn):
         # print("Evaluator", os.getpid(), conn)
         self.object = self.factory()
         while self.isRunning:
-            if conn.poll():
-                message = conn.recv()
+            if self.callPipes[1].poll():
+                message = self.callPipes[1].recv()
                 if isinstance(message, MethodCallRequest):
                     # print("MMethodCallRequest", message.method)
                     result = getattr(self.object, message.method)(*message.args)
-                    conn.send(MethodCallResult(result))
+                    self.callPipes[1].send(MethodCallResult(result))
             await asyncio.sleep(0)
 
-    async def waitResponse(self, future):
-        while not self.poll():
+    async def _waitResponse(self, future):
+        while not self.callPipes[0].poll():
             await asyncio.sleep(0)
-        message = self.recv()
+        message = self.callPipes[0].recv()
         future.set_result(message)
 
     def call(self, method, args=()):
         # print("Call", method)
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        self.send(MethodCallRequest(method, args))
-        loop.create_task(self.waitResponse(future))
+        self.callPipes[0].send(MethodCallRequest(method, args))
+        loop.create_task(self._waitResponse(future))
         return future
 
 class EvaluatorService(Service):
@@ -859,26 +887,39 @@ class TrainerProcess(Process):
         # print("Trainer", os.getpid())
         await Trainer(self.algo, self.gameFactory, self.sync).start(self.episodes, self.load)
 
-
+class EpochManagerProxy(NamespaceProxy):
+    _exposed_ = tuple(dir(EpochManager))
+    
+    def __getattr__(self, key):
+        if key[0] == '_':
+            return object.__getattribute__(self, key)
+        callmethod = object.__getattribute__(self, '_callmethod')
+        result = callmethod('__getattribute__', (key,))
+        if isinstance(result, types.MethodType):
+            def wrapper(*args, **kwargs):
+                result = callmethod(key, args)
+            return wrapper
+        return result
 
 # thread safe
 class SyncContext:
-    ProxyEpoch = Proxy(Epoch)
+    # EpochProxy = Proxy(Epoch)
+    # EpochManagerProxy = Proxy(EpochManager)
 
     def __init__(self):
         # manager = mp.Manager()
-        SyncManager.register('Epoch', Epoch, self.ProxyEpoch)
+        # SyncManager.register('Epoch', Epoch, self.EpochProxy)
+        SyncManager.register('EpochManager', EpochManager, EpochManagerProxy)
         manager = SyncManager()
         manager.start()
         
         self.latestStateDict = manager.dict()
         self.latestVersion = manager.Value('i', -1)
-        self.memoryQueue = manager.Queue(maxsize=1000)
-        self.reportQueue = manager.Queue(maxsize=1000)
         self.deviceIndex = manager.Value('i', 0)
         self.totalEpisodes = manager.Value('i', 0)
         self.totalSteps = manager.Value('i', 0)
-        self.epoch = manager.Epoch()
+        self.epochManager = manager.EpochManager()
+        # self.epoch = manager.Epoch()
 
     def getDevice(self):
         deviceName = "cpu"

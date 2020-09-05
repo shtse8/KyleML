@@ -1,3 +1,4 @@
+import inspect
 import asyncio
 import __main__
 import types
@@ -399,7 +400,8 @@ class PPOAlgo(Algo):
             prediction = prediction / prediction.sum()
             prediction = prediction.squeeze(0)
             dist = torch.distributions.Categorical(probs=prediction)
-            index = dist.sample() if isTraining else dist.mode()
+            index = dist.sample() if isTraining else dist.probs.argmax(dim=-1, keepdim=True)
+            # print(prediction, index, prediction[index])
             return Action(
                 index=index.item(),
                 mask=mask,
@@ -546,72 +548,15 @@ class PPOAlgo(Algo):
 
         return totalLoss
 
-
-class Trainer:
-    def __init__(self, algo: Algo, gameFactory: GameFactory, sync):
+class Base:
+    def __init__(self, algo, gameFactory, sync):
         self.algo = algo
-        self.gameFactory = gameFactory
         self.algo.device = sync.getDevice()
-        self.weightPath = "./weights/"
+        self.gameFactory = gameFactory
         self.sync = sync
-        self.evaluators = []
-        self.network = None
         self.networks = []
+        self.weightPath = "./weights/"
         self.lastSave = 0
-
-    def learn(self, memory):
-        steps = len(memory)
-        loss = self.algo.learn(self.network, memory)
-        # learn report handling
-        self.sync.epochManager.trained(loss, steps)
-        self.sync.totalEpisodes.value += 1
-        self.sync.totalSteps.value += steps
-
-    def pushNewNetwork(self):
-        networkInfo = self.network.getInfo()
-        if networkInfo.version > self.sync.latestVersion.value:
-            self.sync.latestStateDict.update(networkInfo.stateDict)
-            self.sync.latestVersion.value = networkInfo.version
-
-    async def start(self, episodes=1000, load=False):
-        
-        env = self.gameFactory.get()
-        self.network = self.algo.createNetwork(env.observationShape, env.actionSpace)
-        self.networks.append(self.network)
-        if load:
-            self.load()
-
-        evaluators = []
-        n_workers = max(torch.cuda.device_count(), 1)
-        for i in range(n_workers):
-            evaluator = EvaluatorService(self.network, self.algo, self.gameFactory, self.sync).start()
-            evaluators.append(evaluator)
-
-        self.evaluators = np.array(evaluators)
-
-        self.network = self.network.buildOptimizer(self.algo.config.learningRate).to(self.algo.device)
-        n_samples = self.algo.config.sampleSize * n_workers
-        evaulator_samples = self.algo.config.sampleSize
-
-        self.sync.epochManager.start(episodes)
-        self.lastSave = time.perf_counter()
-        while True:
-            # push new network
-            self.pushNewNetwork()
-            # collect samples
-            memory = collections.deque(maxlen=n_samples)
-            promises = np.array([x.call("roll", (evaulator_samples,)) for x in self.evaluators])
-            # https://docs.python.org/3/library/asyncio-task.html#asyncio.as_completed
-            for promise in asyncio.as_completed(promises):
-                response = await promise  # earliest result
-                # print("Rolled Memory: ", len(response.result))
-                memory.extend(response.result)
-            # print("learn")
-            # learn
-            self.learn(memory)
-                    
-            if time.perf_counter() - self.lastSave > 60:
-                self.save()
 
     def save(self) -> None:
         try:
@@ -649,19 +594,78 @@ class Trainer:
             Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
         return path
 
-class Evaluator:
-    def __init__(self, network, algo: Algo, gameFactory, sync):
-        self.algo = algo
-        self.gameFactory = gameFactory
+class Trainer(Base):
+    def __init__(self, algo: Algo, gameFactory: GameFactory, sync):
+        super().__init__(algo, gameFactory, sync)
+        self.evaluators = []
+        self.network = None
+
+    def learn(self, memory):
+        steps = len(memory)
+        loss = self.algo.learn(self.network, memory)
+        # learn report handling
+        self.sync.epochManager.trained(loss, steps)
+        self.sync.totalEpisodes.value += 1
+        self.sync.totalSteps.value += steps
+
+    def pushNewNetwork(self):
+        networkInfo = self.network.getInfo()
+        if networkInfo.version > self.sync.latestVersion.value:
+            self.sync.latestStateDict.update(networkInfo.stateDict)
+            self.sync.latestVersion.value = networkInfo.version
+
+    async def start(self, episodes=1000, load=False):
+        
+        env = self.gameFactory.get()
+        self.network = self.algo.createNetwork(env.observationShape, env.actionSpace)
+        self.networks.append(self.network)
+        if load:
+            self.load()
+
+        evaluators = []
+        n_workers = max(torch.cuda.device_count(), 1)
+        for i in range(n_workers):
+            evaluator = EvaluatorService(self.algo, self.gameFactory, self.sync).start()
+            evaluators.append(evaluator)
+
+        self.evaluators = np.array(evaluators)
+
+        self.network = self.network.buildOptimizer(self.algo.config.learningRate).to(self.algo.device)
+        n_samples = self.algo.config.sampleSize * n_workers
+        evaulator_samples = self.algo.config.sampleSize
+
+        self.sync.epochManager.start(episodes)
+        self.lastSave = time.perf_counter()
+        while True:
+            # push new network
+            self.pushNewNetwork()
+            # collect samples
+            memory = collections.deque(maxlen=n_samples)
+            promises = np.array([x.call("roll", (evaulator_samples,)) for x in self.evaluators])
+            # https://docs.python.org/3/library/asyncio-task.html#asyncio.as_completed
+            for promise in asyncio.as_completed(promises):
+                response = await promise  # earliest result
+                # print("Rolled Memory: ", len(response.result))
+                memory.extend(response.result)
+            # print("learn")
+            # learn
+            self.learn(memory)
+                    
+            if time.perf_counter() - self.lastSave > 60:
+                self.save()
+
+class Evaluator(Base):
+    def __init__(self, algo: Algo, gameFactory, sync):
+        super().__init__(algo, gameFactory, sync)
         self.env = gameFactory.get()
         # self.algo.device = torch.device("cpu")
         self.algo.device = sync.getDevice()
-        self.network = network.to(self.algo.device)
+        self.network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace).to(self.algo.device)
         self.network.version = -1
-        self.sync = sync
+        self.networks.append(self.network)
 
         self.playerCount = self.env.getPlayerCount()
-        self.agents = np.array([Agent(i + 1, self.env, network, algo) for i in range(self.playerCount)])
+        self.agents = np.array([Agent(i + 1, self.env, self.network, algo) for i in range(self.playerCount)])
         self.started = False
 
         self.reports = []
@@ -671,7 +675,7 @@ class Evaluator:
             networkInfo = NetworkInfo(self.sync.latestStateDict, self.sync.latestVersion.value)
             self.network.loadInfo(networkInfo)
 
-    def loop(self, num):
+    def loop(self, num = 0):
         # auto reset
         if not self.started:
             self.env.reset()
@@ -683,8 +687,11 @@ class Evaluator:
             self.env.reset()
         
         # memoryCount = min([len(x.memory) for x in self.agents])
-        memoryCount = sum([len(x.memory) for x in self.agents])
-        return memoryCount < num
+        if num > 0:
+            memoryCount = sum([len(x.memory) for x in self.agents])
+            return memoryCount < num
+        else:
+            return True
 
     def roll(self, num):
         self.updateNetwork()
@@ -700,10 +707,39 @@ class Evaluator:
             agent.resetMemory(num)
         while self.loop(num):
             for agent in self.agents:
-                agent.step()
+                agent.step(True)
         self.sync.epochManager.add(self.reports)
         self.reports = []
 
+    async def eval(self):
+        self.load()
+        self.sync.epochManager.start(1)
+        while self.loop():
+            for agent in self.agents:
+                if agent.id == 2:
+                    player = self.env.getPlayer(agent.id)
+                    if not self.env.isDone() and player.canStep():
+                        while True:
+                            try:
+                                row, col = map(int, input("Your action: ").split())
+                                pos = row * self.env.size + col
+                                player.step(pos)
+                                break
+                            except Exception as e:
+                                print(e)
+                else:
+                    agent.step(False)
+                # os.system('cls')
+                print(self.env.getState(1).astype(int), "\n")
+                await asyncio.sleep(0.5)
+            if self.env.isDone():
+                print("Done:")
+                for agent in self.agents:
+                    print(agent.id, self.env.getDoneReward(agent.id))
+                await asyncio.sleep(3)
+            if len(self.reports) > 0:
+                self.sync.epochManager.add(self.reports)
+                self.reports = []
 
 class Agent:
     def __init__(self, id, env, network, algo):
@@ -716,27 +752,30 @@ class Agent:
         self.player = self.env.getPlayer(self.id)
         self.hiddenState = self.network.getInitHiddenState(self.algo.device)
 
-    def step(self) -> None:
+    def step(self, isTraining = True) -> None:
         if not self.env.isDone() and self.player.canStep():
             state = self.player.getState()
             # if self.id == 1:
             #     print(state)
             mask = self.player.getMask(state)
             hiddenState = self.hiddenState
-            action, nextHiddenState = self.algo.getAction(self.network, state, mask, True, hiddenState)
+            # print(hiddenState)
+            action, nextHiddenState = self.algo.getAction(self.network, state, mask, isTraining, hiddenState)
+            # print("Action:", action.index, action.prediction[action.index])
             nextState, reward, done = self.player.step(action.index)
-            transition = Transition(
-                state=state, 
-                hiddenState=hiddenState.cpu().detach().numpy(), 
-                action=action, 
-                reward=reward, 
-                nextState=nextState, 
-                nextHiddenState=nextHiddenState.cpu().detach().numpy(),
-                done=done)
-            self.hiddenStates = nextHiddenState
-            self.memory.append(transition)
+            if self.memory is not None:
+                transition = Transition(
+                    state=state, 
+                    hiddenState=hiddenState.cpu().detach().numpy(), 
+                    action=action, 
+                    reward=reward, 
+                    nextState=nextState, 
+                    nextHiddenState=nextHiddenState.cpu().detach().numpy(),
+                    done=done)
+                self.memory.append(transition)
+            self.hiddenState = nextHiddenState
             # action reward
-            self.report.rewards += transition.reward
+            self.report.rewards += reward
 
     def done(self):
         report = self.report
@@ -747,7 +786,7 @@ class Agent:
         #     print(doneReward)
         # set last memory to done, as we may not be the last one to take action.
         # do nothing if last memory has been processed.
-        if len(self.memory) > 0:
+        if self.memory is not None and len(self.memory) > 0:
             lastMemory = self.memory[-1]
             lastMemory.done = True
             lastMemory.reward += doneReward
@@ -792,7 +831,11 @@ class RL:
         # multiprocessing.connection.BUFSIZE = 2 ** 24
 
         print(f"Train: {self.isTraining}"),
-        trainer = TrainerProcess(self.algo, self.gameFactory, self.sync, episodes, load).start()
+        if self.isTraining:
+            trainer = TrainerProcess(self.algo, self.gameFactory, self.sync, episodes, load).start()
+        else:
+            await Evaluator(self.algo, self.gameFactory, self.sync).eval()
+
         self.sync.epochManager.on("restart", self.epochManagerRestartHandler)
         # self.sync.epochManager.on("trained", self.epochManagerTrainedHandler)
         # self.sync.epochManager.on("add", self.epochManagerAddHandler)
@@ -849,6 +892,8 @@ class Service(PipedProcess):
                 if isinstance(message, MethodCallRequest):
                     # print("MMethodCallRequest", message.method)
                     result = getattr(self.object, message.method)(*message.args)
+                    if inspect.isawaitable(result):
+                        result = await result
                     self.callPipes[1].send(MethodCallResult(result))
             await asyncio.sleep(0)
 
@@ -867,15 +912,14 @@ class Service(PipedProcess):
         return future
 
 class EvaluatorService(Service):
-    def __init__(self, network, algo, gameFactory, sync):
-        self.network = network
+    def __init__(self, algo, gameFactory, sync):
         self.algo = algo
         self.gameFactory = gameFactory
         self.sync = sync
         super().__init__(self.factory)
 
     def factory(self):
-        return Evaluator(self.network, self.algo, self.gameFactory, self.sync)
+        return Evaluator(self.algo, self.gameFactory, self.sync)
 
 class TrainerProcess(Process):
     def __init__(self, algo, gameFactory, sync, episodes, load):

@@ -357,7 +357,7 @@ class Config:
         self.learningRate = learningRate
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=32, learningRate=3e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=512, learningRate=3e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -520,13 +520,13 @@ class PPOAlgo(Algo):
             # Clip the value to reduce variability during Critic training
             # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
             # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/algo/ppo.py#L69-L75
-            value_loss1 = (returns - values).pow(2)
-            valuesClipped = old_values + torch.clamp(values - old_values, -self.config.epsClip, self.config.epsClip)
-            value_loss2 = (returns - valuesClipped).pow(2)
-            value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
+            # value_loss1 = (returns - values).pow(2)
+            # valuesClipped = old_values + torch.clamp(values - old_values, -self.config.epsClip, self.config.epsClip)
+            # value_loss2 = (returns - valuesClipped).pow(2)
+            # value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
 
             # MSE Loss
-            # value_loss = (returns - values).pow(2).mean()
+            value_loss = (returns - values).pow(2).mean()
 
             # Calculating Total loss
             # Wondering  if we need to divide the number of minibatches to keep the same learning rate?
@@ -602,11 +602,12 @@ class Trainer(Base):
 
     def learn(self, memory):
         steps = len(memory)
-        loss = self.algo.learn(self.network, memory)
-        # learn report handling
-        self.sync.epochManager.trained(loss, steps)
-        self.sync.totalEpisodes.value += 1
-        self.sync.totalSteps.value += steps
+        for _ in range(4):
+            loss = self.algo.learn(self.network, memory)
+            # learn report handling
+            self.sync.epochManager.trained(loss, steps)
+            self.sync.totalEpisodes.value += 1
+            self.sync.totalSteps.value += steps
 
     def pushNewNetwork(self):
         networkInfo = self.network.getInfo()
@@ -716,7 +717,7 @@ class Evaluator(Base):
         self.sync.epochManager.start(1)
         while self.loop():
             for agent in self.agents:
-                if agent.id == 2:
+                if agent.id == 1:
                     player = self.env.getPlayer(agent.id)
                     if not self.env.isDone() and player.canStep():
                         while True:
@@ -752,11 +753,9 @@ class Agent:
         self.player = self.env.getPlayer(self.id)
         self.hiddenState = self.network.getInitHiddenState(self.algo.device)
 
-    def step(self, isTraining = True) -> None:
+    def step(self, isTraining=True) -> None:
         if not self.env.isDone() and self.player.canStep():
             state = self.player.getState()
-            # if self.id == 1:
-            #     print(state)
             mask = self.player.getMask(state)
             hiddenState = self.hiddenState
             # print(hiddenState)
@@ -782,8 +781,6 @@ class Agent:
 
         # game episode reward
         doneReward = self.player.getDoneReward()
-        # if self.id == 1:
-        #     print(doneReward)
         # set last memory to done, as we may not be the last one to take action.
         # do nothing if last memory has been processed.
         if self.memory is not None and len(self.memory) > 0:
@@ -854,7 +851,7 @@ class RL:
                 f'Env: {Function.humanize(epoch.envs):>6} | ' +
                 f'Best: {Function.humanize(epoch.bestRewards):>6}, Avg: {Function.humanize(epoch.avgRewards):>6} | ' +
                 f'Steps: {Function.humanize(epoch.steps / epoch.duration):>6}/s | Episodes: {1 / epoch.durationPerEpisode:>6.2f}/s | ' +
-                f' {Function.humanizeTime(epoch.duration):>5} > {Function.humanizeTime(epoch.estimateDuration):}' +
+                f' {Function.humanizeTime(epoch.duration):>6} > {Function.humanizeTime(epoch.estimateDuration):}' +
                 '      ',
                 end=end)
             self.lastPrint = time.perf_counter()

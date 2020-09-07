@@ -430,6 +430,12 @@ class PPOAlgo(Algo):
             values, _ = network.getValue(states, hiddenState)
             values = values.squeeze(1).cpu().detach().numpy()
 
+            # normalize rewards
+            rewards = np.array([x.reward for x in memory])
+            rewards = Function.normalize(rewards)
+            for transition, reward in zip(memory, rewards):
+                transition.reward = reward
+
             # GAE (General Advantage Estimation)
             # Paper: https://arxiv.org/abs/1506.02438
             # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
@@ -448,10 +454,10 @@ class PPOAlgo(Algo):
             
             # Normalize advantages
             # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
-            advantages = np.array([x.advantage for x in memory])
-            advantages = Function.normalize(advantages)
-            for transition, advantage in zip(memory, advantages):
-                transition.advantage = advantage
+            # advantages = np.array([x.advantage for x in memory])
+            # advantages = Function.normalize(advantages)
+            # for transition, advantage in zip(memory, advantages):
+            #     transition.advantage = advantage
 
     def getGAE(self, rewards, dones, values, lastValue=0):
         advantages = np.zeros_like(rewards).astype(float)
@@ -489,17 +495,24 @@ class PPOAlgo(Algo):
 
             returns = np.array([x.reward for x in minibatch])
             returns = torch.tensor(returns, dtype=torch.float, device=self.device).detach()
-            returns = Function.normalize(returns)
+            # returns = Function.normalize(returns)
+            # print(returns)
             # old_values = np.array([x.value for x in minibatch])
             # old_values = torch.tensor(old_values, dtype=torch.float, device=self.device).detach()
 
             # advantages = returns - old_values
-            advantages = np.array([x.advantage for x in minibatch])
-            advantages = torch.tensor(advantages, dtype=torch.float, device=self.device).detach()
+            # advantages = np.array([x.advantage for x in minibatch])
+            # advantages = torch.tensor(advantages, dtype=torch.float, device=self.device).detach()
+            # returns = advantages + old_values
+
+            # print(returns)
 
             hiddenStates = np.array([x.hiddenState for x in minibatch])
             hiddenStates = torch.tensor(hiddenStates, dtype=torch.float, device=self.device).detach()
             probs, values, _ = network(states, hiddenStates)
+            
+            advantages = returns - values
+            advantages = Function.normalize(advantages)
             # returns = advantages + values
             # print("probs:", probs, masks)
             # mask probs
@@ -539,7 +552,8 @@ class PPOAlgo(Algo):
             # value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
 
             # MSE Loss
-            value_loss = (returns - values).pow(2).mean()
+            value_loss = advantages.pow(2).mean()
+            # value_loss = (returns - values).pow(2).mean()
 
             # Calculating Total loss
             # Wondering  if we need to divide the number of minibatches to keep the same learning rate?
@@ -615,7 +629,7 @@ class Trainer(Base):
 
     def learn(self, memory):
         steps = len(memory)
-        for _ in range(1):
+        for _ in range(4):
             loss = self.algo.learn(self.network, memory)
             # learn report handling
             self.sync.epochManager.trained(loss, steps)

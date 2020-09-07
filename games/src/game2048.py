@@ -1,6 +1,6 @@
 import numpy as np
 import math
-
+np.random.seed(0)
 class Traversal:
     def __init__(self):
         self.x = []

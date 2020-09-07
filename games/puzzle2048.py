@@ -44,7 +44,7 @@ class Puzzle2048(Game):
         self.game = Src(self.size)
 
     def getState(self, playerId: int):
-        state = np.zeros(self.observationShape, dtype=int)
+        state = np.zeros(self.observationShape, dtype=float)
         # state = np.zeros((1, self.size, self.size), dtype=int)
         for _, _, cell in self.game.grid.eachCell():
             if cell:

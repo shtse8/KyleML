@@ -231,14 +231,14 @@ class ConvLayers(nn.Module):
 
 
 class FCLayers(nn.Module):
-    def __init__(self, n_inputs, n_outputs, num_layers=1, hidden_nodes=128):
+    def __init__(self, n_inputs, n_outputs, num_layers=1, hidden_nodes=128, activator=nn.Tanh):
         super().__init__()
         self.layers = nn.ModuleList()
         for i in range(num_layers):
             in_nodes = n_inputs if i == 0 else hidden_nodes
             out_nodes = n_outputs if i == num_layers - 1 else hidden_nodes
             self.layers.append(nn.Linear(in_nodes, out_nodes))
-            self.layers.append(nn.Tanh())
+            self.layers.append(activator())
 
     def forward(self, x):
         for m in self.layers:
@@ -317,7 +317,7 @@ class PPONetwork(Network):
     def __init__(self, inputShape, n_outputs):
         super().__init__(inputShape, n_outputs)
 
-        hidden_nodes = 128
+        hidden_nodes = 256
         # semi_hidden_nodes = hidden_nodes // 2
         self.body = BodyLayers(inputShape, hidden_nodes)
 
@@ -325,13 +325,11 @@ class PPONetwork(Network):
 
         # Define policy head
         self.policy = nn.Sequential(
-            FCLayers(hidden_nodes, hidden_nodes),
             nn.Linear(hidden_nodes, n_outputs),
             nn.Softmax(dim=-1))
 
         # Define value head
         self.value = nn.Sequential(
-            FCLayers(hidden_nodes, hidden_nodes),
             nn.Linear(hidden_nodes, 1))
             
     def buildOptimizer(self, learningRate):
@@ -366,7 +364,7 @@ class Config:
         self.learningRate = learningRate
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=256, batchSize=256, learningRate=1e-5, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=256, batchSize=256, learningRate=1e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -518,7 +516,7 @@ class PPOAlgo(Algo):
             advantages = returns - values.detach()
             advantages = Function.normalize(advantages)
             # returns = advantages + values
-            print("probs:", probs)
+            # print("probs:", probs)
             # print("probs:", probs[0], actions[0], masks[0])
             # print("probs:", probs)
             # mask probs
@@ -571,12 +569,12 @@ class PPOAlgo(Algo):
             loss.backward()
             totalLoss += loss.item()
 
-        # Chip grad with norm
-        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
-        nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
+            # Chip grad with norm
+            # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
+            nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
 
-        network.optimizer.step()
-        network.version += 1
+            network.optimizer.step()
+            network.version += 1
 
         return totalLoss
 

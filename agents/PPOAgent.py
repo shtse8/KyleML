@@ -373,7 +373,7 @@ class Config:
         self.learningRate = learningRate
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=256, batchSize=256, learningRate=1e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=256, batchSize=256, learningRate=1e-5, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -500,7 +500,7 @@ class PPOAlgo(Algo):
 
             returns = np.array([x.reward for x in minibatch])
             returns = torch.tensor(returns, dtype=torch.float, device=self.device).detach()
-            returns = Function.normalize(returns)
+            # returns = Function.normalize(returns)
             # print(returns)
             old_values = np.array([x.value for x in minibatch])
             old_values = torch.tensor(old_values, dtype=torch.float, device=self.device).detach()
@@ -518,7 +518,8 @@ class PPOAlgo(Algo):
             values = values.squeeze(-1)
             # print(returns, values.squeeze(-1))
             advantages = returns - values
-            # advantages = Function.normalize(advantages)
+            advantages = Function.normalize(advantages)
+            # print("advantages", advantages)
             # returns = advantages + values
             # print("probs:", probs[0], actions[0], masks[0])
             # mask probs
@@ -527,7 +528,7 @@ class PPOAlgo(Algo):
 
             # print("states:", states)
             # print("hiddenStates:", hiddenStates)
-            # print("Values:", values)
+            print("Values:", values)
             # PPO2 - Confirm the samples aren't too far from pi.
             # porb1 / porb2 = exp(log(prob1) - log(prob2))
             # print(probs.gather(-1, actions.unsqueeze(-1)).squeeze(-1), actions, masks)
@@ -550,14 +551,14 @@ class PPOAlgo(Algo):
             # Clip the value to reduce variability during Critic training
             # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
             # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/algo/ppo.py#L69-L75
-            value_loss1 = (returns - values).pow(2)
-            valuesClipped = old_values + torch.clamp(values - old_values, -self.config.epsClip, self.config.epsClip)
-            value_loss2 = (returns - valuesClipped).pow(2)
-            value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
+            # value_loss1 = (returns - values).pow(2)
+            # valuesClipped = old_values + torch.clamp(values - old_values, -self.config.epsClip, self.config.epsClip)
+            # value_loss2 = (returns - valuesClipped).pow(2)
+            # value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
 
             # MSE Loss
             # value_loss = advantages.pow(2).mean()
-            # value_loss = (returns - values).pow(2).mean()
+            value_loss = (returns - values).pow(2).mean()
 
             # Calculating Total loss
             # Wondering  if we need to divide the number of minibatches to keep the same learning rate?

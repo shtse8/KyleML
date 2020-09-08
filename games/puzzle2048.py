@@ -41,6 +41,7 @@ class Puzzle2048(Game):
         return True
 
     def reset(self):
+        np.random.seed(0)
         self.game = Src(self.size)
 
     def getState(self, playerId: int):

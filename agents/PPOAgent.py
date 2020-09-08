@@ -29,6 +29,7 @@ from multiprocessing.connection import Pipe
 from utils.PipedProcess import Process, PipedProcess
 
 # np.set_printoptions(threshold=sys.maxsize)
+torch.set_printoptions(edgeitems=5)
 # torch.set_printoptions(edgeitems=sys.maxsize)
 
 
@@ -399,8 +400,8 @@ class PPOAlgo(Algo):
         with torch.no_grad():
             stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
             maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
-            predictionP, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0))
-            prediction = predictionP.masked_fill(~maskTensor, 0)
+            prediction, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0))
+            prediction = prediction.masked_fill(~maskTensor, 0)
             prediction = prediction / prediction.sum(dim=-1, keepdim=True)
             prediction = prediction.squeeze(0)
             dist = torch.distributions.Categorical(probs=prediction)
@@ -409,7 +410,7 @@ class PPOAlgo(Algo):
             return Action(
                 index=index.item(),
                 mask=mask,
-                prediction=predictionP.squeeze(0).cpu().detach().numpy()
+                prediction=prediction.cpu().detach().numpy()
             ), nextHiddenState.squeeze(0)
 
     def processAdvantage(self, network, memory):
@@ -511,17 +512,16 @@ class PPOAlgo(Algo):
             hiddenStates = torch.tensor(hiddenStates, dtype=torch.float, device=self.device).detach()
             probs, values, _ = network(states, hiddenStates)
             values = values.squeeze(1)
-            print(returns, values.squeeze(-1))
+            # print(returns, values.squeeze(-1))
             # print(returns)
-            advantages = returns - values.detach()
+            advantages = returns - values
             advantages = Function.normalize(advantages)
             # returns = advantages + values
-            # print("probs:", probs)
             # print("probs:", probs[0], actions[0], masks[0])
-            # print("probs:", probs)
             # mask probs
-            # probs = probs.masked_fill(~masks, 0)
-            # probs = probs / probs.sum(dim=-1, keepdim=True)
+            probs = probs.masked_fill(~masks, 1e-10)
+            probs = probs / probs.sum(dim=-1, keepdim=True)
+            print("probs:", probs)
 
             # print("states:", states)
             # print("hiddenStates:", hiddenStates)
@@ -531,7 +531,7 @@ class PPOAlgo(Algo):
             # print(probs.gather(-1, actions.unsqueeze(-1)).squeeze(-1), actions, masks)
             dist = torch.distributions.Categorical(probs=probs)
             ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-            # print("ratios", ratios)
+            print("ratios", ratios)
             # print("dist.log_prob(actions)", dist.log_prob(actions))
             # print("old_log_probs", old_log_probs)
             policy_losses1 = ratios * advantages
@@ -564,7 +564,7 @@ class PPOAlgo(Algo):
             weight = len(minibatch) / len(memory)
             loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) * weight
             # loss = (policy_loss + value_loss) * weight
-            print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
+            # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
             # Accumulating the loss to the graph
             loss.backward()
             totalLoss += loss.item()

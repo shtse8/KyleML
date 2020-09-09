@@ -29,8 +29,8 @@ from multiprocessing.connection import Pipe
 from utils.PipedProcess import Process, PipedProcess
 
 # np.set_printoptions(threshold=sys.maxsize)
-torch.set_printoptions(edgeitems=5)
-# torch.set_printoptions(edgeitems=sys.maxsize)
+# torch.set_printoptions(edgeitems=10)
+torch.set_printoptions(edgeitems=sys.maxsize)
 
 
 # def init_layer(m):
@@ -207,11 +207,14 @@ class ConvLayers(nn.Module):
             self.layers = nn.Sequential(
                 nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
+                nn.BatchNorm2d(16),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
+                nn.BatchNorm2d(32),
                 nn.Flatten(),
                 nn.Linear(32 * inputShape[1] * inputShape[2], n_outputs),
-                nn.ReLU())
+                nn.ReLU(),
+                nn.BatchNorm1d(n_outputs))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
@@ -351,6 +354,8 @@ class PPONetwork(Network):
         if m is not None:
             x = x.masked_fill(~m, 0)
             x = x / x.sum(dim=-1, keepdim=True)
+            #  Prevent from exploit of grad.
+            x = x.masked_fill(x.eq(0), self.eps)
         return x
 
     def forward(self, x, h, m=None):
@@ -373,7 +378,7 @@ class Config:
         self.learningRate = learningRate
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=256, batchSize=256, learningRate=1e-5, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=512, learningRate=3e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -409,7 +414,7 @@ class PPOAlgo(Algo):
             stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
             maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
             prediction, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0), maskTensor)
-            dist = torch.distributions.Categorical(probs=prediction)
+            dist = torch.distributions.Categorical(probs=prediction.masked_fill(~maskTensor, 0))
             index = dist.sample() if isTraining else dist.probs.argmax(dim=-1, keepdim=True)
             return Action(
                 index=index.item(),
@@ -500,7 +505,7 @@ class PPOAlgo(Algo):
 
             returns = np.array([x.reward for x in minibatch])
             returns = torch.tensor(returns, dtype=torch.float, device=self.device).detach()
-            # returns = Function.normalize(returns)
+            returns = Function.normalize(returns)
             # print(returns)
             old_values = np.array([x.value for x in minibatch])
             old_values = torch.tensor(old_values, dtype=torch.float, device=self.device).detach()
@@ -516,10 +521,11 @@ class PPOAlgo(Algo):
             hiddenStates = torch.tensor(hiddenStates, dtype=torch.float, device=self.device).detach()
             probs, values, _ = network(states, hiddenStates, masks)
             values = values.squeeze(-1)
-            # print(returns, values.squeeze(-1))
+            print("Returns:", returns)
+            print("Values:", values)
             advantages = returns - values
-            advantages = Function.normalize(advantages)
-            # print("advantages", advantages)
+            # advantages = Function.normalize(advantages)
+            print("advantages", advantages)
             # returns = advantages + values
             # print("probs:", probs[0], actions[0], masks[0])
             # mask probs
@@ -528,13 +534,12 @@ class PPOAlgo(Algo):
 
             # print("states:", states)
             # print("hiddenStates:", hiddenStates)
-            print("Values:", values)
             # PPO2 - Confirm the samples aren't too far from pi.
             # porb1 / porb2 = exp(log(prob1) - log(prob2))
             # print(probs.gather(-1, actions.unsqueeze(-1)).squeeze(-1), actions, masks)
             dist = torch.distributions.Categorical(probs=probs)
             ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-            # print("ratios", ratios)
+            print("ratios", ratios)
             # print("dist.log_prob(actions)", dist.log_prob(actions))
             # print("old_log_probs", old_log_probs)
             policy_losses1 = ratios * advantages
@@ -566,11 +571,14 @@ class PPOAlgo(Algo):
             # Should be fine to not dividing the number of minibatches.
             weight = len(minibatch) / len(memory)
             loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) * weight
-            # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
+            print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
             # Accumulating the loss to the graph
             loss.backward()
             totalLoss += loss.item()
-
+            print("parameters 1")
+            for p in network.parameters():
+                print(p.grad)
+                break
             # Chip grad with norm
             # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
             nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)

@@ -588,9 +588,9 @@ class PPOAlgo(Algo):
             loss.backward()
             totalLoss += loss.item()
             # print("parameters 1")
-            for p in network.parameters():
-                print(p.grad)
-                break
+            # for p in network.parameters():
+            #     print(p.grad)
+            #     break
             # Chip grad with norm
             # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
             nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)

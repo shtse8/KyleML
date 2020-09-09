@@ -330,8 +330,7 @@ class PPONetwork(Network):
 
         # Define policy head
         self.policy = nn.Sequential(
-            nn.Linear(hidden_nodes, n_outputs),
-            nn.Softmax(dim=-1))
+            nn.Linear(hidden_nodes, n_outputs))
 
         # Define value head
         self.value = nn.Sequential(
@@ -352,11 +351,19 @@ class PPONetwork(Network):
     def _policy(self, x, m=None):
         x = self.policy(x)
         if m is not None:
-            x = x.masked_fill(~m, 0)
-            x = x / x.sum(dim=-1, keepdim=True)
-            #  Prevent from exploit of grad.
-            x = x.masked_fill(x.eq(0), self.eps)
-        return x
+            x1 = x.masked_fill(~m, -math.inf)
+        x1 = F.softmax(x1, dim=1)
+        
+        # x2 = F.softmax(x, dim=1)
+        # if m is not None:
+        #     x2 = x2.masked_fill(~m, 0)
+        #     x2 = x2 / x2.sum(dim=-1, keepdim=True)
+        # if not (x1 == x2).all():
+        #     print(x1, x2, (x1 == x2), m)
+        # if m is not None:
+        #     x = x.masked_fill(~m, 0)
+        #     x = x / x.sum(dim=-1, keepdim=True)
+        return x1
 
     def forward(self, x, h, m=None):
         x, h = self._body(x, h)
@@ -410,17 +417,22 @@ class PPOAlgo(Algo):
 
     def getAction(self, network, state, mask, isTraining: bool, hiddenState = None) -> Action:
         network.eval()
-        with torch.no_grad():
-            stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
-            maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
-            prediction, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0), maskTensor)
-            dist = torch.distributions.Categorical(probs=prediction.masked_fill(~maskTensor, 0))
-            index = dist.sample() if isTraining else dist.probs.argmax(dim=-1, keepdim=True)
-            return Action(
-                index=index.item(),
-                mask=mask,
-                prediction=prediction.squeeze(0).cpu().detach().numpy()
-            ), nextHiddenState.squeeze(0)
+        try:
+            with torch.no_grad():
+                stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
+                maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
+                prediction, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0), maskTensor)
+                dist = torch.distributions.Categorical(probs=prediction)
+                index = dist.sample() if isTraining else dist.probs.argmax(dim=-1, keepdim=True)
+                return Action(
+                    index=index.item(),
+                    mask=mask,
+                    prediction=prediction.squeeze(0).cpu().detach().numpy()
+                ), nextHiddenState.squeeze(0)
+        except Exception as e:
+            print(e)
+            print(prediction)
+            sys.exit(0)
 
     def processAdvantage(self, network, memory):
         with torch.no_grad():
@@ -521,16 +533,16 @@ class PPOAlgo(Algo):
             hiddenStates = torch.tensor(hiddenStates, dtype=torch.float, device=self.device).detach()
             probs, values, _ = network(states, hiddenStates, masks)
             values = values.squeeze(-1)
-            print("Returns:", returns)
-            print("Values:", values)
+            # print("Returns:", returns)
+            # print("Values:", values)
             advantages = returns - values
             # advantages = Function.normalize(advantages)
-            print("advantages", advantages)
+            # print("advantages", advantages)
             # returns = advantages + values
             # print("probs:", probs[0], actions[0], masks[0])
             # mask probs
             
-            print("probs:", probs)
+            # print("probs:", probs)
 
             # print("states:", states)
             # print("hiddenStates:", hiddenStates)
@@ -539,7 +551,7 @@ class PPOAlgo(Algo):
             # print(probs.gather(-1, actions.unsqueeze(-1)).squeeze(-1), actions, masks)
             dist = torch.distributions.Categorical(probs=probs)
             ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-            print("ratios", ratios)
+            # print("ratios", ratios)
             # print("dist.log_prob(actions)", dist.log_prob(actions))
             # print("old_log_probs", old_log_probs)
             policy_losses1 = ratios * advantages
@@ -571,11 +583,11 @@ class PPOAlgo(Algo):
             # Should be fine to not dividing the number of minibatches.
             weight = len(minibatch) / len(memory)
             loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) * weight
-            print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
+            # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
             # Accumulating the loss to the graph
             loss.backward()
             totalLoss += loss.item()
-            print("parameters 1")
+            # print("parameters 1")
             for p in network.parameters():
                 print(p.grad)
                 break

@@ -8,7 +8,7 @@ from torch.distributions import Categorical
 Categorical.entropy = (-array * log(array)).sum()
 """
 # p = np.array([0.1, 0.2, 0.4, 0.3])
-p = np.array([0, 0, 0, 0])
+p = np.array([0.4, 0.1, 0.2, 0.2, 0.2])
 p2 = p / p.sum()
 print(p2)
 eps = torch.finfo(torch.float).eps

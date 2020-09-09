@@ -28,7 +28,8 @@ import multiprocessing.connection
 from multiprocessing.connection import Pipe
 from utils.PipedProcess import Process, PipedProcess
 
-# np.set_printoptions(threshold=sys.maxsize)
+np.set_printoptions(threshold=sys.maxsize)
+np.set_printoptions(suppress=True)
 # torch.set_printoptions(edgeitems=10)
 torch.set_printoptions(edgeitems=sys.maxsize)
 
@@ -207,14 +208,14 @@ class ConvLayers(nn.Module):
             self.layers = nn.Sequential(
                 nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
-                nn.BatchNorm2d(16),
+                # nn.BatchNorm2d(16),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
-                nn.BatchNorm2d(32),
+                # nn.BatchNorm2d(32),
                 nn.Flatten(),
                 nn.Linear(32 * inputShape[1] * inputShape[2], n_outputs),
-                nn.ReLU(),
-                nn.BatchNorm1d(n_outputs))
+                nn.ReLU())
+                # nn.BatchNorm1d(n_outputs))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
@@ -385,7 +386,7 @@ class Config:
         self.learningRate = learningRate
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=512, learningRate=3e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=512, learningRate=1e-3, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -517,7 +518,7 @@ class PPOAlgo(Algo):
 
             returns = np.array([x.reward for x in minibatch])
             returns = torch.tensor(returns, dtype=torch.float, device=self.device).detach()
-            # returns = Function.normalize(returns)
+            returns = Function.normalize(returns)
             # print(returns)
             old_values = np.array([x.value for x in minibatch])
             old_values = torch.tensor(old_values, dtype=torch.float, device=self.device).detach()
@@ -530,13 +531,14 @@ class PPOAlgo(Algo):
             # print(returns)
 
             hiddenStates = np.array([x.hiddenState for x in minibatch])
+            # print(hiddenStates[0])
             hiddenStates = torch.tensor(hiddenStates, dtype=torch.float, device=self.device).detach()
             probs, values, _ = network(states, hiddenStates, masks)
             values = values.squeeze(-1)
             # print("Returns:", returns)
             # print("Values:", values)
             advantages = returns - values
-            advantages = Function.normalize(advantages)
+            # advantages = Function.normalize(advantages)
             # print("advantages", advantages)
             # returns = advantages + values
             # print("probs:", probs[0], actions[0], masks[0])
@@ -583,6 +585,7 @@ class PPOAlgo(Algo):
             # Should be fine to not dividing the number of minibatches.
             weight = len(minibatch) / len(memory)
             loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) * weight
+            # loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) * weight
             # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
             # Accumulating the loss to the graph
             loss.backward()
@@ -712,7 +715,7 @@ class Evaluator(Base):
         super().__init__(algo, gameFactory, sync)
         self.env = gameFactory.get()
         # self.algo.device = torch.device("cpu")
-        self.algo.device = sync.getDevice()
+        # self.algo.device = sync.getDevice()
         self.network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace).to(self.algo.device)
         self.network.version = -1
         self.networks.append(self.network)
@@ -746,6 +749,11 @@ class Evaluator(Base):
         else:
             return True
 
+    def flushReports(self):
+        if len(self.reports) > 0:
+            self.sync.epochManager.add(self.reports)
+            self.reports = []
+
     def roll(self, num):
         self.updateNetwork()
         self.generateTransitions(num)
@@ -761,8 +769,7 @@ class Evaluator(Base):
         while self.loop(num):
             for agent in self.agents:
                 agent.step(True)
-        self.sync.epochManager.add(self.reports)
-        self.reports = []
+        self.flushReports()
 
     async def eval(self):
         self.load()
@@ -790,9 +797,7 @@ class Evaluator(Base):
                 for agent in self.agents:
                     print(agent.id, self.env.getDoneReward(agent.id))
                 await asyncio.sleep(3)
-            if len(self.reports) > 0:
-                self.sync.epochManager.add(self.reports)
-                self.reports = []
+            self.flushReports()
 
 class Agent:
     def __init__(self, id, env, network, algo):

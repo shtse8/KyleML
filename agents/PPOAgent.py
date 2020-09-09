@@ -351,8 +351,8 @@ class PPONetwork(Network):
     def _policy(self, x, m=None):
         x = self.policy(x)
         if m is not None:
-            x1 = x.masked_fill(~m, -math.inf)
-        x1 = F.softmax(x1, dim=1)
+            x = x.masked_fill(~m, -math.inf)
+        x = F.softmax(x, dim=1)
         
         # x2 = F.softmax(x, dim=1)
         # if m is not None:
@@ -363,7 +363,7 @@ class PPONetwork(Network):
         # if m is not None:
         #     x = x.masked_fill(~m, 0)
         #     x = x / x.sum(dim=-1, keepdim=True)
-        return x1
+        return x
 
     def forward(self, x, h, m=None):
         x, h = self._body(x, h)
@@ -517,7 +517,7 @@ class PPOAlgo(Algo):
 
             returns = np.array([x.reward for x in minibatch])
             returns = torch.tensor(returns, dtype=torch.float, device=self.device).detach()
-            returns = Function.normalize(returns)
+            # returns = Function.normalize(returns)
             # print(returns)
             old_values = np.array([x.value for x in minibatch])
             old_values = torch.tensor(old_values, dtype=torch.float, device=self.device).detach()
@@ -536,7 +536,7 @@ class PPOAlgo(Algo):
             # print("Returns:", returns)
             # print("Values:", values)
             advantages = returns - values
-            # advantages = Function.normalize(advantages)
+            advantages = Function.normalize(advantages)
             # print("advantages", advantages)
             # returns = advantages + values
             # print("probs:", probs[0], actions[0], masks[0])

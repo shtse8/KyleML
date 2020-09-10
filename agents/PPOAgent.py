@@ -15,6 +15,7 @@ import utils.Function as Function
 from utils.multiprocessing import Proxy
 from utils.PredictionHandler import PredictionHandler
 from .Agent import Agent
+from typing import List, Callable
 from memories.Transition import Transition
 from memories.SimpleMemory import SimpleMemory
 from games.GameFactory import GameFactory
@@ -386,7 +387,7 @@ class Config:
         self.learningRate = learningRate
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=512, learningRate=1e-3, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=512, learningRate=1e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -407,6 +408,61 @@ class Algo:
 
     def learn(self, network: Network, memory):
         raise NotImplementedError
+
+
+class Memory:
+    def __init__(self, iter: List[any]):
+        self.memory = np.array(iter)
+
+    def select(self, property: Callable[[any], any]):
+        return Memory([property(x) for x in self.memory])
+
+    def toArray(self):
+        return self.memory
+
+    def toTensor(self, dtype, device):
+        return torch.tensor(self.memory, dtype=dtype, device=device).detach()
+
+    def get(self, fromPos: int, num: int):
+        return Memory(self.memory[fromPos:fromPos+num])
+
+    def mean(self):
+        return self.memory.mean()
+
+    def std(self):
+        return self.memory.std()
+
+    def size(self):
+        return len(self.memory)
+
+    def __sub__(self, other):
+        return Memory(self.memory - other)
+
+    def __truediv__(self, other):
+        return Memory(self.memory / other)
+
+    def __len__(self):
+        return len(self.memory)
+
+    def __getitem__(self, i: int):
+        return self.memory[i]
+
+    def __iter__(self):
+        return MemoryIterator(self)
+
+
+class MemoryIterator:
+    def __init__(self, memory):
+        self.memory = memory
+        self.current = 0
+
+    def __next__(self):
+        if self.current < len(self.memory):
+            result = self.memory[self.current]
+            self.current += 1
+            return result
+        self.current = 0
+        raise StopIteration
 
 
 class PPOAlgo(Algo):
@@ -493,69 +549,38 @@ class PPOAlgo(Algo):
             lastValue = values[i]
         return advantages
 
-    def learn(self, network: Network, memory):
+    def learn(self, network: Network, memory: Memory):
         network.train()
-        memory = np.array(memory)
-        n_miniBatch = len(memory) // self.config.batchSize
+        batchSize = min(memory.size(), self.config.batchSize)
+        n_miniBatch = memory.size() // batchSize
         totalLoss = 0
+
+        # normalize rewards
+        rewards = memory.select(lambda x: x.reward)
+        rewards = Function.normalize(rewards)
+
         network.optimizer.zero_grad()
         for i in range(n_miniBatch):
-            startIndex = i * self.config.batchSize
-            endIndex = startIndex + self.config.batchSize
-            minibatch = memory[startIndex:endIndex]
+            startIndex = i * batchSize
+            minibatch = memory.get(startIndex, batchSize)
             
-            states = np.array([x.state for x in minibatch])
-            states = torch.tensor(states, dtype=torch.float, device=self.device).detach()
+            # Get Tensors
+            states = minibatch.select(lambda x: x.state).toTensor(torch.float, self.device)
+            actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
+            masks = minibatch.select(lambda x: x.action.mask).toTensor(torch.bool, self.device)
+            old_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
+            returns = rewards.get(startIndex, batchSize).toTensor(torch.float, self.device)
+            old_values = minibatch.select(lambda x: x.value).toTensor(torch.float, self.device)
+            hiddenStates = minibatch.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
+            advantages = returns - old_values
 
-            actions = np.array([x.action.index for x in minibatch])
-            actions = torch.tensor(actions, dtype=torch.long, device=self.device).detach()
-            # print(actions)
-            masks = np.array([x.action.mask for x in minibatch])
-            masks = torch.tensor(masks, dtype=torch.bool, device=self.device).detach()
-
-            old_log_probs = np.array([x.action.log for x in minibatch])
-            old_log_probs = torch.tensor(old_log_probs, dtype=torch.float, device=self.device).detach()
-
-            returns = np.array([x.reward for x in minibatch])
-            returns = torch.tensor(returns, dtype=torch.float, device=self.device).detach()
-            returns = Function.normalize(returns)
-            # print(returns)
-            old_values = np.array([x.value for x in minibatch])
-            old_values = torch.tensor(old_values, dtype=torch.float, device=self.device).detach()
-
-            # advantages = returns - old_values
-            # advantages = np.array([x.advantage for x in minibatch])
-            # advantages = torch.tensor(advantages, dtype=torch.float, device=self.device).detach()
-            # returns = advantages + old_values
-
-            # print(returns)
-
-            hiddenStates = np.array([x.hiddenState for x in minibatch])
-            # print(hiddenStates[0])
-            hiddenStates = torch.tensor(hiddenStates, dtype=torch.float, device=self.device).detach()
             probs, values, _ = network(states, hiddenStates, masks)
             values = values.squeeze(-1)
-            # print("Returns:", returns)
-            # print("Values:", values)
-            advantages = returns - values
-            # advantages = Function.normalize(advantages)
-            # print("advantages", advantages)
-            # returns = advantages + values
-            # print("probs:", probs[0], actions[0], masks[0])
-            # mask probs
-            
-            # print("probs:", probs)
 
-            # print("states:", states)
-            # print("hiddenStates:", hiddenStates)
             # PPO2 - Confirm the samples aren't too far from pi.
             # porb1 / porb2 = exp(log(prob1) - log(prob2))
-            # print(probs.gather(-1, actions.unsqueeze(-1)).squeeze(-1), actions, masks)
             dist = torch.distributions.Categorical(probs=probs)
             ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-            # print("ratios", ratios)
-            # print("dist.log_prob(actions)", dist.log_prob(actions))
-            # print("old_log_probs", old_log_probs)
             policy_losses1 = ratios * advantages
             policy_losses2 = ratios.clamp(1 - self.config.epsClip, 1 + self.config.epsClip) * advantages
 
@@ -580,26 +605,21 @@ class PPOAlgo(Algo):
             value_loss = (returns - values).pow(2).mean()
 
             # Calculating Total loss
-            # Wondering  if we need to divide the number of minibatches to keep the same learning rate?
-            # As the learning rate is a parameter of optimizer, and only one step is called. 
-            # Should be fine to not dividing the number of minibatches.
+            # the weight of this minibatch
             weight = len(minibatch) / len(memory)
             loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) * weight
-            # loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) * weight
             # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
+
             # Accumulating the loss to the graph
             loss.backward()
             totalLoss += loss.item()
-            # print("parameters 1")
-            # for p in network.parameters():
-            #     print(p.grad)
-            #     break
+
             # Chip grad with norm
             # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
             nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
 
-            network.optimizer.step()
-            network.version += 1
+        network.optimizer.step()
+        network.version += 1
 
         return totalLoss
 
@@ -656,6 +676,7 @@ class Trainer(Base):
         self.network = None
 
     def learn(self, memory):
+        memory = Memory(memory)
         steps = len(memory)
         for _ in range(4):
             loss = self.algo.learn(self.network, memory)

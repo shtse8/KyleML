@@ -1,3 +1,4 @@
+from __future__ import annotations
 import inspect
 import asyncio
 import __main__
@@ -14,8 +15,8 @@ import torch
 import utils.Function as Function
 from utils.multiprocessing import Proxy
 from utils.PredictionHandler import PredictionHandler
-from .Agent import Agent
-from typing import List, Callable
+# from .Agent import Agent
+from typing import List, Callable, TypeVar, Generic, Tuple, Any
 from memories.Transition import Transition
 from memories.SimpleMemory import SimpleMemory
 from games.GameFactory import GameFactory
@@ -79,10 +80,12 @@ class Action(object):
     def log(self):
         # https://github.com/pytorch/pytorch/blob/master/torch/distributions/utils.py#L72
         eps = torch.finfo(torch.float).eps
-        prob = np.array([p if self.mask[i] else 0 for i, p in enumerate(self.prediction)])
+        prob = np.array([p if self.mask[i] else 0 for i,
+                         p in enumerate(self.prediction)])
         prob = prob / prob.sum()
         prob = min(1-eps, max(eps, self.prediction[self.index]))
         return math.log(prob)
+
 
 class EpochManager:
     def __init__(self):
@@ -124,6 +127,7 @@ class EpochManager:
         if self.epoch.isEnd:
             self.restart()
         return self
+
 
 class Epoch:
     def __init__(self):
@@ -207,7 +211,8 @@ class ConvLayers(nn.Module):
         if min(inputShape[1], inputShape[2]) < 20:
             # small CNN
             self.layers = nn.Sequential(
-                nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
+                nn.Conv2d(inputShape[0], 16, kernel_size=3,
+                          stride=1, padding=1),
                 nn.ReLU(),
                 # nn.BatchNorm2d(16),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
@@ -216,7 +221,7 @@ class ConvLayers(nn.Module):
                 nn.Flatten(),
                 nn.Linear(32 * inputShape[1] * inputShape[2], n_outputs),
                 nn.ReLU())
-                # nn.BatchNorm1d(n_outputs))
+            # nn.BatchNorm1d(n_outputs))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
@@ -260,7 +265,8 @@ class BodyLayers(nn.Module):
         else:
             if type(inputShape) is tuple and len(inputShape) == 1:
                 inputShape = inputShape[0]
-            self.layers = FCLayers(inputShape, n_outputs, hidden_nodes=hidden_nodes, num_layers=3)
+            self.layers = FCLayers(inputShape, n_outputs,
+                                   hidden_nodes=hidden_nodes, num_layers=3)
 
     def forward(self, x):
         return self.layers(x)
@@ -282,7 +288,7 @@ class Network(nn.Module):
             # print("Update Cache", self.version)
             stateDict = self.state_dict()
             for key, value in stateDict.items():
-                stateDict[key] = value.cpu()  #.detach().numpy()
+                stateDict[key] = value.cpu()  # .detach().numpy()
             self.info = NetworkInfo(stateDict, self.version)
 
     def getInfo(self) -> NetworkInfo:
@@ -337,7 +343,7 @@ class PPONetwork(Network):
         # Define value head
         self.value = nn.Sequential(
             nn.Linear(hidden_nodes, 1))
-            
+
     def buildOptimizer(self, learningRate):
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
         return self
@@ -355,7 +361,7 @@ class PPONetwork(Network):
         if m is not None:
             x = x.masked_fill(~m, -math.inf)
         x = F.softmax(x, dim=1)
-        
+
         # x2 = F.softmax(x, dim=1)
         # if m is not None:
         #     x2 = x2.masked_fill(~m, 0)
@@ -386,6 +392,7 @@ class Config:
         self.batchSize = batchSize
         self.learningRate = learningRate
 
+
 class PPOConfig(Config):
     def __init__(self, sampleSize=512, batchSize=512, learningRate=1e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
@@ -393,63 +400,72 @@ class PPOConfig(Config):
         self.epsClip = epsClip
         self.gaeCoeff = gaeCoeff
 
-class Algo:
-    def __init__(self, name, config: Config):
+
+C = TypeVar('C')
+
+
+class Algo(Generic[C]):
+    def __init__(self, name, config: C):
         self.name = name
         self.config = config
         self.device = torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu")
 
-    def createNetwork(self) -> Network:
+    def createNetwork(self, inputShape, n_outputs) -> Network:
         raise NotImplementedError
 
-    def getAction(self, network, state, mask, isTraining: bool) -> Action:
+    def getAction(self, network, state, mask, isTraining: bool, hiddenState=None) -> Tuple[Action, Any]:
         raise NotImplementedError
 
     def learn(self, network: Network, memory):
         raise NotImplementedError
 
 
-class Memory:
-    def __init__(self, iter: List[any]):
+T = TypeVar('T')
+S = TypeVar('S')
+
+
+class Memory(Generic[T]):
+    def __init__(self, iter: List[T]) -> None:
         self.memory = np.array(iter)
 
-    def select(self, property: Callable[[any], any]):
+    def select(self, property: Callable[[T], S]) -> Memory[S]:
         return Memory([property(x) for x in self.memory])
 
-    def toArray(self):
+    def toArray(self) -> np.array:
         return self.memory
 
-    def toTensor(self, dtype, device):
+    def toTensor(self, dtype: torch.dtype, device: torch.device) -> torch.tensor:
         return torch.tensor(self.memory, dtype=dtype, device=device).detach()
 
-    def get(self, fromPos: int, num: int):
+    def get(self, fromPos: int, num: int) -> Memory[T]:
         return Memory(self.memory[fromPos:fromPos+num])
 
-    def mean(self):
+    def mean(self) -> float:
         return self.memory.mean()
 
-    def std(self):
+    def std(self) -> float:
         return self.memory.std()
 
-    def size(self):
+    def size(self) -> int:
         return len(self.memory)
 
     def __sub__(self, other):
+        if isinstance(other, Memory):
+            other = other.memory
         return Memory(self.memory - other)
 
     def __truediv__(self, other):
         return Memory(self.memory / other)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.memory)
 
-    def __getitem__(self, i: int):
+    def __getitem__(self, i: int) -> T:
         return self.memory[i]
 
-    def __iter__(self):
+    def __iter__(self) -> MemoryIterator:
         return MemoryIterator(self)
-
 
 class MemoryIterator:
     def __init__(self, memory):
@@ -465,20 +481,23 @@ class MemoryIterator:
         raise StopIteration
 
 
-class PPOAlgo(Algo):
+class PPOAlgo(Algo[PPOConfig]):
     def __init__(self, config=PPOConfig()):
         super().__init__("PPO", config)
 
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs)
 
-    def getAction(self, network, state, mask, isTraining: bool, hiddenState = None) -> Action:
+    def getAction(self, network, state, mask, isTraining: bool, hiddenState=None) -> Tuple[Action, Any]:
         network.eval()
         try:
             with torch.no_grad():
-                stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
-                maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
-                prediction, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0), maskTensor)
+                stateTensor = torch.tensor(
+                    [state], dtype=torch.float, device=self.device)
+                maskTensor = torch.tensor(
+                    [mask], dtype=torch.bool, device=self.device)
+                prediction, nextHiddenState = network.getPolicy(
+                    stateTensor, hiddenState.unsqueeze(0), maskTensor)
                 dist = torch.distributions.Categorical(probs=prediction)
                 index = dist.sample() if isTraining else dist.probs.argmax(dim=-1, keepdim=True)
                 return Action(
@@ -496,24 +515,22 @@ class PPOAlgo(Algo):
             lastValue = 0
             lastMemory = memory[-1]
             if not lastMemory.done:
-                lastState = torch.tensor([lastMemory.nextState], dtype=torch.float, device=self.device)
-                hiddenState = torch.tensor([lastMemory.nextHiddenState], dtype=torch.float, device=self.device)
+                lastState = torch.tensor(
+                    [lastMemory.nextState], dtype=torch.float, device=self.device)
+                hiddenState = torch.tensor(
+                    [lastMemory.nextHiddenState], dtype=torch.float, device=self.device)
                 lastValue, _ = network.getValue(lastState, hiddenState)
                 lastValue = lastValue.item()
 
             states = np.array([x.state for x in memory])
-            states = torch.tensor(states, dtype=torch.float, device=self.device)
+            states = torch.tensor(
+                states, dtype=torch.float, device=self.device)
 
             hiddenState = np.array([x.hiddenState for x in memory])
-            hiddenState = torch.tensor(hiddenState, dtype=torch.float, device=self.device).detach()
+            hiddenState = torch.tensor(
+                hiddenState, dtype=torch.float, device=self.device).detach()
             values, _ = network.getValue(states, hiddenState)
             values = values.squeeze(-1).cpu().detach().numpy()
-
-            # normalize rewards
-            # rewards = np.array([x.reward for x in memory])
-            # rewards = Function.normalize(rewards)
-            # for transition, reward in zip(memory, rewards):
-            #     transition.reward = reward
 
             # GAE (General Advantage Estimation)
             # Paper: https://arxiv.org/abs/1506.02438
@@ -521,8 +538,10 @@ class PPOAlgo(Algo):
             gae = 0
             for i in reversed(range(len(memory))):
                 transition = memory[i]
-                detlas = transition.reward + self.config.gamma * lastValue * (1 - transition.done) - values[i]
-                gae = detlas + self.config.gamma * self.config.gaeCoeff * gae * (1 - transition.done)
+                detlas = transition.reward + self.config.gamma * \
+                    lastValue * (1 - transition.done) - values[i]
+                gae = detlas + self.config.gamma * \
+                    self.config.gaeCoeff * gae * (1 - transition.done)
                 # from baseline
                 # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
                 transition.advantage = gae
@@ -530,49 +549,41 @@ class PPOAlgo(Algo):
                 transition.value = values[i]
                 lastValue = values[i]
 
-            
-            # Normalize advantages
-            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
-            # advantages = np.array([x.advantage for x in memory])
-            # advantages = Function.normalize(advantages)
-            # for transition, advantage in zip(memory, advantages):
-            #     transition.advantage = advantage
-
-    def getGAE(self, rewards, dones, values, lastValue=0):
-        advantages = np.zeros_like(rewards).astype(float)
-        gae = 0
-        for i in reversed(range(len(rewards))):
-            detlas = rewards[i] + self.config.gamma * \
-                lastValue * (1 - dones[i]) - values[i]
-            gae = detlas + self.config.gamma * self.gaeCoeff * gae * (1 - dones[i])
-            advantages[i] = gae
-            lastValue = values[i]
-        return advantages
-
-    def learn(self, network: Network, memory: Memory):
+    def learn(self, network: Network, memory: Memory[Transition]):
         network.train()
+        network.optimizer.zero_grad()
+
         batchSize = min(memory.size(), self.config.batchSize)
         n_miniBatch = memory.size() // batchSize
         totalLoss = 0
 
-        # normalize rewards
-        rewards = memory.select(lambda x: x.reward)
-        rewards = Function.normalize(rewards)
+        # Normalize advantages
+        # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
+        # advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.value)
+        advantages = memory.select(lambda x: x.advantage)
+        advantages = Function.normalize(advantages)
 
-        network.optimizer.zero_grad()
         for i in range(n_miniBatch):
             startIndex = i * batchSize
             minibatch = memory.get(startIndex, batchSize)
-            
+
             # Get Tensors
-            states = minibatch.select(lambda x: x.state).toTensor(torch.float, self.device)
-            actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
-            masks = minibatch.select(lambda x: x.action.mask).toTensor(torch.bool, self.device)
-            old_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
-            returns = rewards.get(startIndex, batchSize).toTensor(torch.float, self.device)
-            old_values = minibatch.select(lambda x: x.value).toTensor(torch.float, self.device)
-            hiddenStates = minibatch.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
-            advantages = returns - old_values
+            states = minibatch.select(lambda x: x.state).toTensor(
+                torch.float, self.device)
+            actions = minibatch.select(lambda x: x.action.index).toTensor(
+                torch.long, self.device)
+            masks = minibatch.select(lambda x: x.action.mask).toTensor(
+                torch.bool, self.device)
+            old_log_probs = minibatch.select(
+                lambda x: x.action.log).toTensor(torch.float, self.device)
+            returns = minibatch.select(lambda x: x.reward).toTensor(
+                torch.float, self.device)
+            old_values = minibatch.select(
+                lambda x: x.value).toTensor(torch.float, self.device)
+            hiddenStates = minibatch.select(
+                lambda x: x.hiddenState).toTensor(torch.float, self.device)
+            batch_advantages = advantages.get(
+                startIndex, batchSize).toTensor(torch.float, self.device)
 
             probs, values, _ = network(states, hiddenStates, masks)
             values = values.squeeze(-1)
@@ -581,47 +592,51 @@ class PPOAlgo(Algo):
             # porb1 / porb2 = exp(log(prob1) - log(prob2))
             dist = torch.distributions.Categorical(probs=probs)
             ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-            policy_losses1 = ratios * advantages
-            policy_losses2 = ratios.clamp(1 - self.config.epsClip, 1 + self.config.epsClip) * advantages
+            policy_losses1 = ratios * batch_advantages
+            policy_losses2 = ratios.clamp(
+                1 - self.config.epsClip, 1 + self.config.epsClip) * batch_advantages
 
             # Maximize Policy Loss (Rewards)
             policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
 
             # Maximize Entropy Loss
             entropy_loss = -dist.entropy().mean()
-            
+
             # Minimize Value Loss  (MSE)
 
             # Clip the value to reduce variability during Critic training
             # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
             # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/algo/ppo.py#L69-L75
-            # value_loss1 = (returns - values).pow(2)
-            # valuesClipped = old_values + torch.clamp(values - old_values, -self.config.epsClip, self.config.epsClip)
-            # value_loss2 = (returns - valuesClipped).pow(2)
-            # value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
+            value_loss1 = (returns - values).pow(2)
+            valuesClipped = old_values + \
+                torch.clamp(values - old_values, -
+                            self.config.epsClip, self.config.epsClip)
+            value_loss2 = (returns - valuesClipped).pow(2)
+            value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
 
             # MSE Loss
-            # value_loss = advantages.pow(2).mean()
-            value_loss = (returns - values).pow(2).mean()
+            # value_loss = (returns - values).pow(2).mean()
 
             # Calculating Total loss
             # the weight of this minibatch
             weight = len(minibatch) / len(memory)
-            loss = (policy_loss + 0.01 * entropy_loss + 0.5 * value_loss) * weight
+            loss = (policy_loss + 0.01 * entropy_loss +
+                    0.5 * value_loss) * weight
             # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
 
             # Accumulating the loss to the graph
             loss.backward()
             totalLoss += loss.item()
 
-            # Chip grad with norm
-            # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
-            nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
+        # Chip grad with norm
+        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
+        nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
 
         network.optimizer.step()
         network.version += 1
 
         return totalLoss
+
 
 class Base:
     def __init__(self, algo, gameFactory, sync):
@@ -647,36 +662,41 @@ class Base:
             # print("Saved Weights.")
         except Exception as e:
             print("Failed to save.", e)
-        
+
     def load(self) -> None:
         try:
             path = self.getSavePath()
             print("Loading from path: ", path)
             data = torch.load(path, map_location='cpu')
             # data = torch.load(path, map_location=self.device)
-            self.sync.totalSteps.value = int(data["totalSteps"]) if "totalSteps" in data else 0
-            self.sync.totalEpisodes.value = int(data["totalEpisodes"]) if "totalEpisodes" in data else 0
+            self.sync.totalSteps.value = int(
+                data["totalSteps"]) if "totalSteps" in data else 0
+            self.sync.totalEpisodes.value = int(
+                data["totalEpisodes"]) if "totalEpisodes" in data else 0
             for network in self.networks:
                 print(f"{network.name} weights loaded.")
                 network.load_state_dict(data[network.name])
-            print(f"Trained: {Function.humanize(self.sync.totalEpisodes.value)} episodes, {Function.humanize(self.sync.totalSteps.value)} steps")
+            print(
+                f"Trained: {Function.humanize(self.sync.totalEpisodes.value)} episodes, {Function.humanize(self.sync.totalSteps.value)} steps")
         except Exception as e:
             print("Failed to load.", e)
-    
+
     def getSavePath(self, makeDir: bool = False) -> str:
-        path = os.path.join(self.weightPath, self.algo.name.lower(), self.gameFactory.name + ".h5")
+        path = os.path.join(
+            self.weightPath, self.algo.name.lower(), self.gameFactory.name + ".h5")
         if makeDir:
             Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
         return path
 
+
 class Trainer(Base):
     def __init__(self, algo: Algo, gameFactory: GameFactory, sync):
         super().__init__(algo, gameFactory, sync)
-        self.evaluators = []
+        self.evaluators: List[EvaluatorService] = []
         self.network = None
 
     def learn(self, memory):
-        memory = Memory(memory)
+        memory = Memory[Transition](memory)
         steps = len(memory)
         for _ in range(4):
             loss = self.algo.learn(self.network, memory)
@@ -692,9 +712,10 @@ class Trainer(Base):
             self.sync.latestVersion.value = networkInfo.version
 
     async def start(self, episodes=1000, load=False):
-        
+
         env = self.gameFactory.get()
-        self.network = self.algo.createNetwork(env.observationShape, env.actionSpace)
+        self.network = self.algo.createNetwork(
+            env.observationShape, env.actionSpace)
         self.networks.append(self.network)
         if load:
             self.load()
@@ -702,12 +723,14 @@ class Trainer(Base):
         evaluators = []
         n_workers = max(torch.cuda.device_count(), 1)
         for i in range(n_workers):
-            evaluator = EvaluatorService(self.algo, self.gameFactory, self.sync).start()
+            evaluator = EvaluatorService(
+                self.algo, self.gameFactory, self.sync).start()
             evaluators.append(evaluator)
 
         self.evaluators = np.array(evaluators)
 
-        self.network = self.network.buildOptimizer(self.algo.config.learningRate).to(self.algo.device)
+        self.network = self.network.buildOptimizer(
+            self.algo.config.learningRate).to(self.algo.device)
         n_samples = self.algo.config.sampleSize * n_workers
         evaulator_samples = self.algo.config.sampleSize
 
@@ -718,7 +741,8 @@ class Trainer(Base):
             self.pushNewNetwork()
             # collect samples
             memory = collections.deque(maxlen=n_samples)
-            promises = np.array([x.call("roll", (evaulator_samples,)) for x in self.evaluators])
+            promises = np.array([x.call("roll", (evaulator_samples,))
+                                 for x in self.evaluators])
             # https://docs.python.org/3/library/asyncio-task.html#asyncio.as_completed
             for promise in asyncio.as_completed(promises):
                 response = await promise  # earliest result
@@ -727,9 +751,10 @@ class Trainer(Base):
             # print("learn")
             # learn
             self.learn(memory)
-                    
+
             if time.perf_counter() - self.lastSave > 60:
                 self.save()
+
 
 class Evaluator(Base):
     def __init__(self, algo: Algo, gameFactory, sync):
@@ -737,22 +762,25 @@ class Evaluator(Base):
         self.env = gameFactory.get()
         # self.algo.device = torch.device("cpu")
         # self.algo.device = sync.getDevice()
-        self.network = self.algo.createNetwork(self.env.observationShape, self.env.actionSpace).to(self.algo.device)
+        self.network = self.algo.createNetwork(
+            self.env.observationShape, self.env.actionSpace).to(self.algo.device)
         self.network.version = -1
         self.networks.append(self.network)
 
         self.playerCount = self.env.getPlayerCount()
-        self.agents = np.array([Agent(i + 1, self.env, self.network, algo) for i in range(self.playerCount)])
+        self.agents = np.array(
+            [Agent(i + 1, self.env, self.network, algo) for i in range(self.playerCount)])
         self.started = False
 
-        self.reports = []
+        self.reports: List[EnvReport] = []
 
     def updateNetwork(self):
         if self.network.version < self.sync.latestVersion.value:
-            networkInfo = NetworkInfo(self.sync.latestStateDict, self.sync.latestVersion.value)
+            networkInfo = NetworkInfo(
+                self.sync.latestStateDict, self.sync.latestVersion.value)
             self.network.loadInfo(networkInfo)
 
-    def loop(self, num = 0):
+    def loop(self, num=0):
         # auto reset
         if not self.started:
             self.env.reset()
@@ -762,7 +790,7 @@ class Evaluator(Base):
             for agent in self.agents:
                 self.reports.append(agent.done())
             self.env.reset()
-        
+
         # memoryCount = min([len(x.memory) for x in self.agents])
         if num > 0:
             memoryCount = sum([len(x.memory) for x in self.agents])
@@ -802,7 +830,8 @@ class Evaluator(Base):
                     if not self.env.isDone() and player.canStep():
                         while True:
                             try:
-                                row, col = map(int, input("Your action: ").split())
+                                row, col = map(int, input(
+                                    "Your action: ").split())
                                 pos = row * self.env.size + col
                                 player.step(pos)
                                 break
@@ -820,6 +849,7 @@ class Evaluator(Base):
                 await asyncio.sleep(3)
             self.flushReports()
 
+
 class Agent:
     def __init__(self, id, env, network, algo):
         self.id = id
@@ -836,19 +866,20 @@ class Agent:
             state = self.player.getState()
             mask = self.player.getMask(state)
             hiddenState = self.hiddenState
-            
-            action, nextHiddenState = self.algo.getAction(self.network, state, mask, isTraining, hiddenState)
+
+            action, nextHiddenState = self.algo.getAction(
+                self.network, state, mask, isTraining, hiddenState)
             # if (hiddenState == 0).all():
             #     print("Step:", hiddenState, nextHiddenState)
             # print("Action:", action.index, action.prediction[action.index])
             nextState, reward, done = self.player.step(action.index)
             if self.memory is not None:
                 transition = Transition(
-                    state=state, 
-                    hiddenState=hiddenState.cpu().detach().numpy(), 
-                    action=action, 
-                    reward=reward, 
-                    nextState=nextState, 
+                    state=state,
+                    hiddenState=hiddenState.cpu().detach().numpy(),
+                    action=action,
+                    reward=reward,
+                    nextState=nextState,
                     nextHiddenState=nextHiddenState.cpu().detach().numpy(),
                     done=done)
                 self.memory.append(transition)
@@ -868,7 +899,7 @@ class Agent:
             lastMemory.done = True
             lastMemory.reward += doneReward
         report.rewards += doneReward
-        
+
         # reset env variables
         self.hiddenState = self.network.getInitHiddenState(self.algo.device)
         self.report = EnvReport()
@@ -884,8 +915,7 @@ class RL:
         self.algo = algo
         self.gameFactory = gameFactory
 
-        self.lastPrint = 0
-        self.networks = []
+        self.lastPrint: float = 0
 
         mp.set_start_method("spawn")
         self.sync = SyncContext()
@@ -907,9 +937,10 @@ class RL:
         self.workingPath = os.path.dirname(__main__.__file__)
         # multiprocessing.connection.BUFSIZE = 2 ** 24
 
-        print(f"Train: {self.isTraining}"),
+        print(f"Train: {self.isTraining}")
         if self.isTraining:
-            trainer = TrainerProcess(self.algo, self.gameFactory, self.sync, episodes, load).start()
+            trainer = TrainerProcess(
+                self.algo, self.gameFactory, self.sync, episodes, load).start()
         else:
             await Evaluator(self.algo, self.gameFactory, self.sync).eval()
 
@@ -927,15 +958,14 @@ class RL:
         epoch = self.sync.epochManager.epoch
         if epoch is not None:
             print(f"#{self.sync.epochManager.num} {Function.humanize(epoch.episodes):>6} {epoch.hitRate:>7.2%} | " +
-                f'Loss: {Function.humanize(epoch.loss):>6}/ep | ' +
-                f'Env: {Function.humanize(epoch.envs):>6} | ' +
-                f'Best: {Function.humanize(epoch.bestRewards):>6}, Avg: {Function.humanize(epoch.avgRewards):>6} | ' +
-                f'Steps: {Function.humanize(epoch.steps / epoch.duration):>6}/s | Episodes: {1 / epoch.durationPerEpisode:>6.2f}/s | ' +
-                f' {Function.humanizeTime(epoch.duration):>6} > {Function.humanizeTime(epoch.estimateDuration):}' +
-                '      ',
-                end=end)
+                  f'Loss: {Function.humanize(epoch.loss):>6}/ep | ' +
+                  f'Env: {Function.humanize(epoch.envs):>6} | ' +
+                  f'Best: {Function.humanize(epoch.bestRewards):>6}, Avg: {Function.humanize(epoch.avgRewards):>6} | ' +
+                  f'Steps: {Function.humanize(epoch.steps / epoch.duration):>6}/s | Episodes: {1 / epoch.durationPerEpisode:>6.2f}/s | ' +
+                  f' {Function.humanizeTime(epoch.duration):>6} > {Function.humanizeTime(epoch.estimateDuration):}' +
+                  '      ',
+                  end=end)
             self.lastPrint = time.perf_counter()
-
 
 
 class MethodCallRequest(Message):
@@ -948,9 +978,11 @@ class MethodCallResult(Message):
     def __init__(self, result):
         self.result = result
 
+
 class Promise:
     def __init__(self):
         self.result = None
+
 
 class Service(PipedProcess):
     def __init__(self, factory):
@@ -968,7 +1000,8 @@ class Service(PipedProcess):
                 message = self.callPipes[1].recv()
                 if isinstance(message, MethodCallRequest):
                     # print("MMethodCallRequest", message.method)
-                    result = getattr(self.object, message.method)(*message.args)
+                    result = getattr(self.object, message.method)(
+                        *message.args)
                     if inspect.isawaitable(result):
                         result = await result
                     self.callPipes[1].send(MethodCallResult(result))
@@ -988,6 +1021,7 @@ class Service(PipedProcess):
         loop.create_task(self._waitResponse(future))
         return future
 
+
 class EvaluatorService(Service):
     def __init__(self, algo, gameFactory, sync):
         self.algo = algo
@@ -997,6 +1031,7 @@ class EvaluatorService(Service):
 
     def factory(self):
         return Evaluator(self.algo, self.gameFactory, self.sync)
+
 
 class TrainerProcess(Process):
     def __init__(self, algo, gameFactory, sync, episodes, load):
@@ -1011,9 +1046,10 @@ class TrainerProcess(Process):
         # print("Trainer", os.getpid())
         await Trainer(self.algo, self.gameFactory, self.sync).start(self.episodes, self.load)
 
+
 class EpochManagerProxy(NamespaceProxy):
     _exposed_ = tuple(dir(EpochManager))
-    
+
     def __getattr__(self, key):
         if key[0] == '_':
             return object.__getattribute__(self, key)
@@ -1026,6 +1062,8 @@ class EpochManagerProxy(NamespaceProxy):
         return result
 
 # thread safe
+
+
 class SyncContext:
     # EpochProxy = Proxy(Epoch)
     # EpochManagerProxy = Proxy(EpochManager)
@@ -1036,7 +1074,7 @@ class SyncContext:
         SyncManager.register('EpochManager', EpochManager, EpochManagerProxy)
         manager = SyncManager()
         manager.start()
-        
+
         self.latestStateDict = manager.dict()
         self.latestVersion = manager.Value('i', -1)
         self.deviceIndex = manager.Value('i', 0)
@@ -1045,11 +1083,10 @@ class SyncContext:
         self.epochManager = manager.EpochManager()
         # self.epoch = manager.Epoch()
 
-    def getDevice(self):
+    def getDevice(self) -> torch.device:
         deviceName = "cpu"
         if torch.cuda.is_available():
             cudaId = self.deviceIndex.value % torch.cuda.device_count()
             deviceName = "cuda:" + str(cudaId)
             self.deviceIndex.value = self.deviceIndex.value + 1
         return torch.device(deviceName)
-

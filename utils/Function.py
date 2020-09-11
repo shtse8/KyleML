@@ -17,7 +17,7 @@ def humanize(value):
     sci = ["K", "M", "B", "T"]
     for i in reversed(range(len(sci))):
         base = 1000 ** (i+1)
-        if value > base:
+        if value >= base:
             return f"{value / base:.2f}{sci[i]}"
     return f"{value:.0f}" if isinstance(value, int) else f"{value:.2f}"
 

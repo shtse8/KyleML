@@ -345,6 +345,7 @@ class PPONetwork(Network):
             nn.Linear(hidden_nodes, 1))
 
     def buildOptimizer(self, learningRate):
+        # self.optimizer = optim.SGD(self.parameters(), lr=learningRate, momentum=0.9)
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
         return self
 
@@ -561,8 +562,8 @@ class PPOAlgo(Algo[PPOConfig]):
         # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
         # advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.value)
         # We need to normalize the reward to prevent the GRU becomes all 1 and -1.
-        returns = memory.select(lambda x: x.reward)
-        returns = Function.normalize(returns)
+        advantages = memory.select(lambda x: x.advantage)
+        advantages = Function.normalize(advantages)
 
         for i in range(n_miniBatch):
             startIndex = i * batchSize
@@ -577,18 +578,22 @@ class PPOAlgo(Algo[PPOConfig]):
                 torch.bool, self.device)
             old_log_probs = minibatch.select(
                 lambda x: x.action.log).toTensor(torch.float, self.device)
-            batch_returns = returns.get(
-                startIndex, batchSize).toTensor(
-                torch.float, self.device)
-            batch_values = minibatch.select(
-                lambda x: x.value).toTensor(torch.float, self.device)
+            batch_returns = minibatch.select(
+                lambda x: x.reward).toTensor(torch.float, self.device)
+            batch_returns = (batch_returns + 1e-10).log()
+            # batch_values = minibatch.select(
+            #     lambda x: x.value).toTensor(torch.float, self.device)
             hiddenStates = minibatch.select(
                 lambda x: x.hiddenState).toTensor(torch.float, self.device)
-            batch_advantages = batch_returns - batch_values
-
+            # print("hiddenStates:", hiddenStates[0])
+            batch_advantages = advantages.get(
+                startIndex, batchSize).toTensor(
+                torch.float, self.device)
+            
             probs, values, _ = network(states, hiddenStates, masks)
             values = values.squeeze(-1)
-
+            # print("returns:", batch_returns)
+            # print("values:", values)
             # PPO2 - Confirm the samples aren't too far from pi.
             # porb1 / porb2 = exp(log(prob1) - log(prob2))
             dist = torch.distributions.Categorical(probs=probs)
@@ -608,15 +613,16 @@ class PPOAlgo(Algo[PPOConfig]):
             # Clip the value to reduce variability during Critic training
             # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
             # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/algo/ppo.py#L69-L75
-            value_loss1 = (batch_returns - values).pow(2)
-            valuesClipped = batch_values + \
-                torch.clamp(values - batch_values, -
-                            self.config.epsClip, self.config.epsClip)
-            value_loss2 = (batch_returns - valuesClipped).pow(2)
-            value_loss = 0.5 * torch.max(value_loss1, value_loss2).mean()
-
+            # Remark: as the clip is an absolute value, it's not much useful on different large scale scenario
+            # value_loss1 = (batch_returns - values).pow(2)
+            # valuesClipped = batch_values + \
+            #     torch.clamp(values - batch_values, -
+            #                 self.config.epsClip, self.config.epsClip)
+            # value_loss2 = (batch_returns - valuesClipped).pow(2)
+            # value_loss = torch.max(value_loss1, value_loss2).mean()
+            
             # MSE Loss
-            # value_loss = (returns - values).pow(2).mean()
+            value_loss = (batch_returns - values).pow(2).mean()
 
             # Calculating Total loss
             # the weight of this minibatch
@@ -699,7 +705,7 @@ class Trainer(Base):
     def learn(self, memory):
         memory = Memory[Transition](memory)
         steps = len(memory)
-        for _ in range(4):
+        for _ in range(5):
             loss = self.algo.learn(self.network, memory)
             # learn report handling
             self.sync.epochManager.trained(loss, steps)

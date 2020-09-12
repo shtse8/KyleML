@@ -35,13 +35,19 @@ np.set_printoptions(suppress=True)
 # torch.set_printoptions(edgeitems=10)
 torch.set_printoptions(edgeitems=sys.maxsize)
 
-
-# def init_layer(m):
-#     weight = m.weight.data
-#     weight.normal_(0, 1)
-#     weight *= 1.0 / torch.sqrt(weight.pow(2).sum(1, keepdim=True))
-#     nn.init.constant_(m.bias.data, 0)
-#     return m
+def init_weights(m):
+    if type(m) == nn.GRU:
+        for weights in m._all_weights:
+            for key in weights:
+                if 'weight' in key:
+                    # print("initializing:", type(m).__name__, key)
+                    nn.init.orthogonal_(m.__getattr__(key))
+                elif 'bias' in key:
+                    nn.init.constant_(m.__getattr__(key), 0)
+    elif type(m) in [nn.Linear, nn.Conv2d]:
+        # print("initializing:", type(m).__name__)
+        nn.init.orthogonal_(m.weight)
+        nn.init.constant_(m.bias, 0)
 
 
 class Message:
@@ -218,9 +224,8 @@ class ConvLayers(nn.Module):
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
                 # nn.BatchNorm2d(32),
-                nn.Flatten(),
-                nn.Linear(32 * inputShape[1] * inputShape[2], n_outputs),
-                nn.ReLU())
+                nn.Flatten())
+            self.num_output = 32 * inputShape[1] * inputShape[2]
             # nn.BatchNorm1d(n_outputs))
         else:
             self.layers = nn.Sequential(
@@ -232,9 +237,8 @@ class ConvLayers(nn.Module):
                 nn.Conv2d(64, 64, kernel_size=3, stride=1),
                 nn.ReLU(),
                 # [64, H, W] -> [64 * H * W]
-                nn.Flatten(),
-                nn.Linear(64 * inputShape[1] * inputShape[2], n_outputs),
-                nn.ReLU())
+                nn.Flatten())
+            self.num_output = 64 * inputShape[1] * inputShape[2]
 
     def forward(self, x):
         # x = x.permute(0, 3, 1, 2)  # [B, H, W, C] => [B, C, H, W]
@@ -250,6 +254,7 @@ class FCLayers(nn.Module):
             out_nodes = n_outputs if i == num_layers - 1 else hidden_nodes
             self.layers.append(nn.Linear(in_nodes, out_nodes))
             self.layers.append(activator())
+            self.num_output = out_nodes
 
     def forward(self, x):
         for m in self.layers:
@@ -267,6 +272,10 @@ class BodyLayers(nn.Module):
                 inputShape = inputShape[0]
             self.layers = FCLayers(inputShape, n_outputs,
                                    hidden_nodes=hidden_nodes, num_layers=3)
+
+    @property
+    def num_output(self):
+        return self.layers.num_output
 
     def forward(self, x):
         return self.layers(x)
@@ -307,19 +316,25 @@ class Network(nn.Module):
 
 
 class GRULayers(nn.Module):
-    def __init__(self, n_inputs, n_outputs, num_layers=1):
+    def __init__(self, input_size, hidden_size, num_layers=1, bidirectional=False):
         super().__init__()
-        self.n_outputs = n_outputs
-        self.num_layers = num_layers
-        self.gru = nn.GRU(n_inputs, n_outputs, num_layers=num_layers)
+        self.gru = nn.GRU(input_size, hidden_size, num_layers=num_layers, bidirectional=bidirectional)
+
+    @property
+    def num_directions(self):
+        return 2 if self.gru.bidirectional else 1
+
+    @property
+    def num_output(self):
+        return self.gru.hidden_size * self.num_directions
 
     def getInitHiddenState(self, device):
-        return torch.zeros((self.num_layers, self.n_outputs), device=device)
+        return torch.zeros((self.gru.num_layers * self.num_directions, self.gru.hidden_size), device=device)
 
     def forward(self, x, h):
         # x: (B, N) -> (1, B, N)
         # h: (B, L, H) -> (L, B, H)
-        x, h = self.gru(x.unsqueeze(0), h.transpose(0, 1))
+        x, h = self.gru(x.unsqueeze(0), h.transpose(0, 1).contiguous())
         # x: (1, B, N) -> (B, N)
         # h: (L, B, H) -> (B, L, H)
         return x.squeeze(0), h.transpose(0, 1)
@@ -334,15 +349,15 @@ class PPONetwork(Network):
         # semi_hidden_nodes = hidden_nodes // 2
         self.body = BodyLayers(inputShape, hidden_nodes)
 
-        self.gru = GRULayers(hidden_nodes, hidden_nodes, num_layers=1)
+        self.gru = GRULayers(hidden_nodes, hidden_nodes, num_layers=2, bidirectional=True)
 
         # Define policy head
-        self.policy = nn.Sequential(
-            nn.Linear(hidden_nodes, n_outputs))
+        self.policy = nn.Linear(self.gru.num_output, n_outputs)
 
         # Define value head
-        self.value = nn.Sequential(
-            nn.Linear(hidden_nodes, 1))
+        self.value = nn.Linear(self.gru.num_output, 1)
+
+        self.apply(init_weights)
 
     def buildOptimizer(self, learningRate):
         # self.optimizer = optim.SGD(self.parameters(), lr=learningRate, momentum=0.9)
@@ -580,7 +595,7 @@ class PPOAlgo(Algo[PPOConfig]):
                 lambda x: x.action.log).toTensor(torch.float, self.device)
             batch_returns = minibatch.select(
                 lambda x: x.reward).toTensor(torch.float, self.device)
-            batch_returns = (batch_returns + 1e-10).log()
+            # batch_returns = (batch_returns + 1).log()
             # batch_values = minibatch.select(
             #     lambda x: x.value).toTensor(torch.float, self.device)
             hiddenStates = minibatch.select(

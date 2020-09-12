@@ -349,7 +349,7 @@ class PPONetwork(Network):
         # semi_hidden_nodes = hidden_nodes // 2
         self.body = BodyLayers(inputShape, hidden_nodes)
 
-        self.gru = GRULayers(hidden_nodes, hidden_nodes, num_layers=2, bidirectional=True)
+        self.gru = GRULayers(self.body.num_output, hidden_nodes, num_layers=2, bidirectional=True)
 
         # Define policy head
         self.policy = nn.Linear(self.gru.num_output, n_outputs)

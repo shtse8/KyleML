@@ -212,7 +212,7 @@ class Epoch:
 
 
 class ConvLayers(nn.Module):
-    def __init__(self, inputShape, n_outputs):
+    def __init__(self, inputShape, hidden_size):
         super().__init__()
         if min(inputShape[1], inputShape[2]) < 20:
             # small CNN
@@ -220,13 +220,14 @@ class ConvLayers(nn.Module):
                 nn.Conv2d(inputShape[0], 16, kernel_size=3,
                           stride=1, padding=1),
                 nn.ReLU(),
-                # nn.BatchNorm2d(16),
+                nn.BatchNorm2d(16),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
-                # nn.BatchNorm2d(32),
-                nn.Flatten())
-            self.num_output = 32 * inputShape[1] * inputShape[2]
-            # nn.BatchNorm1d(n_outputs))
+                nn.BatchNorm2d(32),
+                nn.Flatten(),
+                nn.Linear(32 * inputShape[1] * inputShape[2], hidden_size),
+                nn.ReLU(),
+                nn.BatchNorm1d(hidden_size))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
@@ -237,8 +238,10 @@ class ConvLayers(nn.Module):
                 nn.Conv2d(64, 64, kernel_size=3, stride=1),
                 nn.ReLU(),
                 # [64, H, W] -> [64 * H * W]
-                nn.Flatten())
-            self.num_output = 64 * inputShape[1] * inputShape[2]
+                nn.Flatten(),
+                nn.Linear(64 * inputShape[1] * inputShape[2], hidden_size),
+                nn.ReLU())
+        self.num_output = hidden_size
 
     def forward(self, x):
         # x = x.permute(0, 3, 1, 2)  # [B, H, W, C] => [B, C, H, W]
@@ -246,15 +249,14 @@ class ConvLayers(nn.Module):
 
 
 class FCLayers(nn.Module):
-    def __init__(self, n_inputs, n_outputs, num_layers=1, hidden_nodes=128, activator=nn.Tanh):
+    def __init__(self, n_inputs, hidden_size, num_layers=1, activator=nn.Tanh):
         super().__init__()
         self.layers = nn.ModuleList()
         for i in range(num_layers):
-            in_nodes = n_inputs if i == 0 else hidden_nodes
-            out_nodes = n_outputs if i == num_layers - 1 else hidden_nodes
-            self.layers.append(nn.Linear(in_nodes, out_nodes))
+            in_nodes = n_inputs if i == 0 else hidden_size
+            self.layers.append(nn.Linear(in_nodes, hidden_size))
             self.layers.append(activator())
-            self.num_output = out_nodes
+        self.num_output = hidden_size
 
     def forward(self, x):
         for m in self.layers:
@@ -263,20 +265,16 @@ class FCLayers(nn.Module):
 
 
 class BodyLayers(nn.Module):
-    def __init__(self, inputShape, n_outputs, hidden_nodes=128):
+    def __init__(self, inputShape, hidden_nodes):
         super().__init__()
         if type(inputShape) is tuple and len(inputShape) == 3:
-            self.layers = ConvLayers(inputShape, n_outputs)
+            self.layers = ConvLayers(inputShape, hidden_nodes)
         else:
             if type(inputShape) is tuple and len(inputShape) == 1:
                 inputShape = inputShape[0]
-            self.layers = FCLayers(inputShape, n_outputs,
-                                   hidden_nodes=hidden_nodes, num_layers=3)
-
-    @property
-    def num_output(self):
-        return self.layers.num_output
-
+            self.layers = FCLayers(inputShape, hidden_nodes, num_layers=3)
+        self.num_output = hidden_nodes
+            
     def forward(self, x):
         return self.layers(x)
 
@@ -316,9 +314,9 @@ class Network(nn.Module):
 
 
 class GRULayers(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers=1, bidirectional=False):
+    def __init__(self, input_size, hidden_size, num_layers=1, bidirectional=False, dropout=0):
         super().__init__()
-        self.gru = nn.GRU(input_size, hidden_size, num_layers=num_layers, bidirectional=bidirectional)
+        self.gru = nn.GRU(input_size, hidden_size, num_layers=num_layers, bidirectional=bidirectional, dropout=dropout)
 
     @property
     def num_directions(self):
@@ -349,7 +347,8 @@ class PPONetwork(Network):
         # semi_hidden_nodes = hidden_nodes // 2
         self.body = BodyLayers(inputShape, hidden_nodes)
 
-        self.gru = GRULayers(self.body.num_output, hidden_nodes, num_layers=2, bidirectional=True)
+        self.gru = GRULayers(self.body.num_output, hidden_nodes, 
+            num_layers=2, bidirectional=True, dropout=0.2)
 
         # Define policy head
         self.policy = nn.Linear(self.gru.num_output, n_outputs)
@@ -360,7 +359,7 @@ class PPONetwork(Network):
         self.apply(init_weights)
 
     def buildOptimizer(self, learningRate):
-        # self.optimizer = optim.SGD(self.parameters(), lr=learningRate, momentum=0.9)
+        # self.optimizer = optim.SGD(self.parameters(), lr=learningRate * 100, momentum=0.9)
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
         return self
 
@@ -377,16 +376,6 @@ class PPONetwork(Network):
         if m is not None:
             x = x.masked_fill(~m, -math.inf)
         x = F.softmax(x, dim=1)
-
-        # x2 = F.softmax(x, dim=1)
-        # if m is not None:
-        #     x2 = x2.masked_fill(~m, 0)
-        #     x2 = x2 / x2.sum(dim=-1, keepdim=True)
-        # if not (x1 == x2).all():
-        #     print(x1, x2, (x1 == x2), m)
-        # if m is not None:
-        #     x = x.masked_fill(~m, 0)
-        #     x = x / x.sum(dim=-1, keepdim=True)
         return x
 
     def forward(self, x, h, m=None):
@@ -577,8 +566,10 @@ class PPOAlgo(Algo[PPOConfig]):
         # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
         # advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.value)
         # We need to normalize the reward to prevent the GRU becomes all 1 and -1.
-        advantages = memory.select(lambda x: x.advantage)
-        advantages = Function.normalize(advantages)
+        returns = memory.select(lambda x: x.reward)
+        returns = Function.normalize(returns)
+        # advantages = memory.select(lambda x: x.advantage)
+        # advantages = Function.normalize(advantages)
 
         for i in range(n_miniBatch):
             startIndex = i * batchSize
@@ -593,17 +584,16 @@ class PPOAlgo(Algo[PPOConfig]):
                 torch.bool, self.device)
             old_log_probs = minibatch.select(
                 lambda x: x.action.log).toTensor(torch.float, self.device)
-            batch_returns = minibatch.select(
-                lambda x: x.reward).toTensor(torch.float, self.device)
+            batch_returns = returns.get(
+                startIndex, batchSize).toTensor(
+                torch.float, self.device)
             # batch_returns = (batch_returns + 1).log()
-            # batch_values = minibatch.select(
-            #     lambda x: x.value).toTensor(torch.float, self.device)
+            batch_values = minibatch.select(
+                lambda x: x.value).toTensor(torch.float, self.device)
             hiddenStates = minibatch.select(
                 lambda x: x.hiddenState).toTensor(torch.float, self.device)
             # print("hiddenStates:", hiddenStates[0])
-            batch_advantages = advantages.get(
-                startIndex, batchSize).toTensor(
-                torch.float, self.device)
+            batch_advantages = batch_returns - batch_values
             
             probs, values, _ = network(states, hiddenStates, masks)
             values = values.squeeze(-1)

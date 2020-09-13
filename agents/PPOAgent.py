@@ -219,28 +219,28 @@ class ConvLayers(nn.Module):
             self.layers = nn.Sequential(
                 nn.Conv2d(inputShape[0], 16, kernel_size=3,
                           stride=1, padding=1),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 # nn.BatchNorm2d(16),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 # nn.BatchNorm2d(32),
                 nn.Flatten(),
                 nn.Linear(32 * inputShape[1] * inputShape[2], hidden_size),
-                nn.ReLU())
+                nn.LeakyReLU())
                 # nn.BatchNorm1d(hidden_size))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
                 nn.Conv2d(inputShape[0], 32, kernel_size=8, stride=4),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Conv2d(32, 64, kernel_size=4, stride=2),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Conv2d(64, 64, kernel_size=3, stride=1),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 # [64, H, W] -> [64 * H * W]
                 nn.Flatten(),
                 nn.Linear(64 * inputShape[1] * inputShape[2], hidden_size),
-                nn.ReLU())
+                nn.LeakyReLU())
         self.num_output = hidden_size
 
     def forward(self, x):
@@ -320,13 +320,22 @@ class ICMNetwork(Network):
         self.output_size = output_size
         self.resnet_time = 4
 
-        self.feature = BodyLayers(inputShape, hidden_nodes)
-        
+        # self.feature = BodyLayers(inputShape, hidden_nodes)
+        self.feature = nn.Sequential(
+            nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
+            nn.LeakyReLU(),
+            # nn.BatchNorm2d(16),
+            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+            nn.LeakyReLU(),
+            # nn.BatchNorm2d(32),
+            nn.Flatten(),
+            nn.Linear(32 * inputShape[1] * inputShape[2], hidden_nodes))
+
         self.inverse_net = nn.Sequential(
             nn.Linear(hidden_nodes * 2, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, output_size)
         )
         self.residual = nn.ModuleList()
@@ -334,30 +343,30 @@ class ICMNetwork(Network):
         for _ in range(2 * self.resnet_time):
             self.residual.append(nn.Sequential(
                 nn.Linear(output_size + hidden_nodes, hidden_nodes),
-                nn.ReLU(),
+                nn.LeakyReLU(),
                 nn.Linear(hidden_nodes, hidden_nodes),
             ))
         
         self.forward_net_1 = nn.Sequential(
             nn.Linear(output_size + hidden_nodes, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes)
         )
         self.forward_net_2 = nn.Sequential(
             nn.Linear(output_size + hidden_nodes, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes)
         )
 
@@ -506,6 +515,22 @@ class Algo(Generic[C]):
         raise NotImplementedError
 
 
+class Iterator:
+    def __init__(self, iterable):
+        self.iterable = iterable
+        self.current = 0
+
+    def __iter__(self) -> Iterator:
+        return Iterator(self.iterable)
+
+    def __next__(self):
+        if self.current < len(self.iterable):
+            result = self.iterable[self.current]
+            self.current += 1
+            return result
+        self.current = 0
+        raise StopIteration
+
 T = TypeVar('T')
 S = TypeVar('S')
 
@@ -549,24 +574,12 @@ class Memory(Generic[T]):
     def __getitem__(self, i: int) -> T:
         return self.memory[i]
 
-    def __iter__(self) -> MemoryIterator:
-        return MemoryIterator(self)
+    def __iter__(self) -> Iterator:
+        return Iterator(self)
 
     def __str__(self):
         return str(self.memory)
 
-class MemoryIterator:
-    def __init__(self, memory):
-        self.memory = memory
-        self.current = 0
-
-    def __next__(self):
-        if self.current < len(self.memory):
-            result = self.memory[self.current]
-            self.current += 1
-            return result
-        self.current = 0
-        raise StopIteration
 
 
 class PPOAlgo(Algo[PPOConfig]):
@@ -606,21 +619,14 @@ class PPOAlgo(Algo[PPOConfig]):
             lastValue = 0
             lastMemory = memory[-1]
             if not lastMemory.done:
-                lastState = torch.tensor(
-                    [lastMemory.nextState], dtype=torch.float, device=self.device)
-                hiddenState = torch.tensor(
-                    [lastMemory.nextHiddenState], dtype=torch.float, device=self.device)
+                lastState = Memory([lastMemory.nextState]).toTensor(torch.float, self.device)
+                hiddenState = Memory([lastMemory.nextHiddenState]).toTensor(torch.float, self.device)
                 lastValue, _ = network.getValue(lastState, hiddenState)
                 lastValue = lastValue.item()
 
-            states = np.array([x.state for x in memory])
-            states = torch.tensor(
-                states, dtype=torch.float, device=self.device)
-
-            hiddenState = np.array([x.hiddenState for x in memory])
-            hiddenState = torch.tensor(
-                hiddenState, dtype=torch.float, device=self.device).detach()
-            values, _ = network.getValue(states, hiddenState)
+            states = memory.select(lambda x: x.state).toTensor(torch.float, self.device)
+            hiddenStates = memory.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
+            values, _ = network.getValue(states, hiddenStates)
             values = values.squeeze(-1).cpu().detach().numpy()
 
             # GAE (General Advantage Estimation)
@@ -629,10 +635,8 @@ class PPOAlgo(Algo[PPOConfig]):
             gae = 0
             for i in reversed(range(len(memory))):
                 transition = memory[i]
-                detlas = transition.reward + self.config.gamma * \
-                    lastValue * (1 - transition.done) - values[i]
-                gae = detlas + self.config.gamma * \
-                    self.config.gaeCoeff * gae * (1 - transition.done)
+                detlas = transition.reward + self.config.gamma * lastValue * (1 - transition.done) - values[i]
+                gae = detlas + self.config.gamma * self.config.gaeCoeff * gae * (1 - transition.done)
                 # from baseline
                 # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
                 transition.advantage = gae
@@ -664,24 +668,14 @@ class PPOAlgo(Algo[PPOConfig]):
             minibatch = memory.get(startIndex, batchSize)
 
             # Get Tensors
-            states = minibatch.select(lambda x: x.state).toTensor(
-                torch.float, self.device)
-            nextStates = minibatch.select(lambda x: x.nextState).toTensor(
-                torch.float, self.device)
-            actions = minibatch.select(lambda x: x.action.index).toTensor(
-                torch.long, self.device)
-            masks = minibatch.select(lambda x: x.action.mask).toTensor(
-                torch.bool, self.device)
-            old_log_probs = minibatch.select(
-                lambda x: x.action.log).toTensor(torch.float, self.device)
-            batch_returns = returns.get(
-                startIndex, batchSize).toTensor(
-                torch.float, self.device)
-            # batch_returns = (batch_returns + 1).log()
-            batch_values = minibatch.select(
-                lambda x: x.value).toTensor(torch.float, self.device)
-            hiddenStates = minibatch.select(
-                lambda x: x.hiddenState).toTensor(torch.float, self.device)
+            states = minibatch.select(lambda x: x.state).toTensor(torch.float, self.device)
+            nextStates = minibatch.select(lambda x: x.nextState).toTensor(torch.float, self.device)
+            actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
+            masks = minibatch.select(lambda x: x.action.mask).toTensor(torch.bool, self.device)
+            old_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
+            batch_returns = returns.get(startIndex, batchSize).toTensor(torch.float, self.device)
+            batch_values = minibatch.select(lambda x: x.value).toTensor(torch.float, self.device)
+            hiddenStates = minibatch.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
             # print("hiddenStates:", hiddenStates[0])
             
             # for Curiosity Network
@@ -696,10 +690,9 @@ class PPOAlgo(Algo[PPOConfig]):
             intrinsic_rewards = (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1)
             intrinsic_rewards = eta * Function.normalize(intrinsic_rewards)
             batch_returns = batch_returns + intrinsic_rewards
-
-            batch_advantages = batch_returns - batch_values
             
             # for AC Network
+            batch_advantages = batch_returns - batch_values
             probs, values, _ = network(states, hiddenStates, masks)
             values = values.squeeze(-1)
             # print("returns:", batch_returns)
@@ -871,10 +864,11 @@ class Trainer(Base):
             for promise in asyncio.as_completed(promises):
                 response = await promise  # earliest result
                 for e in response.result:
-                    self.algo.processAdvantage(self.network, e)
+                    # self.algo.processAdvantage(self.network, e)
                     memory.extend(e)
             # print("learn")
             # learn
+            memory = Memory[Transition](memory)
             self.learn(memory)
 
             if time.perf_counter() - self.lastSave > 60:
@@ -931,10 +925,12 @@ class Evaluator(Base):
     def roll(self, num):
         self.updateNetwork()
         self.generateTransitions(num)
-        memory = []
+        memoryList = []
         for agent in self.agents:
-            memory.append(agent.memory)
-        return np.array(memory)
+            memory = Memory[Transition](agent.memory)
+            self.algo.processAdvantage(self.network, memory)
+            memoryList.append(memory)
+        return np.array(memoryList)
 
     def generateTransitions(self, num):
         for agent in self.agents:

@@ -46,9 +46,16 @@ Tricks:
 5. Reward Normalization instead of Advantage Normalization
 6. Orthogonal weights initialization
 7. 0 Constant bias initialization
-8. ICM (TODO)
+8. ICM
     Resources:
     https://zhuanlan.zhihu.com/p/66303476
     https://github.com/bonniesjli/icm/blob/master/icm.py
+    https://github.com/chagmgang/pytorch_ppo_rl/blob/master/model.py
     https://github.com/jcwleo/curiosity-driven-exploration-pytorch/blob/master/model.py
+    https://zhuanlan.zhihu.com/p/66303476
+    https://zhuanlan.zhihu.com/p/161948260
+    https://github.com/uvipen/Street-fighter-A3C-ICM-pytorch/blob/4574cbfcbd148ed1d127ae053fe4afe943a18939/src/model.py
+    https://github.com/adik993/ppo-pytorch/blob/master/curiosity/icm.py
 9. MSTC (TODO) AlphaZero
+10. RunningMeanStd
+    1.  https://github.com/jcwleo/curiosity-driven-exploration-pytorch/blob/e8448777325493dd86f2c4164e7188882fc268ea/train.py#L61

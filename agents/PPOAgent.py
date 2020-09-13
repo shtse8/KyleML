@@ -312,6 +312,86 @@ class Network(nn.Module):
     def isNewer(self, info: NetworkInfo):
         return info.version > self.version
 
+class ICMNetwork(Network):
+    def __init__(self, inputShape, output_size):
+        super().__init__(inputShape, output_size)
+
+        hidden_nodes = 256
+        self.output_size = output_size
+        self.resnet_time = 4
+
+        self.feature = BodyLayers(inputShape, hidden_nodes)
+        
+        self.inverse_net = nn.Sequential(
+            nn.Linear(hidden_nodes * 2, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, output_size)
+        )
+        self.residual = nn.ModuleList()
+        
+        for _ in range(2 * self.resnet_time):
+            self.residual.append(nn.Sequential(
+                nn.Linear(output_size + hidden_nodes, hidden_nodes),
+                nn.ReLU(),
+                nn.Linear(hidden_nodes, hidden_nodes),
+            ))
+        
+        self.forward_net_1 = nn.Sequential(
+            nn.Linear(output_size + hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, hidden_nodes)
+        )
+        self.forward_net_2 = nn.Sequential(
+            nn.Linear(output_size + hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, hidden_nodes),
+            nn.ReLU(),
+            nn.Linear(hidden_nodes, hidden_nodes)
+        )
+
+        self.apply(init_weights)
+
+    def buildOptimizer(self, learningRate):
+        # self.optimizer = optim.SGD(self.parameters(), lr=learningRate * 100, momentum=0.9)
+        self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
+        return self
+
+    def forward(self, state, next_state, action):
+        action = F.one_hot(action, self.output_size).to(action.device)
+
+        encode_state = self.feature(state)
+        encode_next_state = self.feature(next_state)
+        # get pred action
+        pred_action = torch.cat((encode_state, encode_next_state), 1)
+        pred_action = self.inverse_net(pred_action)
+        # ---------------------
+        
+        # get pred next state
+        pred_next_state_feature_orig = torch.cat((encode_state, action), -1)
+        pred_next_state_feature_orig = self.forward_net_1(pred_next_state_feature_orig)
+
+        # residual
+        for i in range(4):
+            pred_next_state_feature = self.residual[i * 2](torch.cat((pred_next_state_feature_orig, action), 1))
+            pred_next_state_feature_orig = self.residual[i * 2 + 1](
+                torch.cat((pred_next_state_feature, action), 1)) + pred_next_state_feature_orig
+
+        pred_next_state_feature = self.forward_net_2(torch.cat((pred_next_state_feature_orig, action), 1))
+
+        real_next_state_feature = encode_next_state
+        return real_next_state_feature, pred_next_state_feature, pred_action
 
 class GRULayers(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers=1, bidirectional=False, dropout=0):
@@ -472,6 +552,9 @@ class Memory(Generic[T]):
     def __iter__(self) -> MemoryIterator:
         return MemoryIterator(self)
 
+    def __str__(self):
+        return str(self.memory)
+
 class MemoryIterator:
     def __init__(self, memory):
         self.memory = memory
@@ -492,6 +575,9 @@ class PPOAlgo(Algo[PPOConfig]):
 
     def createNetwork(self, inputShape, n_outputs) -> Network:
         return PPONetwork(inputShape, n_outputs)
+
+    def createICMNetwork(self, inputShape, n_outputs) -> Network:
+        return ICMNetwork(inputShape, n_outputs)
 
     def getAction(self, network, state, mask, isTraining: bool, hiddenState=None) -> Tuple[Action, Any]:
         network.eval()
@@ -554,10 +640,12 @@ class PPOAlgo(Algo[PPOConfig]):
                 transition.value = values[i]
                 lastValue = values[i]
 
-    def learn(self, network: Network, memory: Memory[Transition]):
+    def learn(self, network: Network, icm: Network, memory: Memory[Transition]):
         network.train()
         network.optimizer.zero_grad()
-
+        icm.train()
+        icm.optimizer.zero_grad()
+        
         batchSize = min(memory.size(), self.config.batchSize)
         n_miniBatch = memory.size() // batchSize
         totalLoss = 0
@@ -566,17 +654,19 @@ class PPOAlgo(Algo[PPOConfig]):
         # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
         # advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.value)
         # We need to normalize the reward to prevent the GRU becomes all 1 and -1.
+        
         returns = memory.select(lambda x: x.reward)
         returns = Function.normalize(returns)
         # advantages = memory.select(lambda x: x.advantage)
         # advantages = Function.normalize(advantages)
-
         for i in range(n_miniBatch):
             startIndex = i * batchSize
             minibatch = memory.get(startIndex, batchSize)
 
             # Get Tensors
             states = minibatch.select(lambda x: x.state).toTensor(
+                torch.float, self.device)
+            nextStates = minibatch.select(lambda x: x.nextState).toTensor(
                 torch.float, self.device)
             actions = minibatch.select(lambda x: x.action.index).toTensor(
                 torch.long, self.device)
@@ -593,8 +683,23 @@ class PPOAlgo(Algo[PPOConfig]):
             hiddenStates = minibatch.select(
                 lambda x: x.hiddenState).toTensor(torch.float, self.device)
             # print("hiddenStates:", hiddenStates[0])
+            
+            # for Curiosity Network
+            eta = 0.01
+            beta = 0.2
+            real_next_state_feature, pred_next_state_feature, pred_action = icm(states, nextStates, actions)
+
+            inverse_loss = nn.CrossEntropyLoss()(pred_action, actions)
+            forward_loss = nn.MSELoss()(pred_next_state_feature, real_next_state_feature.detach())
+            icm_loss = (1 - beta) * inverse_loss + beta * forward_loss
+            
+            intrinsic_rewards = (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1)
+            intrinsic_rewards = eta * Function.normalize(intrinsic_rewards)
+            batch_returns = batch_returns + intrinsic_rewards
+
             batch_advantages = batch_returns - batch_values
             
+            # for AC Network
             probs, values, _ = network(states, hiddenStates, masks)
             values = values.squeeze(-1)
             # print("returns:", batch_returns)
@@ -628,13 +733,13 @@ class PPOAlgo(Algo[PPOConfig]):
             
             # MSE Loss
             value_loss = (batch_returns - values).pow(2).mean()
-
+        
+            network_loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
 
             # Calculating Total loss
             # the weight of this minibatch
             weight = len(minibatch) / len(memory)
-            loss = (policy_loss + 0.01 * entropy_loss +
-                    0.5 * value_loss) * weight
+            loss = (network_loss + icm_loss) * weight
             # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
 
             # Accumulating the loss to the graph
@@ -644,8 +749,10 @@ class PPOAlgo(Algo[PPOConfig]):
         # Chip grad with norm
         # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
         nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
+        nn.utils.clip_grad.clip_grad_norm_(icm.parameters(), 0.5)
 
         network.optimizer.step()
+        icm.optimizer.step()
         network.version += 1
 
         return totalLoss
@@ -707,12 +814,13 @@ class Trainer(Base):
         super().__init__(algo, gameFactory, sync)
         self.evaluators: List[EvaluatorService] = []
         self.network = None
+        self.icm = None
 
     def learn(self, memory):
         memory = Memory[Transition](memory)
         steps = len(memory)
         for _ in range(5):
-            loss = self.algo.learn(self.network, memory)
+            loss = self.algo.learn(self.network, self.icm, memory)
             # learn report handling
             self.sync.epochManager.trained(loss, steps)
             self.sync.totalEpisodes.value += 1
@@ -725,25 +833,28 @@ class Trainer(Base):
             self.sync.latestVersion.value = networkInfo.version
 
     async def start(self, episodes=1000, load=False):
-
         env = self.gameFactory.get()
-        self.network = self.algo.createNetwork(
-            env.observationShape, env.actionSpace)
-        self.networks.append(self.network)
-        if load:
-            self.load()
 
+        # Create Evaluators
         evaluators = []
         n_workers = max(torch.cuda.device_count(), 1)
-        for i in range(n_workers):
+        for _ in range(n_workers):
             evaluator = EvaluatorService(
                 self.algo, self.gameFactory, self.sync).start()
             evaluators.append(evaluator)
 
         self.evaluators = np.array(evaluators)
 
-        self.network = self.network.buildOptimizer(
+        self.network = self.algo.createNetwork(
+            env.observationShape, env.actionSpace).buildOptimizer(
             self.algo.config.learningRate).to(self.algo.device)
+        self.icm = self.algo.createICMNetwork(
+            env.observationShape, env.actionSpace).buildOptimizer(
+            self.algo.config.learningRate).to(self.algo.device)
+        self.networks.append(self.network)
+        self.networks.append(self.icm)
+        if load:
+            self.load()
         n_samples = self.algo.config.sampleSize * n_workers
         evaulator_samples = self.algo.config.sampleSize
 
@@ -759,8 +870,9 @@ class Trainer(Base):
             # https://docs.python.org/3/library/asyncio-task.html#asyncio.as_completed
             for promise in asyncio.as_completed(promises):
                 response = await promise  # earliest result
-                # print("Rolled Memory: ", len(response.result))
-                memory.extend(response.result)
+                for e in response.result:
+                    self.algo.processAdvantage(self.network, e)
+                    memory.extend(e)
             # print("learn")
             # learn
             self.learn(memory)
@@ -821,8 +933,7 @@ class Evaluator(Base):
         self.generateTransitions(num)
         memory = []
         for agent in self.agents:
-            self.algo.processAdvantage(self.network, agent.memory)
-            memory.extend(agent.memory)
+            memory.append(agent.memory)
         return np.array(memory)
 
     def generateTransitions(self, num):

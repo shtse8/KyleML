@@ -1,6 +1,6 @@
 import numpy as np
 import math
-from .src.game2048 import Game2048
+from .src.game2048 import Game2048 as Src
 from .Game import Game
 import pygame
 
@@ -10,7 +10,7 @@ class Puzzle2048(Game):
         super().__init__()
         self.name: str = "game2048"
         self.size: int = size
-        self.game: Game2048 = Game2048(self.size)
+        self.game = Src(self.size)
         self.observationShape: tuple = (1, self.size, self.size)
         self.actionSpace: int = 4
         self.reward: float = 0
@@ -34,45 +34,58 @@ class Puzzle2048(Game):
             65536: (234, 120, 33),
         }
 
-    def reset(self):
-        self.game = Game2048(self.size)
-        return self.getState()
+    def getPlayerCount(self):
+        return 1
+      
+    def canStep(self, playerId):
+        return True
 
-    def getState(self):
-        state = np.zeros(self.observationShape, dtype=int)
+    def reset(self):
+        np.random.seed(0)
+        self.game = Src(self.size)
+
+    def getState(self, playerId: int):
+        state = np.zeros(self.observationShape, dtype=float)
+        # state = np.zeros((1, self.size, self.size), dtype=int)
         for _, _, cell in self.game.grid.eachCell():
             if cell:
                 state[0][cell.x][cell.y] = math.log2(cell.value)
         return state
 
-    def getActionMask(self, state):
+    def getMask(self, playerId: int, state):
         actions = [
             (0, -1),  # Up
             (1, 0),  # Right
             (0, 1),  # Down
             (-1, 0)  # Left
         ]
-        mask = np.zeros(self.actionSpace, dtype=int)
+        state = state[0]
+        mask = np.zeros(self.actionSpace, dtype=bool)
         for i, vector in enumerate(actions):
             for x, col in enumerate(state):
+                if mask[i]:
+                    break
                 for y, cell in enumerate(col):
-                    if not cell == 0:
+                    if cell != 0:
                         if x + vector[0] >= 0 and x + vector[0] < self.size and \
                             y + vector[1] >= 0 and y + vector[1] < self.size:
                             next = state[x + vector[0]][y + vector[1]]
                             if next == 0 or next == cell:
-                                mask[i] = 1
+                                mask[i] = True
                                 break
         return mask
 
-    def takeAction(self, action):
+    def _step(self, playerId: int, action) -> None:
         score = self.game.score
-        self.game.move(action)
+        moved = self.game.move(action)
+        if not moved:
+            state = self.getState()
+            mask = self.getMask(state)
+            print(state, mask, action)
+            raise Exception("Invalid move")
         self.reward = self.game.score - score
-        # self.reward = max(-1, min(1, self.reward))
-        return super().takeAction(action)
 
-    def getDone(self) -> bool:
+    def isDone(self) -> bool:
         return self.game.isGameTerminated()
 
     def getReward(self) -> float:

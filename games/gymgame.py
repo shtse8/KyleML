@@ -4,13 +4,16 @@ from .Game import Game
 
 
 class GymGame(Game):
-    def __init__(self, name):
+    def __init__(self, id):
         super().__init__()
-        self.name = "gym-" + name
-        self.game = gym.make(name)
+        self.id = id
+        self.name = "gym-" + id
+        self.game = gym.make(id)
         self.game._max_episode_steps = 10000
 
         shape = self.game.observation_space.shape
+        if id == "Blackjack-v0":
+            shape = (len(self.game.observation_space),)
         if len(shape) == 3:
             shape = (shape[2], shape[0], shape[1])
         self.observationShape = shape
@@ -19,10 +22,16 @@ class GymGame(Game):
         self.state = None
         self.done = False
         self.reward = 0
- 
+
+    def _processState(self, state):
+        if len(self.observationShape) == 3:
+            # For pytorch
+            state = np.einsum('ijk->kij', state)
+        return state
+
     def reset(self):
         self.state = self.game.reset()
-        self.state = np.einsum('ijk->kij', self.state)
+        self.state = self._processState(self.state)
         self.reward = 0
         self.done = False
         return self.state
@@ -31,8 +40,8 @@ class GymGame(Game):
         return self.state
         
     def takeAction(self, action):
-        self.state, self.reward, self.done, _ = self.game.step(action)
-        self.state = np.einsum('ijk->kij', self.state)
+        self.state, self.reward, self.done, info = self.game.step(action)
+        self.state = self._processState(self.state)
         return super().takeAction(action)
         
     def render(self) -> None:

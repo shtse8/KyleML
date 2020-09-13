@@ -99,7 +99,9 @@ class Snake(Game):
         # if self.game.crash:
         #     reward = -1
         if self.game.player.eaten:
-            reward = 1
+            reward = 10
+        else:
+            reward = -1
         return reward
     
     

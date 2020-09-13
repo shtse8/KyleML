@@ -11,14 +11,18 @@ class SimpleSnake(Game):
         self.observationShape = 11
         self.actionSpace = 3
     
+    def getPlayerCount(self):
+        return 1
+
+    def canStep(self, playerId):
+        return True
+
     def reset(self):
         self.game.start()
         # self.game.food.x = self.game.player.x + 2
         # self.game.food.y = self.game.player.y
-        return self.getState()
         
-    def getState(self):
-    
+    def getState(self, playerId):
         state = np.array([
             (self.game.player.x_change == 1 and self.game.player.y_change == 0 and ((list(map(add, self.game.player.position[-1], [1, 0])) in self.game.player.position) or
             self.game.player.position[-1][0] + 1 >= (self.game.width - 1))) or (self.game.player.x_change == -1 and self.game.player.y_change == 0 and ((list(map(add, self.game.player.position[-1], [-1, 0])) in self.game.player.position) or
@@ -66,18 +70,16 @@ class SimpleSnake(Game):
         # state = np.pad(state, (0, self.observationShape - len(state)))
         return state
         
-
-    def getActionMask(self, state):
+    def getMask(self, playerId, state):
         return np.ones(self.actionSpace)
 
-    def takeAction(self, action):
+    def _step(self, playerId, action):
         action_array = np.zeros(self.actionSpace)
         action_array[action] = 1
         self.game.player.do_move(action_array, self.game)
         self.game.display()
-        return self.getState(), self.getReward(), self.getDone()
         
-    def getDone(self):
+    def isDone(self):
         return self.game.end
         
     def getReward(self):

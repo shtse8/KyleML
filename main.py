@@ -2,20 +2,14 @@ import os
 import sys
 import signal
 import argparse
+import asyncio
 
 
-from games.SimpleSnake import SimpleSnake
-from games.Snake import Snake
-from games.puzzle2048 import Puzzle2048
-# from games.CartPole import CartPole
-from games.CartPole import CartPole
-from games.Breakout import Breakout
-from games.mario import Mario
-from games.Pong import Pong
-from agents.DQNAgent import DQNAgent
-from agents.A2CAgent import A2CAgent
-from agents.A3CAgent import A3CAgent
-from agents.PPOAgent import PPOAgent
+# from agents.DQNAgent import DQNAgent
+# from agents.A2CAgent import A2CAgent
+# from agents.A3CAgent import A3CAgent
+from games.GameFactory import GameFactory
+from agents.PPOAgent import RL, PPOAlgo
 import torch
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
@@ -28,7 +22,7 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description='Kyle RL Playground')
     parser.add_argument('--game', default='2048', type=str)
     parser.add_argument('--agent', default='ppo', type=str)
@@ -40,43 +34,35 @@ def main():
     args = parser.parse_args()
     print(args)
     signal.signal(signal.SIGINT, signal_handler)
-    print("CUDA:", torch.cuda.is_available())
-        
-    agents = {
-        "dqn": DQNAgent,
-        "a2c": A2CAgent,
-        "a3c": A3CAgent,
-        "ppo": PPOAgent
-    }
+    
+    if torch.cuda.is_available():
+        print(f"CUDA {torch.version.cuda} (Devices: {torch.cuda.device_count()})")
+    if torch.backends.cudnn.enabled:
+        torch.backends.cudnn.benchmark = True
+        print(f"CUDNN {torch.backends.cudnn.version()}")
 
-    games = {
-        "snake": Snake,
-        "simeplesnake": SimpleSnake,
-        "cartpole": CartPole,
-        "2048": Puzzle2048,
-        "mario": Mario,
-        "pong": Pong,
-        "breakout": Breakout,
-    }
+    # agents = {
+        # "dqn": DQNAgent,
+        # "a2c": A2CAgent,
+        # "a3c": A3CAgent,
+        # "ppo": PPOAgent
+    # }
 
-    if args.game in games:
-        game = games[args.game]()
-    else:
-        raise ValueError("Unknown Game " + args.game)
+    gameFactory = GameFactory(args.game)
+    
+    # if args.agent in agents:
+    #     agent = agents[args.agent](game)
+    # else:
+    #     raise ValueError("Unknown Agent " + args.agent)
 
-    if args.render:
-        game.render()
+    # if args.load or not args.train:
+    #     agent.load()
 
-    if args.agent in agents:
-        agent = agents[args.agent](game)
-    else:
-        raise ValueError("Unknown Agent " + args.agent)
-
-    if args.load or not args.train:
-        agent.load()
-
-    agent.run(train=args.train, delay=args.delay)
+    rl = RL(PPOAlgo(), gameFactory)
+    await rl.run(train=args.train, load=args.load, delay=args.delay)
 
 
 if __name__ == "__main__":
-    main()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
+    loop.close()

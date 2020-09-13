@@ -60,7 +60,7 @@ class Net(nn.Module):
 class DQNAgent(Agent):
     def __init__(self, env, **kwargs):
         super().__init__("dqn", env, **kwargs)
-        
+    
         # Trainning
         self.update_target_every = 1000
         self.learning_rate = 0.001

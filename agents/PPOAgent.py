@@ -37,13 +37,13 @@ torch.set_printoptions(edgeitems=sys.maxsize)
 
 def init_weights(m):
     if type(m) == nn.GRU:
-        for weights in m._all_weights:
-            for key in weights:
-                if 'weight' in key:
-                    # print("initializing:", type(m).__name__, key)
-                    nn.init.orthogonal_(m.__getattr__(key))
-                elif 'bias' in key:
-                    nn.init.constant_(m.__getattr__(key), 0)
+        # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/model.py#L91
+        for key, value in m.named_parameters():
+            if 'weight' in key:
+                # print("initializing:", type(m).__name__, key)
+                nn.init.orthogonal_(value)
+            elif 'bias' in key:
+                nn.init.constant_(value, 0)
     elif type(m) in [nn.Linear, nn.Conv2d]:
         # print("initializing:", type(m).__name__)
         nn.init.orthogonal_(m.weight)
@@ -220,14 +220,14 @@ class ConvLayers(nn.Module):
                 nn.Conv2d(inputShape[0], 16, kernel_size=3,
                           stride=1, padding=1),
                 nn.ReLU(),
-                nn.BatchNorm2d(16),
+                # nn.BatchNorm2d(16),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
-                nn.BatchNorm2d(32),
+                # nn.BatchNorm2d(32),
                 nn.Flatten(),
                 nn.Linear(32 * inputShape[1] * inputShape[2], hidden_size),
-                nn.ReLU(),
-                nn.BatchNorm1d(hidden_size))
+                nn.ReLU())
+                # nn.BatchNorm1d(hidden_size))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
@@ -628,6 +628,7 @@ class PPOAlgo(Algo[PPOConfig]):
             
             # MSE Loss
             value_loss = (batch_returns - values).pow(2).mean()
+
 
             # Calculating Total loss
             # the weight of this minibatch

@@ -34,3 +34,21 @@ sudo apt install cuda
 ```
 nvidia-smi
 ```
+
+Tricks:
+1. n-Steps Rewards
+2. GAE
+3. GRU RNN Network 
+   1. Bidirectional
+   2. 2 layers
+   3. 0.2 dropout
+4. CNN
+5. Reward Normalization instead of Advantage Normalization
+6. Orthogonal weights initialization
+7. 0 Constant bias initialization
+8. ICM (TODO)
+    Resources:
+    https://zhuanlan.zhihu.com/p/66303476
+    https://github.com/bonniesjli/icm/blob/master/icm.py
+    https://github.com/jcwleo/curiosity-driven-exploration-pytorch/blob/master/model.py
+9. MSTC (TODO) AlphaZero

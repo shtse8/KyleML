@@ -35,19 +35,6 @@ np.set_printoptions(suppress=True)
 # torch.set_printoptions(edgeitems=10)
 torch.set_printoptions(edgeitems=sys.maxsize)
 
-def init_weights(m):
-    if type(m) == nn.GRU:
-        # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/model.py#L91
-        for key, value in m.named_parameters():
-            if 'weight' in key:
-                # print("initializing:", type(m).__name__, key)
-                nn.init.orthogonal_(value)
-            elif 'bias' in key:
-                nn.init.constant_(value, 0)
-    elif type(m) in [nn.Linear, nn.Conv2d]:
-        # print("initializing:", type(m).__name__)
-        nn.init.orthogonal_(m.weight)
-        nn.init.constant_(m.bias, 0)
 
 
 class Message:
@@ -290,6 +277,24 @@ class Network(nn.Module):
     def buildOptimizer(self):
         raise NotImplementedError
 
+    @staticmethod
+    def initWeight(m):
+        if type(m) == nn.GRU:
+            # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/model.py#L91
+            for key, value in m.named_parameters():
+                if 'weight' in key:
+                    # print("initializing:", type(m).__name__, key)
+                    nn.init.orthogonal_(value)
+                elif 'bias' in key:
+                    nn.init.constant_(value, 0)
+        elif type(m) in [nn.Linear, nn.Conv2d]:
+            # print("initializing:", type(m).__name__)
+            nn.init.orthogonal_(m.weight)
+            nn.init.constant_(m.bias, 0)
+
+    def initWeights(self):
+        self.apply(Network.initWeight)
+
     def _updateStateDict(self):
         if self.info is None or self.info.version != self.version:
             # print("Update Cache", self.version)
@@ -318,59 +323,24 @@ class ICMNetwork(Network):
 
         hidden_nodes = 256
         self.output_size = output_size
-        self.resnet_time = 4
 
-        # self.feature = BodyLayers(inputShape, hidden_nodes)
         self.feature = nn.Sequential(
-            nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
-            nn.LeakyReLU(),
-            # nn.BatchNorm2d(16),
-            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
-            nn.LeakyReLU(),
-            # nn.BatchNorm2d(32),
-            nn.Flatten(),
-            nn.Linear(32 * inputShape[1] * inputShape[2], hidden_nodes))
-
-        self.inverse_net = nn.Sequential(
+            BodyLayers(inputShape, hidden_nodes),
+            nn.Linear(hidden_nodes, hidden_nodes))
+        
+        self.inverseNet = nn.Sequential(
             nn.Linear(hidden_nodes * 2, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, hidden_nodes),
             nn.LeakyReLU(),
             nn.Linear(hidden_nodes, output_size)
         )
-        self.residual = nn.ModuleList()
         
-        for _ in range(2 * self.resnet_time):
-            self.residual.append(nn.Sequential(
-                nn.Linear(output_size + hidden_nodes, hidden_nodes),
-                nn.LeakyReLU(),
-                nn.Linear(hidden_nodes, hidden_nodes),
-            ))
-        
-        self.forward_net_1 = nn.Sequential(
+        self.forwardNet = nn.Sequential(
             nn.Linear(output_size + hidden_nodes, hidden_nodes),
             nn.LeakyReLU(),
             nn.Linear(hidden_nodes, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, hidden_nodes)
-        )
-        self.forward_net_2 = nn.Sequential(
-            nn.Linear(output_size + hidden_nodes, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, hidden_nodes)
         )
 
-        self.apply(init_weights)
+        self.initWeights()
 
     def buildOptimizer(self, learningRate):
         # self.optimizer = optim.SGD(self.parameters(), lr=learningRate * 100, momentum=0.9)
@@ -379,28 +349,11 @@ class ICMNetwork(Network):
 
     def forward(self, state, next_state, action):
         action = F.one_hot(action, self.output_size).to(action.device)
-
         encode_state = self.feature(state)
         encode_next_state = self.feature(next_state)
-        # get pred action
-        pred_action = torch.cat((encode_state, encode_next_state), 1)
-        pred_action = self.inverse_net(pred_action)
-        # ---------------------
-        
-        # get pred next state
-        pred_next_state_feature_orig = torch.cat((encode_state, action), -1)
-        pred_next_state_feature_orig = self.forward_net_1(pred_next_state_feature_orig)
-
-        # residual
-        for i in range(4):
-            pred_next_state_feature = self.residual[i * 2](torch.cat((pred_next_state_feature_orig, action), 1))
-            pred_next_state_feature_orig = self.residual[i * 2 + 1](
-                torch.cat((pred_next_state_feature, action), 1)) + pred_next_state_feature_orig
-
-        pred_next_state_feature = self.forward_net_2(torch.cat((pred_next_state_feature_orig, action), 1))
-
-        real_next_state_feature = encode_next_state
-        return real_next_state_feature, pred_next_state_feature, pred_action
+        pred_action = self.inverseNet(torch.cat((encode_state, encode_next_state), 1))
+        pred_next_state_feature = self.forwardNet(torch.cat((encode_state, action), 1))
+        return encode_next_state, pred_next_state_feature, pred_action
 
 class GRULayers(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers=1, bidirectional=False, dropout=0):
@@ -445,7 +398,7 @@ class PPONetwork(Network):
         # Define value head
         self.value = nn.Linear(self.gru.num_output, 1)
 
-        self.apply(init_weights)
+        self.initWeights()
 
     def buildOptimizer(self, learningRate):
         # self.optimizer = optim.SGD(self.parameters(), lr=learningRate * 100, momentum=0.9)
@@ -700,7 +653,7 @@ class PPOAlgo(Algo[PPOConfig]):
                 
                 intrinsic_rewards = (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1)
                 intrinsic_rewards = eta * Function.normalize(intrinsic_rewards)
-                # batch_returns = batch_returns + intrinsic_rewards
+                batch_returns = batch_returns + intrinsic_rewards
                 
                 # for AC Network
                 batch_advantages = batch_returns - batch_values

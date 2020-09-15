@@ -54,6 +54,9 @@ class GamePlayer:
         self.game = game
         self.playerId = playerId
 
+    def getNext(self):
+        return GamePlayer(self.game, 1 + self.playerId % 2)
+        
     def getState(self):
         return self.game.getState(self.playerId)
 
@@ -65,6 +68,9 @@ class GamePlayer:
 
     def step(self, action) -> tuple:
         return self.game.step(self.playerId, action)
+
+    def isDone(self) -> bool:
+        return self.game.isDone()
 
     def getDoneReward(self) -> float:
         return self.game.getDoneReward(self.playerId)

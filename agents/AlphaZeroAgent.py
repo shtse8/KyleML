@@ -396,10 +396,10 @@ class PPONetwork(Network):
             num_layers=2, bidirectional=True, dropout=0.2)
 
         # Define policy head
-        self.policy = nn.Linear(self.gru.num_output, n_outputs)
+        self.policy = nn.Linear(self.body.num_output, n_outputs)
 
         # Define value head
-        self.value = nn.Linear(self.gru.num_output, 1)
+        self.value = nn.Linear(self.body.num_output, 1)
 
         self.initWeights()
 
@@ -413,7 +413,7 @@ class PPONetwork(Network):
 
     def _body(self, x, h):
         x = self.body(x)
-        x, h = self.gru(x, h)
+        # x, h = self.gru(x, h)
         return x, h
 
     def _policy(self, x, m=None):
@@ -573,38 +573,7 @@ class PPOAlgo(Algo[PPOConfig]):
             ), nextHiddenState.squeeze(0)
 
     def preprocess(self, network, memory, rewardNormalizer):
-        with torch.no_grad():
-            lastValue = 0
-            lastMemory = memory[-1]
-            if not lastMemory.done:
-                lastState = Memory([lastMemory.nextState]).toTensor(torch.float, self.device)
-                hiddenState = Memory([lastMemory.nextHiddenState]).toTensor(torch.float, self.device)
-                lastValue, _ = network.getValue(lastState, hiddenState)
-                lastValue = lastValue.item()
-            
-            states = memory.select(lambda x: x.state).toTensor(torch.float, self.device)
-            hiddenStates = memory.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
-            values, _ = network.getValue(states, hiddenStates)
-            values = values.squeeze(-1).cpu().detach().numpy()
-
-            returns = memory.select(lambda x: x.reward).toArray()
-            # returns = rewardNormalizer.normalize(returns, update=True)
-            # print(returns)
-            # GAE (General Advantage Estimation)
-            # Paper: https://arxiv.org/abs/1506.02438
-            # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
-            gae = 0
-            for i in reversed(range(len(memory))):
-                transition = memory[i]
-                reward = returns[i]
-                detlas = reward + self.config.gamma * lastValue * (1 - transition.done) - values[i]
-                gae = detlas + self.config.gamma * self.config.gaeCoeff * gae * (1 - transition.done)
-                # from baseline
-                # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
-                transition.advantage = gae
-                transition.reward = gae + values[i]
-                transition.value = values[i]
-                lastValue = values[i]
+        pass
 
     def learn(self, network: Network, icm: Network, memory: Memory[Transition], rewardNormalizer):
         network.train()
@@ -616,20 +585,6 @@ class PPOAlgo(Algo[PPOConfig]):
         n_miniBatch = memory.size() // batchSize
         totalLoss = 0
 
-        # Normalize advantages
-        # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
-        # advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.value)
-        # We need to normalize the reward to prevent the GRU becomes all 1 and -1.
-        
-        # returns = memory.select(lambda x: x.reward)
-        # rewardNormalizer.update(returns.toArray())
-        # print(rewardNormalizer.mean, rewardNormalizer.var, rewardNormalizer.count)
-        # returns = rewardNormalizer.normalize(returns)
-        # returns = Function.normalize(returns)
-        # print(returns)
-        advantages = memory.select(lambda x: x.advantage)
-        advantages = Function.normalize(advantages)
-        
         for i in range(n_miniBatch):
             startIndex = i * batchSize
             minibatch = memory.get(startIndex, batchSize)
@@ -637,68 +592,28 @@ class PPOAlgo(Algo[PPOConfig]):
             # Get Tensors
             states = minibatch.select(lambda x: x.state).toTensor(torch.float, self.device)
             # nextStates = minibatch.select(lambda x: x.nextState).toTensor(torch.float, self.device)
-            actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
+            # actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
             masks = minibatch.select(lambda x: x.action.mask).toTensor(torch.bool, self.device)
-            old_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
+            batch_probs = minibatch.select(lambda x: x.action.prediction).toTensor(torch.float, self.device)
             batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
             # batch_returns = returns.get(startIndex, batchSize).toTensor(torch.float, self.device)
             # batch_values = minibatch.select(lambda x: x.value).toTensor(torch.float, self.device)
             hiddenStates = minibatch.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
             # print("hiddenStates:", hiddenStates[0])
-            
-            icm_loss = 0
-            # for Curiosity Network
-            # eta = 0.01
-            # real_next_state_feature, pred_next_state_feature, pred_action = icm(states, nextStates, actions)
-            
-            # inverse_loss = nn.CrossEntropyLoss()(pred_action, actions)
-            # forward_loss = nn.MSELoss()(pred_next_state_feature, real_next_state_feature.detach())
-            # icm_loss = inverse_loss + forward_loss
-            # intrinsic_rewards = 0.01 * (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1)
-            # batch_returns = batch_returns + intrinsic_rewards
-            
-            # for AC Network
-            batch_advantages = advantages.get(startIndex, batchSize).toTensor(torch.float, self.device)
-            # batch_advantages = batch_returns - batch_values
+
             probs, values, _ = network(states, hiddenStates, masks)
+
             values = values.squeeze(-1)
-            # print("returns:", batch_returns)
-            # print("values:", values)
-            # PPO2 - Confirm the samples aren't too far from pi.
-            # porb1 / porb2 = exp(log(prob1) - log(prob2))
-            dist = torch.distributions.Categorical(probs=probs)
-            ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-            policy_losses1 = ratios * batch_advantages
-            policy_losses2 = ratios.clamp(1 - self.config.epsClip, 1 + self.config.epsClip) * batch_advantages
 
-            # Maximize Policy Loss (Rewards)
-            policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
-
-            # Maximize Entropy Loss
-            entropy_loss = -dist.entropy().mean()
-
-            # Minimize Value Loss  (MSE)
-
-            # Clip the value to reduce variability during Critic training
-            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
-            # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/algo/ppo.py#L69-L75
-            # Remark: as the clip is an absolute value, it's not much useful on different large scale scenario
-            # value_loss1 = (batch_returns - values).pow(2)
-            # valuesClipped = batch_values + \
-            #     torch.clamp(values - batch_values, -
-            #                 self.config.epsClip, self.config.epsClip)
-            # value_loss2 = (batch_returns - valuesClipped).pow(2)
-            # value_loss = torch.max(value_loss1, value_loss2).mean()
-            
+            policy_loss = -(batch_probs * (1e-10 + probs).log()).sum(-1).mean()
+            # print((batch_probs * probs.log()).sum(-1))
             # MSE Loss
             value_loss = (batch_returns - values).pow(2).mean()
-        
-            network_loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
 
             # Calculating Total loss
             # the weight of this minibatch
             weight = len(minibatch) / len(memory)
-            loss = (network_loss + icm_loss) * weight
+            loss = (policy_loss + value_loss) * weight
             # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
 
             # Accumulating the loss to the graph
@@ -953,7 +868,9 @@ class Agent:
     def step(self, isTraining=True) -> None:
         if not self.env.isDone() and self.player.canStep():
             state = self.player.getState()
+            print(state)
             mask = self.player.getMask(state)
+            print(mask)
             hiddenState = self.hiddenState
 
             print(self.id, "thinking")

@@ -5,6 +5,7 @@ from .mario import Mario
 from .gymgame import GymGame
 from .tictactoe import TicTacToe
 from .gomoku import Gomoku
+from .connect4 import Connect4
 
 class GameFactory:
     def __init__(self, name: str):
@@ -39,4 +40,6 @@ class GameFactory:
             return TicTacToe()
         if self.name == "gomoku":
             return Gomoku()
+        if self.name == "connect4":
+            return Connect4()
         raise ValueError("Unknown Game " + self.name)

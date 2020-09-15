@@ -27,11 +27,12 @@ class Vector:
 
 
 class TicTacToe:
-    def __init__(self, size=3, winSize=3, players=2) -> None:
+    def __init__(self, sizeX=3, sizeY=3, winSize=3, players=2) -> None:
         self.players = players
-        self.size = size
+        self.sizeX = sizeX
+        self.sizeY = sizeY
         self.winSize = winSize
-        self.cells = np.zeros((self.size, self.size))
+        self.cells = np.zeros((self.sizeX, self.sizeY))
         self.turn = 1
         self.winner = 0
         self.isEnd = False
@@ -44,7 +45,6 @@ class TicTacToe:
             raise Exception("Not your turn.")
 
         vector = self.toVector(pos)
-        self.cells[vector.x][vector.y]
         if self.cells[vector.x][vector.y] != 0:
             raise Exception("Invalid Move")
 
@@ -65,11 +65,11 @@ class TicTacToe:
         return self.cells[vector.x][vector.y]
 
     def isInbound(self, vector: Vector):
-        return vector.x >= 0 and vector.x < self.size and vector.y >= 0 and vector.y < self.size
+        return vector.x >= 0 and vector.x < self.sizeX and vector.y >= 0 and vector.y < self.sizeY
 
     def toVector(self, pos: int) -> Vector:
-        x = pos // self.size
-        y = pos % self.size
+        x = pos // self.sizeY
+        y = pos % self.sizeY
         return Vector(x, y)
 
     def checkWin(self, original: Vector):

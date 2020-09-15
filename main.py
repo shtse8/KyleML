@@ -9,7 +9,8 @@ import asyncio
 # from agents.A2CAgent import A2CAgent
 # from agents.A3CAgent import A3CAgent
 from games.GameFactory import GameFactory
-from agents.PPOAgent import RL, PPOAlgo
+# from agents.PPOAgent import RL, PPOAlgo
+from agents.AlphaZeroAgent import RL, PPOAlgo
 import torch
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 

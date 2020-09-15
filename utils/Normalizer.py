@@ -15,11 +15,12 @@ class Normalizer:
 
 class StdNormalizer(Normalizer):
     # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
-    def __init__(self, epsilon=1e-8, shape=()):
+    def __init__(self, epsilon=1e-8, shape=(), maxCount=0):
         self.mean = np.zeros(shape, np.float64)
         self.var = np.ones(shape, np.float64)
         self.count = 0
         self.epsilon = epsilon
+        self.maxCount = maxCount
 
     def update(self, x):
         batch_mean = np.mean(x, axis=0)
@@ -33,12 +34,14 @@ class StdNormalizer(Normalizer):
 
         self.mean = self.mean + delta * batch_count / total_count
 
-        m_a = self.var * (self.count)
-        m_b = batch_var * (batch_count)
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
         M2 = m_a + m_b + np.square(delta) * self.count * batch_count / total_count
         self.var = M2 / total_count
 
         self.count = total_count
+        if self.maxCount > 0:
+            self.count = min(self.maxCount, self.count)
 
     def normalize(self, x, update=False):
         if update:

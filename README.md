@@ -56,6 +56,9 @@ Tricks:
     https://zhuanlan.zhihu.com/p/161948260
     https://github.com/uvipen/Street-fighter-A3C-ICM-pytorch/blob/4574cbfcbd148ed1d127ae053fe4afe943a18939/src/model.py
     https://github.com/adik993/ppo-pytorch/blob/master/curiosity/icm.py
+
+    Notes:
+    Not much useful. Large value will cause the trainning goes to wrong direction. small value will make no different but trainning much slower.
 9. MSTC (TODO) AlphaZero
 10. RunningMeanStd
     1.  https://github.com/jcwleo/curiosity-driven-exploration-pytorch/blob/e8448777325493dd86f2c4164e7188882fc268ea/train.py#L61

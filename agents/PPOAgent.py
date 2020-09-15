@@ -29,6 +29,7 @@ from multiprocessing.managers import NamespaceProxy, SyncManager
 import multiprocessing.connection
 from multiprocessing.connection import Pipe
 from utils.PipedProcess import Process, PipedProcess
+from utils.Normalizer import RangeNormalizer, StdNormalizer
 
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(suppress=True)
@@ -441,7 +442,7 @@ class Config:
 
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=512, learningRate=1e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=256, batchSize=1024, learningRate=1e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -549,12 +550,9 @@ class PPOAlgo(Algo[PPOConfig]):
         network.eval()
         try:
             with torch.no_grad():
-                stateTensor = torch.tensor(
-                    [state], dtype=torch.float, device=self.device)
-                maskTensor = torch.tensor(
-                    [mask], dtype=torch.bool, device=self.device)
-                prediction, nextHiddenState = network.getPolicy(
-                    stateTensor, hiddenState.unsqueeze(0), maskTensor)
+                stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
+                maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
+                prediction, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0), maskTensor)
                 dist = torch.distributions.Categorical(probs=prediction)
                 index = dist.sample() if isTraining else dist.probs.argmax(dim=-1, keepdim=True)
                 return Action(
@@ -567,7 +565,7 @@ class PPOAlgo(Algo[PPOConfig]):
             print(prediction)
             sys.exit(0)
 
-    def processAdvantage(self, network, memory, rewardNormalizer):
+    def preprocess(self, network, memory, rewardNormalizer):
         with torch.no_grad():
             lastValue = 0
             lastMemory = memory[-1]
@@ -583,9 +581,7 @@ class PPOAlgo(Algo[PPOConfig]):
             values = values.squeeze(-1).cpu().detach().numpy()
 
             returns = memory.select(lambda x: x.reward).toArray()
-            rewardNormalizer.update(returns)
-            returns = Function.normalize(returns)
-            # print(returns)
+            # returns = rewardNormalizer.normalize(returns, update=True)
             
             # GAE (General Advantage Estimation)
             # Paper: https://arxiv.org/abs/1506.02438
@@ -605,115 +601,113 @@ class PPOAlgo(Algo[PPOConfig]):
 
     def learn(self, network: Network, icm: Network, memory: Memory[Transition], rewardNormalizer):
         network.train()
-        network.optimizer.zero_grad()
         icm.train()
+        
+        network.optimizer.zero_grad()
         icm.optimizer.zero_grad()
-        try:
-            batchSize = min(memory.size(), self.config.batchSize)
-            n_miniBatch = memory.size() // batchSize
-            totalLoss = 0
+        batchSize = min(memory.size(), self.config.batchSize)
+        n_miniBatch = memory.size() // batchSize
+        totalLoss = 0
 
-            # Normalize advantages
-            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
-            # advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.value)
-            # We need to normalize the reward to prevent the GRU becomes all 1 and -1.
+        # Normalize advantages
+        # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
+        # advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.value)
+        # We need to normalize the reward to prevent the GRU becomes all 1 and -1.
+        
+        # returns = memory.select(lambda x: x.reward)
+        # rewardNormalizer.update(returns.toArray())
+        # print(rewardNormalizer.mean, rewardNormalizer.var, rewardNormalizer.count)
+        # returns = rewardNormalizer.normalize(returns)
+        # returns = Function.normalize(returns)
+        # print(returns)
+        advantages = memory.select(lambda x: x.advantage)
+        advantages = Function.normalize(advantages)
+
+        for i in range(n_miniBatch):
+            startIndex = i * batchSize
+            minibatch = memory.get(startIndex, batchSize)
+
+            # Get Tensors
+            states = minibatch.select(lambda x: x.state).toTensor(torch.float, self.device)
+            # nextStates = minibatch.select(lambda x: x.nextState).toTensor(torch.float, self.device)
+            actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
+            masks = minibatch.select(lambda x: x.action.mask).toTensor(torch.bool, self.device)
+            old_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
+            batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
+            # batch_returns = returns.get(startIndex, batchSize).toTensor(torch.float, self.device)
+            # batch_values = minibatch.select(lambda x: x.value).toTensor(torch.float, self.device)
+            hiddenStates = minibatch.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
+            # print("hiddenStates:", hiddenStates[0])
             
-            # returns = memory.select(lambda x: x.reward)
-            # rewardNormalizer.update(returns.toArray())
-            # print(rewardNormalizer.mean, rewardNormalizer.var, rewardNormalizer.count)
-            # returns = rewardNormalizer.normalize(returns)
-            # returns = Function.normalize(returns)
-            # print(returns)
-            # advantages = memory.select(lambda x: x.advantage)
-            # advantages = Function.normalize(advantages)
-            for i in range(n_miniBatch):
-                startIndex = i * batchSize
-                minibatch = memory.get(startIndex, batchSize)
-
-                # Get Tensors
-                states = minibatch.select(lambda x: x.state).toTensor(torch.float, self.device)
-                nextStates = minibatch.select(lambda x: x.nextState).toTensor(torch.float, self.device)
-                actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
-                masks = minibatch.select(lambda x: x.action.mask).toTensor(torch.bool, self.device)
-                old_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
-                batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
-                # batch_returns = returns.get(startIndex, batchSize).toTensor(torch.float, self.device)
-                batch_values = minibatch.select(lambda x: x.value).toTensor(torch.float, self.device)
-                hiddenStates = minibatch.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
-                # print("hiddenStates:", hiddenStates[0])
-                
-                # for Curiosity Network
-                eta = 0.0001
-                beta = 0.2
-                real_next_state_feature, pred_next_state_feature, pred_action = icm(states, nextStates, actions)
-                
-                inverse_loss = nn.CrossEntropyLoss()(pred_action, actions)
-                forward_loss = nn.MSELoss()(pred_next_state_feature, real_next_state_feature.detach())
-                icm_loss = (1 - beta) * inverse_loss + beta * forward_loss
-                
-                intrinsic_rewards = (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1)
-                intrinsic_rewards = eta * Function.normalize(intrinsic_rewards)
-                batch_returns = batch_returns + intrinsic_rewards
-                
-                # for AC Network
-                batch_advantages = batch_returns - batch_values
-                probs, values, _ = network(states, hiddenStates, masks)
-                values = values.squeeze(-1)
-                # print("returns:", batch_returns)
-                # print("values:", values)
-                # PPO2 - Confirm the samples aren't too far from pi.
-                # porb1 / porb2 = exp(log(prob1) - log(prob2))
-                dist = torch.distributions.Categorical(probs=probs)
-                ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
-                policy_losses1 = ratios * batch_advantages
-                policy_losses2 = ratios.clamp(1 - self.config.epsClip, 1 + self.config.epsClip) * batch_advantages
-
-                # Maximize Policy Loss (Rewards)
-                policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
-
-                # Maximize Entropy Loss
-                entropy_loss = -dist.entropy().mean()
-
-                # Minimize Value Loss  (MSE)
-
-                # Clip the value to reduce variability during Critic training
-                # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
-                # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/algo/ppo.py#L69-L75
-                # Remark: as the clip is an absolute value, it's not much useful on different large scale scenario
-                # value_loss1 = (batch_returns - values).pow(2)
-                # valuesClipped = batch_values + \
-                #     torch.clamp(values - batch_values, -
-                #                 self.config.epsClip, self.config.epsClip)
-                # value_loss2 = (batch_returns - valuesClipped).pow(2)
-                # value_loss = torch.max(value_loss1, value_loss2).mean()
-                
-                # MSE Loss
-                value_loss = (batch_returns - values).pow(2).mean()
+            icm_loss = 0
+            # for Curiosity Network
+            # eta = 0.01
+            # real_next_state_feature, pred_next_state_feature, pred_action = icm(states, nextStates, actions)
             
-                network_loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
+            # inverse_loss = nn.CrossEntropyLoss()(pred_action, actions)
+            # forward_loss = nn.MSELoss()(pred_next_state_feature, real_next_state_feature.detach())
+            # icm_loss = inverse_loss + forward_loss
+            # intrinsic_rewards = 0.01 * (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1)
+            # batch_returns = batch_returns + intrinsic_rewards
+            
+            # for AC Network
+            batch_advantages = advantages.get(startIndex, batchSize).toTensor(torch.float, self.device)
+            # batch_advantages = batch_returns - batch_values
+            probs, values, _ = network(states, hiddenStates, masks)
+            values = values.squeeze(-1)
+            # print("returns:", batch_returns)
+            # print("values:", values)
+            # PPO2 - Confirm the samples aren't too far from pi.
+            # porb1 / porb2 = exp(log(prob1) - log(prob2))
+            dist = torch.distributions.Categorical(probs=probs)
+            ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
+            policy_losses1 = ratios * batch_advantages
+            policy_losses2 = ratios.clamp(1 - self.config.epsClip, 1 + self.config.epsClip) * batch_advantages
 
-                # Calculating Total loss
-                # the weight of this minibatch
-                weight = len(minibatch) / len(memory)
-                loss = (network_loss + icm_loss) * weight
-                # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
+            # Maximize Policy Loss (Rewards)
+            policy_loss = -torch.min(policy_losses1, policy_losses2).mean()
 
-                # Accumulating the loss to the graph
-                loss.backward()
-                totalLoss += loss.item()
+            # Maximize Entropy Loss
+            entropy_loss = -dist.entropy().mean()
 
-            # Chip grad with norm
-            # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
-            nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
-            nn.utils.clip_grad.clip_grad_norm_(icm.parameters(), 0.5)
+            # Minimize Value Loss  (MSE)
 
-            network.optimizer.step()
-            icm.optimizer.step()
-            network.version += 1
+            # Clip the value to reduce variability during Critic training
+            # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L66-L75
+            # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/algo/ppo.py#L69-L75
+            # Remark: as the clip is an absolute value, it's not much useful on different large scale scenario
+            # value_loss1 = (batch_returns - values).pow(2)
+            # valuesClipped = batch_values + \
+            #     torch.clamp(values - batch_values, -
+            #                 self.config.epsClip, self.config.epsClip)
+            # value_loss2 = (batch_returns - valuesClipped).pow(2)
+            # value_loss = torch.max(value_loss1, value_loss2).mean()
+            
+            # MSE Loss
+            value_loss = (batch_returns - values).pow(2).mean()
+        
+            network_loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
 
-            return totalLoss
-        except Exception as e:
-            print(e)
+            # Calculating Total loss
+            # the weight of this minibatch
+            weight = len(minibatch) / len(memory)
+            loss = (network_loss + icm_loss) * weight
+            # print("Loss:", loss, policy_loss, entropy_loss, value_loss, weight)
+
+            # Accumulating the loss to the graph
+            loss.backward()
+            totalLoss += loss.item()
+
+        # Chip grad with norm
+        # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
+        nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
+        nn.utils.clip_grad.clip_grad_norm_(icm.parameters(), 0.5)
+
+        network.optimizer.step()
+        icm.optimizer.step()
+        network.version += 1
+
+        return totalLoss
 
 class Base:
     def __init__(self, algo, gameFactory, sync):
@@ -772,11 +766,10 @@ class Trainer(Base):
         self.evaluators: List[EvaluatorService] = []
         self.network = None
         self.icm = None
-        self.rewardNormalizer = RunningMeanStd()
+        self.rewardNormalizer = StdNormalizer()
 
-    def learn(self, memory):
-        memory = Memory[Transition](memory)
-        steps = len(memory)
+    def learn(self, experience):
+        steps = len(experience)
         for _ in range(5):
             loss = self.algo.learn(self.network, self.icm, memory, self.rewardNormalizer)
             # learn report handling
@@ -822,7 +815,7 @@ class Trainer(Base):
             # push new network
             self.pushNewNetwork()
             # collect samples
-            memory = collections.deque(maxlen=n_samples)
+            experience = collections.deque(maxlen=n_samples)
             promises = np.array([x.call("roll", (evaulator_samples,))
                                  for x in self.evaluators])
             # https://docs.python.org/3/library/asyncio-task.html#asyncio.as_completed
@@ -831,12 +824,12 @@ class Trainer(Base):
                 for e in response.result:
                     # print(type(e))
                     e = Memory[Transition](e)
-                    self.algo.processAdvantage(self.network, e, self.rewardNormalizer)
-                    memory.extend(e)
+                    self.algo.preprocess(self.network, e, self.rewardNormalizer)
+                    experience.extend(e)
             # print("learn")
             # learn
-            memory = Memory[Transition](memory)
-            self.learn(memory)
+            experience = Memory[Transition](experience)
+            self.learn(experience)
 
             if time.perf_counter() - self.lastSave > 60:
                 self.save()
@@ -879,7 +872,7 @@ class Evaluator(Base):
 
         # memoryCount = min([len(x.memory) for x in self.agents])
         if num > 0:
-            memoryCount = sum([len(x.memory) for x in self.agents])
+            memoryCount = min([len(x.memory) for x in self.agents])
             return memoryCount < num
         else:
             return True
@@ -892,12 +885,7 @@ class Evaluator(Base):
     def roll(self, num):
         self.updateNetwork()
         self.generateTransitions(num)
-        memoryList = []
-        for agent in self.agents:
-            memory = Memory[Transition](agent.memory)
-            # self.algo.processAdvantage(self.network, memory)
-            memoryList.append(memory)
-        return np.array(memoryList)
+        return [x.memory for x in self.agents]
 
     def generateTransitions(self, num):
         for agent in self.agents:
@@ -1133,32 +1121,14 @@ class TrainerProcess(Process):
         # print("Trainer", os.getpid())
         await Trainer(self.algo, self.gameFactory, self.sync).start(self.episodes, self.load)
 
-
-class EpochManagerProxy(NamespaceProxy):
-    _exposed_ = tuple(dir(EpochManager))
-
-    def __getattr__(self, key):
-        if key[0] == '_':
-            return object.__getattribute__(self, key)
-        callmethod = object.__getattribute__(self, '_callmethod')
-        result = callmethod('__getattribute__', (key,))
-        if isinstance(result, types.MethodType):
-            def wrapper(*args, **kwargs):
-                result = callmethod(key, args)
-            return wrapper
-        return result
-
-# thread safe
-
-
 class SyncContext:
     # EpochProxy = Proxy(Epoch)
-    # EpochManagerProxy = Proxy(EpochManager)
+    EpochManagerProxy = Proxy(EpochManager)
 
     def __init__(self):
         # manager = mp.Manager()
         # SyncManager.register('Epoch', Epoch, self.EpochProxy)
-        SyncManager.register('EpochManager', EpochManager, EpochManagerProxy)
+        SyncManager.register('EpochManager', EpochManager, self.EpochManagerProxy)
         manager = SyncManager()
         manager.start()
 
@@ -1177,33 +1147,3 @@ class SyncContext:
             deviceName = "cuda:" + str(cudaId)
             self.deviceIndex.value = self.deviceIndex.value + 1
         return torch.device(deviceName)
-
-class RunningMeanStd:
-    # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
-    def __init__(self, epsilon=1e-8, shape=()):
-        self.mean = np.zeros(shape, np.float64)
-        self.var = np.ones(shape, np.float64)
-        self.count = 0
-        self.epsilon = epsilon
-
-    def update(self, x):
-        batch_mean = np.mean(x, axis=0)
-        batch_var = np.var(x, axis=0)
-        batch_count = x.shape[0]
-        self.update_from_moments(batch_mean, batch_var, batch_count)
-
-    def update_from_moments(self, batch_mean, batch_var, batch_count):
-        delta = batch_mean - self.mean
-        total_count = self.count + batch_count
-
-        self.mean = self.mean + delta * batch_count / total_count
-
-        m_a = self.var * (self.count)
-        m_b = batch_var * (batch_count)
-        M2 = m_a + m_b + np.square(delta) * self.count * batch_count / total_count
-        self.var = M2 / total_count
-
-        self.count = total_count
-
-    def normalize(self, x):
-        return (x - self.mean) / (np.sqrt(self.var) + self.epsilon)

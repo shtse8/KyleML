@@ -6,8 +6,9 @@ from .Game import Game
 
 class SimpleSnake(Game):
     def __init__(self):
+        super().__init__()
         self.name = "SimpleSnake"
-        self.game = GameSrc(22, 22)
+        self.game = GameSrc(22, 22, seed=0)
         self.observationShape = 11
         self.actionSpace = 3
     
@@ -18,9 +19,9 @@ class SimpleSnake(Game):
         return True
 
     def reset(self):
-        self.game.start()
-        # self.game.food.x = self.game.player.x + 2
-        # self.game.food.y = self.game.player.y
+        self.game = GameSrc(22, 22, seed=0)
+        self.game.food.x = self.game.player.x + 2
+        self.game.food.y = self.game.player.y
         
     def getState(self, playerId):
         state = np.array([
@@ -78,16 +79,10 @@ class SimpleSnake(Game):
         action_array[action] = 1
         self.game.player.do_move(action_array, self.game)
         self.game.display()
+        self.reward[playerId] = 1 if self.game.player.eaten else 0
         
     def isDone(self):
         return self.game.end
-        
-    def getReward(self):
-        reward = 0
-        # if self.game.crash:
-        #     reward = -1
-        if self.game.player.eaten:
-            reward = 1
-        return reward
+
     
     

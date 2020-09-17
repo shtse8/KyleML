@@ -18,11 +18,12 @@ PIXEL_SIZE = 20
 
 
 class Game:
-    def __init__(self, width, height, render = False):
+    def __init__(self, width, height, render = False, seed=0):
         self.width = width
         self.height = height
         self.is_display = render
         
+        self.rng = np.random.default_rng(seed)
         self.record = 0
         self.counter = 0
         self.last_update = 0
@@ -31,8 +32,6 @@ class Game:
         self.playerImagePath = 'img/snakeBody.png'
         self.foodImagePath = 'img/food2.png'
         self.isResourceLoaded = False
-
-    def start(self):
         self.crash = False
         self.end = False
         self.player = Player(self)
@@ -176,8 +175,11 @@ class Food(object):
         
     def new(self):
         while True:
-            self.x = randint(1, self.game.width - 2)
-            self.y = randint(1, self.game.height - 2)
+            self.x = self.game.rng.choice(range(1, self.game.width - 1, 1))
+            self.y = self.game.rng.choice(range(1, self.game.width - 1, 1))
+
+            # self.x = self.game.rng.randrange(1, self.game.width - 2)
+            # self.y = self.game.rng.randrange(1, self.game.height - 2)
             if [self.x, self.y] not in self.game.player.position:
                 break
 

@@ -50,12 +50,12 @@ class TicTacToe(Game):
         return state
 
     def getMask(self, playerId, state):
-        mask = np.zeros(self.actionSpace, dtype=int)
+        mask = np.zeros(self.actionSpace, dtype=bool)
         for i in range(self.actionSpace):
             vector = self.game.toVector(i)
             cell = self.game.getCell(vector)
             if cell == 0:
-                mask[i] = 1
+                mask[i] = True
         return mask
 
     def _step(self, playerId, action):

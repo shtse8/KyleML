@@ -49,10 +49,10 @@ class TicTacToe:
             raise Exception("Invalid Move")
 
         self.setCell(vector, playerId)
-        if 0 not in self.cells.flatten():
-            self.isEnd = True
-        elif self.checkWin(vector):
+        if self.checkWin(vector):
             self.winner = self.turn
+            self.isEnd = True
+        elif 0 not in self.cells.flatten():
             self.isEnd = True
         else:
             # next turn

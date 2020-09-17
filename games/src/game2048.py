@@ -49,13 +49,6 @@ class Grid:
                 row.append(tile if Tile(tile.position, tile.value) else None)
                 
         return cells
-    
-    def randomAvailableCell(self):
-        cells = self.availableCells()
-
-        if len(cells) > 0:
-            return np.random.choice(cells)
-            
             
     def availableCells(self):
         cells = []
@@ -97,10 +90,11 @@ class Grid:
     
 class Game2048:
 
-    def __init__(self, size):
+    def __init__(self, size, seed=None):
         #create a new game and initialize two tiles
         self.startTiles = 2
         self.size = size
+        self.rng = np.random.default_rng(seed)
         self.grid = Grid(self.size)
         self.over        = False
         self.won         = False
@@ -115,8 +109,10 @@ class Game2048:
             
     def addRandomTile(self):
         if self.grid.cellsAvailable():
-            value = 2 if np.random.uniform() < 0.9 else 4
-            tile = Tile(self.grid.randomAvailableCell(), value)
+            value = 2 if self.rng.uniform() < 0.9 else 4
+            
+            cells = self.grid.availableCells()
+            tile = Tile(self.rng.choice(cells), value)
             
             self.grid.insertTile(tile)
             

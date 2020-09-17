@@ -79,9 +79,6 @@ class Puzzle2048(Game):
         score = self.game.score
         moved = self.game.move(action)
         if not moved:
-            state = self.getState()
-            mask = self.getMask(state)
-            print(state, mask, action)
             raise Exception("Invalid move")
         self.reward = self.game.score - score
 

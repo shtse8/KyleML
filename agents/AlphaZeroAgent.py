@@ -136,8 +136,11 @@ class AlphaZeroHandler:
 
     def getAction(self, env, isTraining: bool) -> Tuple[Action, Any]:
         acts, probs = self.mcts.get_move_probs(env, isTraining, temp=1)
-        noise_probs = 0.75 * probs + 0.25 * np.random.dirichlet(0.3 * np.ones(len(probs)))
-        index = np.random.choice(len(probs), p=noise_probs)
+        if isTraining:
+            noise_probs = 0.75 * probs + 0.25 * np.random.dirichlet(0.3 * np.ones(len(probs)))
+            index = np.random.choice(len(probs), p=noise_probs)
+        else:
+            index = np.argmax(probs)
         prediction = np.zeros(self.env.actionSpace)
         prediction[list(acts)] = probs
         state = env.getState()

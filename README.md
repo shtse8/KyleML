@@ -59,6 +59,14 @@ Tricks:
 
     Notes:
     Not much useful. Large value will cause the trainning goes to wrong direction. small value will make no different but trainning much slower.
-9. MSTC (TODO) AlphaZero
+9. AlphaZero MSTC
+   1.  https://github.com/suragnair/alpha-zero-general
+   2.  https://github.com/louisnino/RLcode/tree/master/Alpha-Zero
+   3.  https://github.com/plkmo/AlphaZero_Connect4
+   4.  https://zhuanlan.zhihu.com/p/115867362
+   5.  https://github.com/hijkzzz/alpha-zero-gomoku
+   6.  https://github.com/junxiaosong/AlphaZero_Gomoku/
+   7.  https://github.com/NeymarL/ChineseChess-AlphaZero
+   8.  https://github.com/blanyal/alpha-zero
 10. RunningMeanStd
     1.  https://github.com/jcwleo/curiosity-driven-exploration-pytorch/blob/e8448777325493dd86f2c4164e7188882fc268ea/train.py#L61

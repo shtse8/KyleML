@@ -119,7 +119,7 @@ class MCTS(object):
         self._n_playout = n_playout   #模拟多少次走一步
 
     #进行一次模拟_root就代表传入state
-    def _playout(self, env, isTraining):
+    def _playout(self, env):
         """Run a single playout from the root to the leaf, getting a value at
         the leaf and propagating it back through its parents.
         State is modified in-place, so a copy must be provided.
@@ -145,7 +145,7 @@ class MCTS(object):
         
         # Check for end of game.
         if not env.isDone():
-            prob, value = self._policy(env, isTraining)
+            prob, value = self._policy(env)
             mask = env.getMask(env.getState())
             node.expand(prob, mask, env.playerId)
         #如果结束了。
@@ -163,7 +163,7 @@ class MCTS(object):
         node.update_recursive(value, env.playerId)
 
 
-    def get_move_probs(self, env, isTraining, temp=1e-3):
+    def get_move_probs(self, env, temp=1e-3):
         """Run all playouts sequentially and return the available actions and
         their corresponding probabilities.
         state: the current game state
@@ -178,7 +178,7 @@ class MCTS(object):
             #关于copy.deepcopy(state)
             #https://blog.csdn.net/u010712012/article/details/79754132
             env_copy = copy.deepcopy(env)
-            self._playout(env_copy, isTraining)
+            self._playout(env_copy)
         # print(time.perf_counter() - tic)
         # calc the move probabilities based on visit counts at the root node
         # _root._children.items()访问根节点的_children，就是访问当前状态下，各个动作和对应的节点。
@@ -207,66 +207,3 @@ class MCTS(object):
 
     def __str__(self):
         return "MCTS"
-
-
-class MCTSPlayer(object):
-    """AI player based on MCTS"""
-
-    def __init__(self, policy_value_function,
-                 c_puct=5, n_playout=2000, is_selfplay=0):
-        self.mcts = MCTS(policy_value_function, c_puct, n_playout)
-        self._is_selfplay = is_selfplay
-
-    def set_player_ind(self, p):
-        self.player = p
-
-    def reset_player(self):
-        self.mcts.update_with_move(-1) #把-1传进去，就重置了整个树了。
-
-    def get_action(self, board, temp=1e-3, return_prob=0):
-        #============================================================================
-        #进行一次游戏，每一步都会get一次action的。
-        #1.首先获取合法动作位置
-        #2.基于当前状态，进行_n_playout次模拟。生成树，并返回acts, probs(注意：这个prob是根据树的访问次数来的，不是通过network来的)
-        #3.如果是selfplay模式，那么加噪音然后sample。然后挪动树的根节点。（树是保留的）
-        #  如果不是selfplay模式，那么不加噪音。 重置整棵树
-        # ============================================================================
-        sensible_moves = board.availables
-        # the pi vector returned by MCTS as in the alphaGo Zero paper
-        move_probs = np.zeros(board.width*board.height)
-
-        if len(sensible_moves) > 0:
-            # 进行n_playout模拟，生成一棵MCTS，返回根节点的acts, probs
-            acts, probs = self.mcts.get_move_probs(board, temp)
-            move_probs[list(acts)] = probs
-
-            #=======================================
-            #如果是selfplay模式，就要加0.25噪音。然后sample出一个move，执行。
-            #如果不是selfplay模式，就不加噪音，但会重置整棵树。
-            if self._is_selfplay:
-                # add Dirichlet Noise for exploration (needed for
-                # self-play training)
-                move = np.random.choice(
-                    acts,
-                    p=0.75*probs + 0.25*np.random.dirichlet(0.3*np.ones(len(probs)))
-                )
-                # update the root node and reuse the search tree
-                self.mcts.update_with_move(move)            #把树的根节点和当前状态对应。
-            else:
-                # with the default temp=1e-3, it is almost equivalent
-                # to choosing the move with the highest prob
-                move = np.random.choice(acts, p=probs)
-                # reset the root node
-                self.mcts.update_with_move(-1)
-                #location = board.move_to_location(move)
-                #print("AI move: %d,%d\n" % (location[0], location[1]))
-            # =======================================
-            if return_prob:
-                return move, move_probs
-            else:
-                return move
-        else:
-            print("WARNING: the board is full")
-
-    def __str__(self):
-        return "MCTS {}".format(self.player)

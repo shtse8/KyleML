@@ -19,7 +19,7 @@ class Connect4(TicTacToe):
         action = posX * self.sizeY + posY
         self.game.step(playerId, action)
 
-    def getMask(self, playerId, state):
+    def getMask(self, playerId):
         mask = np.zeros(self.actionSpace, dtype=int)
         for x, rows in enumerate(self.game.cells):
             if rows[0] == 0:

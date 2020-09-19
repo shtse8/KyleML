@@ -25,7 +25,7 @@ from memories.Transition import Transition
 from games.GameFactory import GameFactory
 from multiprocessing.managers import NamespaceProxy, SyncManager
 from multiprocessing.connection import Pipe
-from .Agent import Base, EvaluatorService, SyncContext, Action, Config, TrainerProcess, Algo, Evaluator, Role
+from .Agent import Base, EvaluatorService, SyncContext, Action, Config, TrainerProcess, Algo, Evaluator, Role, AlgoHandler
 from utils.PipedProcess import Process, PipedProcess
 from utils.Normalizer import RangeNormalizer, StdNormalizer
 from utils.Message import NetworkInfo, LearnReport, EnvReport
@@ -95,12 +95,10 @@ class AlphaZeroConfig(Config):
         self.simulations = simulations
 
 
-class AlphaZeroHandler:
+class AlphaZeroHandler(AlgoHandler):
     def __init__(self, config, env, role, device):
-        self.config = config
-        self.env = env
+        super().__init__(config, env, role, device)
         self.network = AlphaZeroNetwork(env.observationShape, env.actionSpace)
-        self.device = device
         self.network.to(self.device)
         self.mcts = MCTS(self.getProb, n_playout=self.config.simulations)
         if role == Role.Trainer:
@@ -108,10 +106,7 @@ class AlphaZeroHandler:
 
     def dump(self):
         data = {}
-        stateDict = self.network.state_dict()
-        for key, value in stateDict.items():
-            stateDict[key] = value.cpu()  # .detach().numpy()
-        data["network"] = stateDict
+        data["network"] = self._getStateDict(self.network)
         return data
 
     def load(self, data):
@@ -123,7 +118,7 @@ class AlphaZeroHandler:
     def reportStep(self, action):
         self.mcts.update_with_move(action)
         
-    def getProb(self, env, isTraining: bool) -> Tuple[Action, Any]:
+    def getProb(self, env) -> Tuple[Action, Any]:
         self.network.eval()
         with torch.no_grad():
             state = env.getState()
@@ -150,7 +145,7 @@ class AlphaZeroHandler:
         return Action(
             index=acts[index],
             mask=mask,
-            prediction=prediction)
+            probs=prediction)
 
     def preprocess(self, memory):
         with torch.no_grad():
@@ -175,7 +170,7 @@ class AlphaZeroHandler:
             # Get Tensors
             states = minibatch.select(lambda x: x.state).toTensor(torch.float, self.device)
             masks = minibatch.select(lambda x: x.action.mask).toTensor(torch.bool, self.device)
-            batch_probs = minibatch.select(lambda x: x.action.prediction).toTensor(torch.float, self.device)
+            batch_probs = minibatch.select(lambda x: x.action.probs).toTensor(torch.float, self.device)
             batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
 
             probs, values = self.network(states, masks)

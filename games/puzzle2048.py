@@ -50,25 +50,25 @@ class Puzzle2048(Game):
                 state[0][cell.x][cell.y] = math.log2(cell.value)
         return state
 
-    def getMask(self, playerId: int, state):
+    def getMask(self, playerId: int):
         actions = [
             (0, -1),  # Up
             (1, 0),  # Right
             (0, 1),  # Down
             (-1, 0)  # Left
         ]
-        state = state[0]
+        state = self.game.grid.cells
         mask = np.zeros(self.actionSpace, dtype=bool)
         for i, vector in enumerate(actions):
             for x, col in enumerate(state):
                 if mask[i]:
                     break
                 for y, cell in enumerate(col):
-                    if cell != 0:
+                    if cell:
                         if x + vector[0] >= 0 and x + vector[0] < self.size and \
                             y + vector[1] >= 0 and y + vector[1] < self.size:
                             next = state[x + vector[0]][y + vector[1]]
-                            if next == 0 or next == cell:
+                            if next is None or next.value == cell.value:
                                 mask[i] = True
                                 break
         return mask

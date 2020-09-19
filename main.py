@@ -9,8 +9,8 @@ import asyncio
 # from agents.A2CAgent import A2CAgent
 # from agents.A3CAgent import A3CAgent
 from games.GameFactory import GameFactory
-# from agents.PPOAgent import RL, PPOAlgo
 from agents.Agent import RL
+from agents.PPOAgent import PPOAlgo
 from agents.AlphaZeroAgent import AlphaZeroAlgo
 import torch
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -60,7 +60,7 @@ async def main():
     # if args.load or not args.train:
     #     agent.load()
 
-    rl = RL(AlphaZeroAlgo(), gameFactory)
+    rl = RL(PPOAlgo(), gameFactory)
     await rl.run(train=args.train, load=args.load, delay=args.delay)
 
 

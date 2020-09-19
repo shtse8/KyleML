@@ -33,7 +33,7 @@ class KyleList(Generic[T]):
 
     def __sub__(self, other):
         if isinstance(other, KyleList):
-            other = other.memory
+            other = other.array
         return KyleList(self.array - other)
 
     def __truediv__(self, other):

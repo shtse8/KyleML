@@ -28,12 +28,27 @@ from utils.Normalizer import RangeNormalizer, StdNormalizer
 from utils.KyleList import KyleList
 from .mcts import MCTS
 
+class TensorWrapper:
+    def __init__(self, tensor):
+        self.tensor = tensor
+
+    def __len__(self):
+        return len(self.tensor)
+
+    def asTensor(self):
+        return self.tensor
+
+    def asArray(self):
+        return self.tensor.cpu().detach().numpy()
+
+    def asItem(self):
+        return self.tensor.item()
 
 class Action:
-    def __init__(self, index, mask, prediction):
+    def __init__(self, index, probs, value):
         self.index = index
-        self.mask = mask
-        self.prediction = prediction
+        self.probs = probs
+        self.value = value
 
     def __int__(self):
         return self.index
@@ -42,10 +57,7 @@ class Action:
     def log(self):
         # https://github.com/pytorch/pytorch/blob/master/torch/distributions/utils.py#L72
         eps = torch.finfo(torch.float).eps
-        prob = np.array([p if self.mask[i] else 0 for i,
-                         p in enumerate(self.prediction)])
-        prob = prob / prob.sum()
-        prob = min(1-eps, max(eps, self.prediction[self.index]))
+        prob = min(1-eps, max(eps, self.probs[self.index]))
         return math.log(prob)
 
 C = TypeVar('C')
@@ -353,7 +365,6 @@ class Trainer(Base):
         super().__init__(algo, gameFactory, sync)
         self.evaluators: List[EvaluatorService] = []
         self.handler = None
-        self.rewardNormalizer = StdNormalizer()
 
     def learn(self, experience):
         steps = len(experience)
@@ -410,6 +421,30 @@ class Trainer(Base):
             if time.perf_counter() - self.lastSave > 60:
                 self.save()
 
+class AlgoHandler:
+    def __init__(self, config, env, role, device):
+        self.config = config
+        self.env = env
+        self.device = device
+        self.role = role
+
+    def _getStateDict(self, network):
+        stateDict = network.state_dict()
+        for key, value in stateDict.items():
+            stateDict[key] = value.cpu()  # .detach().numpy()
+        return stateDict
+
+    def dump(self):
+        raise NotImplementedError
+
+    def load(self, data):
+        raise NotImplementedError
+
+    def reset(self):
+        pass
+
+    def reportStep(self, action):
+        pass
 
 
 class Evaluator(Base):
@@ -427,8 +462,7 @@ class Evaluator(Base):
 
         self.playerCount = self.env.getPlayerCount()
         # self.mcts = MCTS(lambda s, m, x: self.algo.getProb(self.network, s, m, x), n_playout=100)
-        self.agents = np.array(
-            [Agent(i + 1, self.env, self.handler) for i in range(self.playerCount)],)
+        self.agents = np.array([Agent(i + 1, self.env, self.handler) for i in range(self.playerCount)])
         self.started = False
 
         self.reports: List[EnvReport] = []
@@ -477,26 +511,12 @@ class Evaluator(Base):
         self.flushReports()
 
     async def eval(self):
+        self.agents[0] = HumanAgent(1, self.env, self.handler)
         self.load()
         self.sync.epochManager.start(1)
         while self.loop():
             for agent in self.agents:
-                if agent.id == 1:
-                    player = self.env.getPlayer(agent.id)
-                    if not self.env.isDone() and player.canStep():
-                        while True:
-                            try:
-                                # row, col = map(int, input(
-                                #     "Your action: ").split())
-                                # pos = row * self.env.size + col
-                                pos = int(input("Your action: "))
-                                player.step(pos)
-                                self.handler.reportStep(pos)
-                                break
-                            except Exception as e:
-                                print(e)
-                else:
-                    agent.step(False)
+                agent.step(False)
                 # os.system('cls')
                 state = self.env.getState(1).astype(int)
                 print(state[0] + state[1] * 2, "\n")
@@ -507,31 +527,32 @@ class Evaluator(Base):
                     print(agent.id, self.env.getDoneReward(agent.id))
                 await asyncio.sleep(3)
             self.flushReports()
-
-
+     
 class Agent:
     def __init__(self, id, env, handler):
         self.id = id
-        self.env = env
+        self.env = env.setPlayer(self.id)
         self.memory = None
         self.report = EnvReport()
-        self.handler = handler
-        self.player = self.env.getPlayer(self.id)
+        self.handler = handler.getAgentHandler(self.env)
+        self.transition = None
 
     def step(self, isTraining=True) -> None:
-        if not self.env.isDone() and self.player.canStep():
-            state = self.player.getState()
-            action = self.handler.getAction(self.player, isTraining)
-            nextState, reward, done = self.player.step(action.index)
+        if not self.env.isDone() and self.env.canStep():
+            if self.transition is None:
+                self.transition = Transition()
+            self.transition.info = self.handler.getInfo()
+            action = self.handler.getAction(isTraining)
+            reward = self.env.step(action.index)
             # print(reward)
             if self.memory is not None:
-                transition = Transition(
-                    state=state,
-                    action=action,
-                    reward=reward,
-                    nextState=nextState,
-                    done=done)
-                self.memory.append(transition)
+                nextTransition = Transition()
+                nextTransition.info = self.handler.getInfo()
+                self.transition.action = action
+                self.transition.reward = reward
+                self.transition.next = nextTransition
+                self.memory.append(self.transition)
+                self.transition = nextTransition
             # action reward
             self.report.rewards += reward
 
@@ -539,23 +560,42 @@ class Agent:
         report = self.report
 
         # game episode reward
-        doneReward = self.player.getDoneReward()
+        doneReward = self.env.getDoneReward()
         # set last memory to done, as we may not be the last one to take action.
         # do nothing if last memory has been processed.
         if self.memory is not None and len(self.memory) > 0:
             lastMemory = self.memory[-1]
-            lastMemory.done = True
+            lastMemory.next.info.done = True
             lastMemory.reward += doneReward
         report.rewards += doneReward
 
         # reset env variables
         self.report = EnvReport()
+        self.handler.reset()
         return report
 
     def resetMemory(self, num):
         self.memory = collections.deque(maxlen=num)
 
 
+class HumanAgent(Agent):
+    def __init__(self, id, env, handler):
+        super().__init__(id, env, handler)
+
+    def step(self, isTraining=False):
+        if not self.env.isDone() and self.env.canStep():
+            while True:
+                try:
+                    # row, col = map(int, input(
+                    #     "Your action: ").split())
+                    # pos = row * self.env.size + col
+                    pos = int(input("Your action: "))
+                    self.env.step(pos)
+                    self.handler.reportStep(pos)
+                    break
+                except Exception as e:
+                    print(e)
+               
 class RL:
     def __init__(self, algo: Algo, gameFactory: GameFactory):
         self.algo = algo

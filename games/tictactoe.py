@@ -49,7 +49,7 @@ class TicTacToe(Game):
                     state[1][x][y] = 1
         return state
 
-    def getMask(self, playerId, state):
+    def getMask(self, playerId):
         mask = np.zeros(self.actionSpace, dtype=bool)
         for i in range(self.actionSpace):
             vector = self.game.toVector(i)

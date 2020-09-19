@@ -19,23 +19,24 @@ import numpy as np
 from enum import Enum
 import time
 import sys
+import pickle
 
 from memories.Transition import Transition
 from memories.SimpleMemory import SimpleMemory
 from games.GameFactory import GameFactory
 from multiprocessing.managers import NamespaceProxy, SyncManager
 from multiprocessing.connection import Pipe
-from .Agent import Base, EvaluatorService, SyncContext, Action, Config
+from .Agent import Base, EvaluatorService, SyncContext, Action, Config, Role, AlgoHandler, Algo, TensorWrapper
 from utils.PipedProcess import Process, PipedProcess
 from utils.Normalizer import RangeNormalizer, StdNormalizer
 from utils.Message import NetworkInfo, LearnReport, EnvReport
-from utils.Network import Network
+from utils.Network import Network, BodyLayers, GRULayers
 from utils.multiprocessing import Proxy
 from utils.PredictionHandler import PredictionHandler
+from utils.KyleList import KyleList
 
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(suppress=True)
-# torch.set_printoptions(edgeitems=10)
 torch.set_printoptions(edgeitems=sys.maxsize)
 
 
@@ -52,13 +53,13 @@ class ICMNetwork(Network):
         
         self.inverseNet = nn.Sequential(
             nn.Linear(hidden_nodes * 2, hidden_nodes),
-            nn.LeakyReLU(),
+            nn.ELU(),
             nn.Linear(hidden_nodes, output_size)
         )
         
         self.forwardNet = nn.Sequential(
             nn.Linear(output_size + hidden_nodes, hidden_nodes),
-            nn.LeakyReLU(),
+            nn.ELU(),
             nn.Linear(hidden_nodes, hidden_nodes),
         )
 
@@ -138,140 +139,85 @@ class PPOConfig(Config):
         self.epsClip = epsClip
         self.gaeCoeff = gaeCoeff
 
+class AgentHandler:
+    def __init__(self, handler, env):
+        self.handler = handler
+        self.env = env
+        self.hiddenState = self.handler.network.getInitHiddenState(self.handler.device)
 
-C = TypeVar('C')
+    def reset(self):
+        self.hiddenState = self.handler.network.getInitHiddenState(self.handler.device)
 
+    def reportStep(self, action):
+        self.handler.reportStep(action)
 
-class Algo(Generic[C]):
-    def __init__(self, name, config: C):
-        self.name = name
-        self.config = config
-        self.device = torch.device(
-            "cuda:0" if torch.cuda.is_available() else "cpu")
+    def getInfo(self):
+        info = self.env.getInfo()
+        info.hiddenState = self.hiddenState.cpu().detach().numpy()
+        return info
 
-    def createNetwork(self, inputShape, n_outputs) -> Network:
-        raise NotImplementedError
+    def getProb(self):
+        self.handler.network.eval()
+        with torch.no_grad():
+            info = self.env.getInfo()
+            state = KyleList([info.state]).toTensor(torch.float, self.handler.device)
+            mask = KyleList([info.mask]).toTensor(torch.bool, self.handler.device)
+            prob, value, hiddenState = self.handler.network(state, self.hiddenState.unsqueeze(0), mask)
+            return TensorWrapper(prob.squeeze(0)), TensorWrapper(value), TensorWrapper(hiddenState.squeeze(0))
 
-    def getAction(self, network, state, mask, isTraining: bool, hiddenState=None) -> Tuple[Action, Any]:
-        raise NotImplementedError
-
-    def learn(self, network: Network, memory):
-        raise NotImplementedError
-
-
-class Iterator:
-    def __init__(self, iterable):
-        self.iterable = iterable
-        self.current = 0
-
-    def __iter__(self) -> Iterator:
-        return Iterator(self.iterable)
-
-    def __next__(self):
-        if self.current < len(self.iterable):
-            result = self.iterable[self.current]
-            self.current += 1
-            return result
-        self.current = 0
-        raise StopIteration
-
-T = TypeVar('T')
-S = TypeVar('S')
-
-
-class Memory(Generic[T]):
-    def __init__(self, iter: List[T]) -> None:
-        self.memory = np.array(iter)
-
-    def select(self, property: Callable[[T], S]) -> Memory[S]:
-        return Memory([property(x) for x in self.memory])
-
-    def toArray(self) -> np.array:
-        return self.memory
-
-    def toTensor(self, dtype: torch.dtype, device: torch.device) -> torch.tensor:
-        return torch.tensor(self.memory, dtype=dtype, device=device).detach()
-
-    def get(self, fromPos: int, num: int) -> Memory[T]:
-        return Memory(self.memory[fromPos:fromPos+num])
-
-    def mean(self) -> float:
-        return self.memory.mean()
-
-    def std(self) -> float:
-        return self.memory.std()
-
-    def size(self) -> int:
-        return len(self.memory)
-
-    def __sub__(self, other):
-        if isinstance(other, Memory):
-            other = other.memory
-        return Memory(self.memory - other)
-
-    def __truediv__(self, other):
-        return Memory(self.memory / other)
-
-    def __len__(self) -> int:
-        return len(self.memory)
-
-    def __getitem__(self, i: int) -> T:
-        return self.memory[i]
-
-    def __iter__(self) -> Iterator:
-        return Iterator(self)
-
-    def __str__(self):
-        return str(self.memory)
+    def getAction(self, isTraining: bool) -> Tuple[Action, Any]:
+        probs, value, hiddenState = self.getProb()
+        self.hiddenState = hiddenState.asTensor()
+        if isTraining:
+            index = np.random.choice(len(probs), p=probs.asArray())
+        else:
+            index = np.argmax(probs.asArray())
+        return Action(
+            index=index,
+            probs=probs.asArray(),
+            value=value.asItem())
 
 
 
-class PPOAlgo(Algo[PPOConfig]):
-    def __init__(self, config=PPOConfig()):
-        super().__init__("PPO", config)
+class PPOHandler(AlgoHandler):
+    def __init__(self, config, env, role, device):
+        super().__init__(config, env, role, device)
+        self.network = PPONetwork(env.observationShape, env.actionSpace)
+        self.network.to(self.device)
+        self.icm = ICMNetwork(env.observationShape, env.actionSpace)
+        self.icm.to(self.device)
+        self.rewardNormalizer = StdNormalizer()
+        if role == Role.Trainer:
+            self.network.buildOptimizer(self.config.learningRate)
+            self.icm.buildOptimizer(self.config.learningRate)
 
-    def createNetwork(self, inputShape, n_outputs) -> Network:
-        return PPONetwork(inputShape, n_outputs)
+    def getAgentHandler(self, env):
+        return AgentHandler(self, env)
 
-    def createICMNetwork(self, inputShape, n_outputs) -> Network:
-        return ICMNetwork(inputShape, n_outputs)
+    def dump(self):
+        data = {}
+        data["network"] = self._getStateDict(self.network)
+        data["icm"] = self._getStateDict(self.icm)
+        data["rewardNormalizer"] = pickle.dumps(self.rewardNormalizer)
+        return data
 
-    def getAction(self, network, state, mask, isTraining: bool, hiddenState=None) -> Tuple[Action, Any]:
-        network.eval()
-        try:
-            with torch.no_grad():
-                stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
-                maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
-                prediction, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0), maskTensor)
-                dist = torch.distributions.Categorical(probs=prediction)
-                index = dist.sample() if isTraining else dist.probs.argmax(dim=-1, keepdim=True)
-                return Action(
-                    index=index.item(),
-                    mask=mask,
-                    prediction=prediction.squeeze(0).cpu().detach().numpy()
-                ), nextHiddenState.squeeze(0)
-        except Exception as e:
-            print(e)
-            print(prediction)
-            sys.exit(0)
-
-    def preprocess(self, network, memory, rewardNormalizer):
+    def load(self, data):
+        self.network.load_state_dict(data["network"])
+        self.icm.load_state_dict(data["icm"])
+        self.rewardNormalizer = pickle.loads(data["rewardNormalizer"])
+    
+    def preprocess(self, memory):
         with torch.no_grad():
             lastValue = 0
             lastMemory = memory[-1]
-            if not lastMemory.done:
-                lastState = Memory([lastMemory.nextState]).toTensor(torch.float, self.device)
-                hiddenState = Memory([lastMemory.nextHiddenState]).toTensor(torch.float, self.device)
-                lastValue, _ = network.getValue(lastState, hiddenState)
+            if not lastMemory.next.info.done:
+                lastState = KyleList([lastMemory.next.info]).toTensor(torch.float, self.device)
+                hiddenState = KyleList([lastMemory.next.info.hiddenState]).toTensor(torch.float, self.device)
+                lastValue, _ = self.network.getValue(lastState, hiddenState)
                 lastValue = lastValue.item()
             
-            states = memory.select(lambda x: x.state).toTensor(torch.float, self.device)
-            hiddenStates = memory.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
-            values, _ = network.getValue(states, hiddenStates)
-            values = values.squeeze(-1).cpu().detach().numpy()
-
             returns = memory.select(lambda x: x.reward).toArray()
-            # returns = rewardNormalizer.normalize(returns, update=True)
+            # returns = self.rewardNormalizer.normalize(returns, update=True)
             
             # GAE (General Advantage Estimation)
             # Paper: https://arxiv.org/abs/1506.02438
@@ -280,37 +226,27 @@ class PPOAlgo(Algo[PPOConfig]):
             for i in reversed(range(len(memory))):
                 transition = memory[i]
                 reward = returns[i]
-                detlas = reward + self.config.gamma * lastValue * (1 - transition.done) - values[i]
-                gae = detlas + self.config.gamma * self.config.gaeCoeff * gae * (1 - transition.done)
+                detlas = reward + self.config.gamma * lastValue * (1 - transition.next.info.done) - transition.action.value
+                gae = detlas + self.config.gamma * self.config.gaeCoeff * gae * (1 - transition.next.info.done)
                 # from baseline
                 # https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L65
-                transition.advantage = gae
-                transition.reward = gae + values[i]
-                transition.value = values[i]
-                lastValue = values[i]
+                # transition.advantage = gae
+                transition.reward = gae + transition.action.value
+                lastValue = transition.action.value
 
-    def learn(self, network: Network, icm: Network, memory: Memory[Transition], rewardNormalizer):
-        network.train()
-        icm.train()
+    def learn(self, memory):
+        self.network.train()
+        self.icm.train()
         
-        network.optimizer.zero_grad()
-        icm.optimizer.zero_grad()
+        self.network.optimizer.zero_grad()
+        self.icm.optimizer.zero_grad()
         batchSize = min(memory.size(), self.config.batchSize)
         n_miniBatch = memory.size() // batchSize
         totalLoss = 0
 
         # Normalize advantages
         # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
-        # advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.value)
-        # We need to normalize the reward to prevent the GRU becomes all 1 and -1.
-        
-        # returns = memory.select(lambda x: x.reward)
-        # rewardNormalizer.update(returns.toArray())
-        # print(rewardNormalizer.mean, rewardNormalizer.var, rewardNormalizer.count)
-        # returns = rewardNormalizer.normalize(returns)
-        # returns = Function.normalize(returns)
-        # print(returns)
-        advantages = memory.select(lambda x: x.advantage)
+        advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.action.value)
         advantages = Function.normalize(advantages)
 
         for i in range(n_miniBatch):
@@ -318,16 +254,18 @@ class PPOAlgo(Algo[PPOConfig]):
             minibatch = memory.get(startIndex, batchSize)
 
             # Get Tensors
-            states = minibatch.select(lambda x: x.state).toTensor(torch.float, self.device)
+            batch_states = minibatch.select(lambda x: x.info.state).toTensor(torch.float, self.device)
+            
+            batch_masks = minibatch.select(lambda x: x.info.mask).toTensor(torch.bool, self.device)
+            batch_hiddenStates = minibatch.select(lambda x: x.info.hiddenState).toTensor(torch.float, self.device)
+
             # nextStates = minibatch.select(lambda x: x.nextState).toTensor(torch.float, self.device)
-            actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
-            masks = minibatch.select(lambda x: x.action.mask).toTensor(torch.bool, self.device)
-            old_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
+            batch_actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
+            batch_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
             batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
             # batch_returns = returns.get(startIndex, batchSize).toTensor(torch.float, self.device)
             # batch_values = minibatch.select(lambda x: x.value).toTensor(torch.float, self.device)
-            hiddenStates = minibatch.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
-            # print("hiddenStates:", hiddenStates[0])
+            # print("hiddenStates:", batch_hiddenStates)
             
             icm_loss = 0
             # for Curiosity Network
@@ -343,14 +281,14 @@ class PPOAlgo(Algo[PPOConfig]):
             # for AC Network
             batch_advantages = advantages.get(startIndex, batchSize).toTensor(torch.float, self.device)
             # batch_advantages = batch_returns - batch_values
-            probs, values, _ = network(states, hiddenStates, masks)
+            probs, values, _ = self.network(batch_states, batch_hiddenStates, batch_masks)
             values = values.squeeze(-1)
             # print("returns:", batch_returns)
             # print("values:", values)
             # PPO2 - Confirm the samples aren't too far from pi.
             # porb1 / porb2 = exp(log(prob1) - log(prob2))
             dist = torch.distributions.Categorical(probs=probs)
-            ratios = torch.exp(dist.log_prob(actions) - old_log_probs)
+            ratios = torch.exp(dist.log_prob(batch_actions) - batch_log_probs)
             policy_losses1 = ratios * batch_advantages
             policy_losses2 = ratios.clamp(1 - self.config.epsClip, 1 + self.config.epsClip) * batch_advantages
 
@@ -390,345 +328,17 @@ class PPOAlgo(Algo[PPOConfig]):
 
         # Chip grad with norm
         # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
-        nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
-        nn.utils.clip_grad.clip_grad_norm_(icm.parameters(), 0.5)
+        nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
+        nn.utils.clip_grad.clip_grad_norm_(self.icm.parameters(), 0.5)
 
-        network.optimizer.step()
-        icm.optimizer.step()
-        network.version += 1
+        self.network.optimizer.step()
+        self.icm.optimizer.step()
 
         return totalLoss
 
-class Base:
-    def __init__(self, algo, gameFactory, sync):
-        self.algo = algo
-        self.algo.device = sync.getDevice()
-        self.gameFactory = gameFactory
-        self.sync = sync
-        self.networks = []
-        self.weightPath = "./weights/"
-        self.lastSave = 0
+class PPOAlgo(Algo[PPOConfig]):
+    def __init__(self, config=PPOConfig()):
+        super().__init__("PPO", config)
 
-    def save(self) -> None:
-        try:
-            path = self.getSavePath(True)
-            data = {
-                "totalSteps": self.sync.totalSteps.value,
-                "totalEpisodes": self.sync.totalEpisodes.value
-            }
-            for network in self.networks:
-                data[network.name] = network.state_dict()
-            torch.save(data, path)
-            self.lastSave = time.perf_counter()
-            # print("Saved Weights.")
-        except Exception as e:
-            print("Failed to save.", e)
-
-    def load(self) -> None:
-        try:
-            path = self.getSavePath()
-            print("Loading from path: ", path)
-            data = torch.load(path, map_location='cpu')
-            # data = torch.load(path, map_location=self.device)
-            self.sync.totalSteps.value = int(
-                data["totalSteps"]) if "totalSteps" in data else 0
-            self.sync.totalEpisodes.value = int(
-                data["totalEpisodes"]) if "totalEpisodes" in data else 0
-            for network in self.networks:
-                print(f"{network.name} weights loaded.")
-                network.load_state_dict(data[network.name])
-            print(
-                f"Trained: {Function.humanize(self.sync.totalEpisodes.value)} episodes, {Function.humanize(self.sync.totalSteps.value)} steps")
-        except Exception as e:
-            print("Failed to load.", e)
-
-    def getSavePath(self, makeDir: bool = False) -> str:
-        path = os.path.join(
-            self.weightPath, self.algo.name.lower(), self.gameFactory.name + ".h5")
-        if makeDir:
-            Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
-        return path
-
-
-class Trainer(Base):
-    def __init__(self, algo: Algo, gameFactory: GameFactory, sync):
-        super().__init__(algo, gameFactory, sync)
-        self.evaluators: List[EvaluatorService] = []
-        self.network = None
-        self.icm = None
-        self.rewardNormalizer = StdNormalizer()
-
-    def learn(self, experience):
-        steps = len(experience)
-        for _ in range(5):
-            loss = self.algo.learn(self.network, self.icm, memory, self.rewardNormalizer)
-            # learn report handling
-            self.sync.epochManager.trained(loss, steps)
-            self.sync.totalEpisodes.value += 1
-            self.sync.totalSteps.value += steps
-
-    def pushNewNetwork(self):
-        networkInfo = self.network.getInfo()
-        if networkInfo.version > self.sync.latestVersion.value:
-            self.sync.latestStateDict.update(networkInfo.stateDict)
-            self.sync.latestVersion.value = networkInfo.version
-
-    async def start(self, episodes=1000, load=False):
-        env = self.gameFactory.get()
-
-        # Create Evaluators
-        evaluators = []
-        n_workers = max(torch.cuda.device_count(), 1)
-        for _ in range(n_workers):
-            evaluator = EvaluatorService(
-                self.algo, self.gameFactory, self.sync).start()
-            evaluators.append(evaluator)
-
-        self.evaluators = np.array(evaluators)
-
-        self.network = self.algo.createNetwork(
-            env.observationShape, env.actionSpace).buildOptimizer(
-            self.algo.config.learningRate).to(self.algo.device)
-        self.icm = self.algo.createICMNetwork(
-            env.observationShape, env.actionSpace).buildOptimizer(
-            self.algo.config.learningRate).to(self.algo.device)
-        self.networks.append(self.network)
-        self.networks.append(self.icm)
-        if load:
-            self.load()
-        n_samples = self.algo.config.sampleSize * n_workers
-        evaulator_samples = self.algo.config.sampleSize
-
-        self.sync.epochManager.start(episodes)
-        self.lastSave = time.perf_counter()
-        while True:
-            # push new network
-            self.pushNewNetwork()
-            # collect samples
-            experience = collections.deque(maxlen=n_samples)
-            promises = np.array([x.call("roll", (evaulator_samples,))
-                                 for x in self.evaluators])
-            # https://docs.python.org/3/library/asyncio-task.html#asyncio.as_completed
-            for promise in asyncio.as_completed(promises):
-                response = await promise  # earliest result
-                for e in response.result:
-                    # print(type(e))
-                    e = Memory[Transition](e)
-                    self.algo.preprocess(self.network, e, self.rewardNormalizer)
-                    experience.extend(e)
-            # print("learn")
-            # learn
-            experience = Memory[Transition](experience)
-            self.learn(experience)
-
-            if time.perf_counter() - self.lastSave > 60:
-                self.save()
-
-
-class Evaluator(Base):
-    def __init__(self, algo: Algo, gameFactory, sync):
-        super().__init__(algo, gameFactory, sync)
-        self.env = gameFactory.get()
-        # self.algo.device = torch.device("cpu")
-        # self.algo.device = sync.getDevice()
-        self.network = self.algo.createNetwork(
-            self.env.observationShape, self.env.actionSpace).to(self.algo.device)
-        self.network.version = -1
-        self.networks.append(self.network)
-
-        self.playerCount = self.env.getPlayerCount()
-        self.agents = np.array(
-            [Agent(i + 1, self.env, self.network, algo) for i in range(self.playerCount)])
-        self.started = False
-
-        self.reports: List[EnvReport] = []
-
-    def updateNetwork(self):
-        if self.network.version < self.sync.latestVersion.value:
-            networkInfo = NetworkInfo(
-                self.sync.latestStateDict, self.sync.latestVersion.value)
-            self.network.loadInfo(networkInfo)
-
-    def loop(self, num=0):
-        # auto reset
-        if not self.started:
-            self.env.reset()
-            self.started = True
-        elif self.env.isDone():
-            # reports = []
-            for agent in self.agents:
-                self.reports.append(agent.done())
-            self.env.reset()
-
-        # memoryCount = min([len(x.memory) for x in self.agents])
-        if num > 0:
-            memoryCount = min([len(x.memory) for x in self.agents])
-            return memoryCount < num
-        else:
-            return True
-
-    def flushReports(self):
-        if len(self.reports) > 0:
-            self.sync.epochManager.add(self.reports)
-            self.reports = []
-
-    def roll(self, num):
-        self.updateNetwork()
-        self.generateTransitions(num)
-        return [x.memory for x in self.agents]
-
-    def generateTransitions(self, num):
-        for agent in self.agents:
-            agent.resetMemory(num)
-        while self.loop(num):
-            for agent in self.agents:
-                agent.step(True)
-        self.flushReports()
-
-    async def eval(self):
-        self.load()
-        self.sync.epochManager.start(1)
-        while self.loop():
-            for agent in self.agents:
-                if agent.id == 1:
-                    player = self.env.getPlayer(agent.id)
-                    if not self.env.isDone() and player.canStep():
-                        while True:
-                            try:
-                                row, col = map(int, input(
-                                    "Your action: ").split())
-                                pos = row * self.env.size + col
-                                player.step(pos)
-                                break
-                            except Exception as e:
-                                print(e)
-                else:
-                    agent.step(False)
-                # os.system('cls')
-                print(self.env.getState(1).astype(int), "\n")
-                await asyncio.sleep(0.5)
-            if self.env.isDone():
-                print("Done:")
-                for agent in self.agents:
-                    print(agent.id, self.env.getDoneReward(agent.id))
-                await asyncio.sleep(3)
-            self.flushReports()
-
-
-class Agent:
-    def __init__(self, id, env, network, algo):
-        self.id = id
-        self.env = env
-        self.memory = None
-        self.report = EnvReport()
-        self.network = network
-        self.algo = algo
-        self.player = self.env.getPlayer(self.id)
-        self.hiddenState = self.network.getInitHiddenState(self.algo.device)
-
-    def step(self, isTraining=True) -> None:
-        if not self.env.isDone() and self.player.canStep():
-            state = self.player.getState()
-            mask = self.player.getMask(state)
-            hiddenState = self.hiddenState
-
-            action, nextHiddenState = self.algo.getAction(
-                self.network, state, mask, isTraining, hiddenState)
-            # if (hiddenState == 0).all():
-            #     print("Step:", hiddenState, nextHiddenState)
-            # print("Action:", action.index, action.prediction[action.index])
-            nextState, reward, done = self.player.step(action.index)
-            if self.memory is not None:
-                transition = Transition(
-                    state=state,
-                    hiddenState=hiddenState.cpu().detach().numpy(),
-                    action=action,
-                    reward=reward,
-                    nextState=nextState,
-                    nextHiddenState=nextHiddenState.cpu().detach().numpy(),
-                    done=done)
-                self.memory.append(transition)
-            self.hiddenState = nextHiddenState
-            # action reward
-            self.report.rewards += reward
-
-    def done(self):
-        report = self.report
-
-        # game episode reward
-        doneReward = self.player.getDoneReward()
-        # set last memory to done, as we may not be the last one to take action.
-        # do nothing if last memory has been processed.
-        if self.memory is not None and len(self.memory) > 0:
-            lastMemory = self.memory[-1]
-            lastMemory.done = True
-            lastMemory.reward += doneReward
-        report.rewards += doneReward
-
-        # reset env variables
-        self.hiddenState = self.network.getInitHiddenState(self.algo.device)
-        self.report = EnvReport()
-
-        return report
-
-    def resetMemory(self, num):
-        self.memory = collections.deque(maxlen=num)
-
-
-class RL:
-    def __init__(self, algo: Algo, gameFactory: GameFactory):
-        self.algo = algo
-        self.gameFactory = gameFactory
-
-        self.lastPrint: float = 0
-
-        mp.set_start_method("spawn")
-        self.sync = SyncContext()
-
-    def epochManagerRestartHandler(self):
-        self.update(0, "\n")
-        # pass
-
-    def epochManagerTrainedHandler(self):
-        self.update(0)
-
-    def epochManagerAddHandler(self):
-        self.update(0)
-
-    async def run(self, train: bool = True, load: bool = False, episodes: int = 1000, delay: float = 0) -> None:
-        self.delay = delay
-        self.isTraining = train
-        self.lastSave = time.perf_counter()
-        self.workingPath = os.path.dirname(__main__.__file__)
-        # multiprocessing.connection.BUFSIZE = 2 ** 24
-
-        print(f"Train: {self.isTraining}")
-        if self.isTraining:
-            trainer = TrainerProcess(
-                self.algo, self.gameFactory, self.sync, episodes, load).start()
-        else:
-            await Evaluator(self.algo, self.gameFactory, self.sync).eval()
-
-        self.sync.epochManager.on("restart", self.epochManagerRestartHandler)
-        # self.sync.epochManager.on("trained", self.epochManagerTrainedHandler)
-        # self.sync.epochManager.on("add", self.epochManagerAddHandler)
-
-        while True:
-            self.update()
-            await asyncio.sleep(0.01)
-
-    def update(self, freq=.1, end="\b\r") -> None:
-        if time.perf_counter() - self.lastPrint < freq:
-            return
-        epoch = self.sync.epochManager.epoch
-        if epoch is not None:
-            print(f"#{self.sync.epochManager.num} {Function.humanize(epoch.episodes):>6} {epoch.hitRate:>7.2%} | " +
-                  f'Loss: {Function.humanize(epoch.loss):>6}/ep | ' +
-                  f'Env: {Function.humanize(epoch.envs):>6} | ' +
-                  f'Best: {Function.humanize(epoch.bestRewards):>6}, Avg: {Function.humanize(epoch.avgRewards):>6} | ' +
-                  f'Steps: {Function.humanize(epoch.steps / epoch.duration):>6}/s | Episodes: {1 / epoch.durationPerEpisode:>6.2f}/s | ' +
-                  f' {Function.humanizeTime(epoch.duration):>6} > {Function.humanizeTime(epoch.estimateDuration):}' +
-                  '      ',
-                  end=end)
-            self.lastPrint = time.perf_counter()
-
+    def createHandler(self, env, role, device):
+        return PPOHandler(self.config, env, role, device)

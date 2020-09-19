@@ -3,6 +3,7 @@
 class Game(object):
     def __init__(self):
         self.rendered = False
+        self.reward = {}
 
     # Game methods
     def getPlayer(self, playerId: int):
@@ -36,10 +37,12 @@ class Game(object):
     def step(self, playerId: int, action) -> tuple:
         self._step(playerId, action)
         self.update()
-        return self.getState(playerId), self.getReward(), self.isDone()
+        return self.getState(playerId), self.getReward(playerId), self.isDone()
 
-    def getReward(self) -> float:
-        raise NotImplementedError()
+    def getReward(self, playerId) -> float:
+        if playerId not in self.reward:
+            return 0
+        return self.reward[playerId]
 
     # UI Methods
     def render(self) -> None:
@@ -55,8 +58,8 @@ class GamePlayer:
         self.playerId = playerId
 
     def getNext(self):
-        return GamePlayer(self.game, 1 + self.playerId % 2)
-        
+        return GamePlayer(self.game, 1 + self.playerId % self.game.getPlayerCount())
+
     def getState(self):
         return self.game.getState(self.playerId)
 
@@ -68,6 +71,9 @@ class GamePlayer:
 
     def step(self, action) -> tuple:
         return self.game.step(self.playerId, action)
+
+    def getReward(self) -> float:
+        return self.game.getReward(self.playerId)
 
     def isDone(self) -> bool:
         return self.game.isDone()

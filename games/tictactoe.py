@@ -12,13 +12,13 @@ class TicTacToe(Game):
         self.sizeX = sizeX
         self.sizeY = sizeY
         self.winSize = winSize
+        self.playerCount = 2
         self.game = Src(sizeX, sizeY, winSize)
-        self.observationShape: tuple = (1, sizeX, sizeY)
+        self.observationShape: tuple = (self.playerCount, sizeX, sizeY)
         self.actionSpace: int = sizeX * sizeY
-        self.reward: float = 0
 
     def getPlayerCount(self):
-        return 2
+        return self.playerCount
 
     def reset(self):
         self.game = Src(self.sizeX, self.sizeY, self.winSize)
@@ -40,13 +40,13 @@ class TicTacToe(Game):
         # 0 - Empty
         # 1 - Self
         # 2 - Opponent
-        state = np.zeros(self.observationShape)
+        state = np.zeros(self.observationShape, dtype=int)
         for x, rows in enumerate(self.game.cells):
             for y, cell in enumerate(rows):
                 if cell == playerId:
                     state[0][x][y] = 1
                 elif cell != 0:
-                    state[0][x][y] = 2
+                    state[1][x][y] = 1
         return state
 
     def getMask(self, playerId, state):
@@ -63,6 +63,3 @@ class TicTacToe(Game):
 
     def isDone(self) -> bool:
         return self.game.isEnd
-
-    def getReward(self) -> float:
-        return self.reward

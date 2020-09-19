@@ -13,7 +13,6 @@ class Puzzle2048(Game):
         self.game = Src(self.size, 0)
         self.observationShape: tuple = (1, self.size, self.size)
         self.actionSpace: int = 4
-        self.reward: float = 0
         self.tileColors: dict = {
             1: (204, 192, 179),
             2: (238, 228, 218),
@@ -79,13 +78,10 @@ class Puzzle2048(Game):
         moved = self.game.move(action)
         if not moved:
             raise Exception("Invalid move")
-        self.reward = self.game.score - score
+        self.reward[playerId] = self.game.score - score
 
     def isDone(self) -> bool:
         return self.game.isGameTerminated()
-
-    def getReward(self) -> float:
-        return self.reward
 
     def render(self) -> None:
         if self.rendered:

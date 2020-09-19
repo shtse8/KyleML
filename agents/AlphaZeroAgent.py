@@ -1,5 +1,4 @@
 from __future__ import annotations
-import inspect
 import asyncio
 import __main__
 import types
@@ -12,26 +11,29 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.nn as nn
 import torch
-import utils.Function as Function
-from utils.multiprocessing import Proxy
-from utils.PredictionHandler import PredictionHandler
 # from .Agent import Agent
 from typing import List, Callable, TypeVar, Generic, Tuple, Any
-from memories.Transition import Transition
-from memories.SimpleMemory import SimpleMemory
-from games.GameFactory import GameFactory
 import collections
 import numpy as np
 from enum import Enum
 import time
 import sys
+import utils.Function as Function
+import traceback
+
+from memories.Transition import Transition
+from games.GameFactory import GameFactory
 from multiprocessing.managers import NamespaceProxy, SyncManager
-import multiprocessing.connection
 from multiprocessing.connection import Pipe
+from .Agent import Base, EvaluatorService, SyncContext, Action, Config, TrainerProcess, Algo, Evaluator, Role
 from utils.PipedProcess import Process, PipedProcess
 from utils.Normalizer import RangeNormalizer, StdNormalizer
+from utils.Message import NetworkInfo, LearnReport, EnvReport
+from utils.Network import Network, BodyLayers
+from utils.PredictionHandler import PredictionHandler
+from utils.KyleList import KyleList
 from .mcts import MCTS
-import traceback
+
 
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(suppress=True)
@@ -39,368 +41,24 @@ np.set_printoptions(suppress=True)
 torch.set_printoptions(edgeitems=sys.maxsize)
 
 
-
-class Message:
-    def __init__(self):
-        pass
-
-
-class NetworkInfo(Message):
-    def __init__(self, stateDict, version):
-        self.stateDict = stateDict
-        self.version = version
-
-
-class LearnReport(Message):
-    def __init__(self, loss=0, steps=0, drops=0):
-        self.loss = loss
-        self.steps = steps
-        self.drops = drops
-
-
-class EnvReport(Message):
-    def __init__(self):
-        self.rewards = 0
-
-
-class Action(object):
-    def __init__(self, index, mask, prediction):
-        self.index = index
-        self.mask = mask
-        self.prediction = prediction
-
-    def __int__(self):
-        return self.index
-
-    @property
-    def log(self):
-        # https://github.com/pytorch/pytorch/blob/master/torch/distributions/utils.py#L72
-        eps = torch.finfo(torch.float).eps
-        prob = np.array([p if self.mask[i] else 0 for i,
-                         p in enumerate(self.prediction)])
-        prob = prob / prob.sum()
-        prob = min(1-eps, max(eps, self.prediction[self.index]))
-        return math.log(prob)
-
-
-class EpochManager:
-    def __init__(self):
-        self.num = 0
-        self.epoch = None
-        self.history = []
-        self.eventHandlers = {}
-
-    def on(self, eventName, handler):
-        if eventName not in self.eventHandlers:
-            self.eventHandlers[eventName] = []
-        self.eventHandlers[eventName].append(handler)
-
-    def emit(self, eventName):
-        if eventName not in self.eventHandlers:
-            return
-        for handler in self.eventHandlers[eventName]:
-            handler()
-
-    def start(self, num):
-        self.epoch = Epoch().start(num)
-        self.num += 1
-        return self
-
-    def restart(self):
-        self.history.append(self.epoch)
-        self.emit("restart")
-        self.start(self.epoch.target_episodes)
-        return self
-
-    def add(self, reports):
-        self.epoch.add(reports)
-        self.emit("add")
-        return self
-
-    def trained(self, loss, steps):
-        self.epoch.trained(loss, steps)
-        self.emit("trained")
-        if self.epoch.isEnd:
-            self.restart()
-        return self
-
-
-class Epoch:
-    def __init__(self):
-        self.target_episodes = 0
-        self.steps: int = 0
-        self.drops: int = 0
-        self.rewards: float = 0
-        self.total_loss: float = 0
-        self.epoch_start_time: int = 0
-        self.epoch_end_time: int = 0
-        self.episodes = 0
-
-        # for stats
-        # self.history = collections.deque(maxlen=target_episodes)
-        self.bestRewards = -math.inf
-        self.totalRewards = 0
-        self.envs = 0
-
-    def start(self, target_episodes):
-        self.epoch_start_time = time.perf_counter()
-        self.target_episodes = target_episodes
-        return self
-
-    def end(self):
-        self.epoch_end_time = time.perf_counter()
-        return self
-
-    @property
-    def hitRate(self):
-        return self.steps / (self.steps + self.drops) if (self.steps + self.drops) > 0 else math.nan
-
-    @property
-    def isEnd(self):
-        return self.epoch_end_time > 0
-
-    @property
-    def progress(self):
-        return self.episodes / self.target_episodes
-
-    @property
-    def duration(self):
-        return (self.epoch_end_time if self.epoch_end_time > 0 else time.perf_counter()) - self.epoch_start_time
-
-    @property
-    def loss(self):
-        return self.total_loss / self.steps if self.steps > 0 else 0
-
-    @property
-    def durationPerEpisode(self):
-        return self.duration / self.episodes if self.episodes > 0 else math.inf
-
-    @property
-    def estimateDuration(self):
-        return self.target_episodes * self.durationPerEpisode
-
-    @property
-    def avgRewards(self):
-        return self.totalRewards / self.envs if self.envs > 0 else math.nan
-
-    def add(self, reports):
-        for report in reports:
-            if report.rewards > self.bestRewards:
-                self.bestRewards = report.rewards
-            self.totalRewards += report.rewards
-            self.envs += 1
-            # self.history.append(report)
-        return self
-
-    def trained(self, loss, steps):
-        self.total_loss += loss * steps
-        self.steps += steps
-        self.episodes += 1
-        if self.episodes >= self.target_episodes:
-            self.end()
-        return self
-
-
-class ConvLayers(nn.Module):
-    def __init__(self, inputShape, hidden_size):
-        super().__init__()
-        if min(inputShape[1], inputShape[2]) < 20:
-            # small CNN
-            self.layers = nn.Sequential(
-                nn.Conv2d(inputShape[0], 16, kernel_size=3,
-                          stride=1, padding=1),
-                nn.LeakyReLU(),
-                # nn.BatchNorm2d(16),
-                nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
-                nn.LeakyReLU(),
-                # nn.BatchNorm2d(32),
-                nn.Flatten(),
-                nn.Linear(32 * inputShape[1] * inputShape[2], hidden_size),
-                nn.LeakyReLU())
-                # nn.BatchNorm1d(hidden_size))
-        else:
-            self.layers = nn.Sequential(
-                # [C, H, W] -> [32, H, W]
-                nn.Conv2d(inputShape[0], 32, kernel_size=8, stride=4),
-                nn.LeakyReLU(),
-                nn.Conv2d(32, 64, kernel_size=4, stride=2),
-                nn.LeakyReLU(),
-                nn.Conv2d(64, 64, kernel_size=3, stride=1),
-                nn.LeakyReLU(),
-                # [64, H, W] -> [64 * H * W]
-                nn.Flatten(),
-                nn.Linear(64 * inputShape[1] * inputShape[2], hidden_size),
-                nn.LeakyReLU())
-        self.num_output = hidden_size
-
-    def forward(self, x):
-        # x = x.permute(0, 3, 1, 2)  # [B, H, W, C] => [B, C, H, W]
-        return self.layers(x)
-
-
-class FCLayers(nn.Module):
-    def __init__(self, n_inputs, hidden_size, num_layers=1, activator=nn.Tanh):
-        super().__init__()
-        self.layers = nn.ModuleList()
-        for i in range(num_layers):
-            in_nodes = n_inputs if i == 0 else hidden_size
-            self.layers.append(nn.Linear(in_nodes, hidden_size))
-            self.layers.append(activator())
-        self.num_output = hidden_size
-
-    def forward(self, x):
-        for m in self.layers:
-            x = m(x)
-        return x
-
-
-class BodyLayers(nn.Module):
-    def __init__(self, inputShape, hidden_nodes):
-        super().__init__()
-        if type(inputShape) is tuple and len(inputShape) == 3:
-            self.layers = ConvLayers(inputShape, hidden_nodes)
-        else:
-            if type(inputShape) is tuple and len(inputShape) == 1:
-                inputShape = inputShape[0]
-            self.layers = FCLayers(inputShape, hidden_nodes, num_layers=3)
-        self.num_output = hidden_nodes
-            
-    def forward(self, x):
-        return self.layers(x)
-
-
-class Network(nn.Module):
-    def __init__(self, inputShape, n_outputs, name="network"):
-        super().__init__()
-        self.name = name
-        self.optimizer = None
-        self.version: int = 1
-        self.info: NetworkInfo = None
-
-    def buildOptimizer(self):
-        raise NotImplementedError
-
-    @staticmethod
-    def initWeight(m):
-        if type(m) == nn.GRU:
-            # https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail/blob/master/a2c_ppo_acktr/model.py#L91
-            for key, value in m.named_parameters():
-                if 'weight' in key:
-                    # print("initializing:", type(m).__name__, key)
-                    nn.init.orthogonal_(value)
-                elif 'bias' in key:
-                    nn.init.constant_(value, 0)
-        elif type(m) in [nn.Linear, nn.Conv2d]:
-            # print("initializing:", type(m).__name__)
-            nn.init.orthogonal_(m.weight)
-            nn.init.constant_(m.bias, 0)
-
-    def initWeights(self):
-        self.apply(Network.initWeight)
-
-    def _updateStateDict(self):
-        if self.info is None or self.info.version != self.version:
-            # print("Update Cache", self.version)
-            stateDict = self.state_dict()
-            for key, value in stateDict.items():
-                stateDict[key] = value.cpu()  # .detach().numpy()
-            self.info = NetworkInfo(stateDict, self.version)
-
-    def getInfo(self) -> NetworkInfo:
-        self._updateStateDict()
-        return self.info
-
-    def loadInfo(self, info: NetworkInfo):
-        stateDict = info.stateDict
-        # for key, value in stateDict.items():
-        #     stateDict[key] = torch.from_numpy(value)
-        self.load_state_dict(stateDict)
-        self.version = info.version
-
-    def isNewer(self, info: NetworkInfo):
-        return info.version > self.version
-
-class ICMNetwork(Network):
-    def __init__(self, inputShape, output_size):
-        super().__init__(inputShape, output_size)
-
-        hidden_nodes = 256
-        self.output_size = output_size
-
-        self.feature = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes),
-            nn.Linear(hidden_nodes, hidden_nodes))
-        
-        self.inverseNet = nn.Sequential(
-            nn.Linear(hidden_nodes * 2, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, output_size)
-        )
-        
-        self.forwardNet = nn.Sequential(
-            nn.Linear(output_size + hidden_nodes, hidden_nodes),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_nodes, hidden_nodes),
-        )
-
-        self.initWeights()
-
-    def buildOptimizer(self, learningRate):
-        # self.optimizer = optim.SGD(self.parameters(), lr=learningRate * 100, momentum=0.9)
-        self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
-        return self
-
-    def forward(self, state, next_state, action):
-        action = F.one_hot(action, self.output_size).to(action.device)
-        encode_state = self.feature(state)
-        encode_next_state = self.feature(next_state)
-        pred_action = self.inverseNet(torch.cat((encode_state, encode_next_state), 1))
-        pred_next_state_feature = self.forwardNet(torch.cat((encode_state, action), 1))
-        return encode_next_state, pred_next_state_feature, pred_action
-
-class GRULayers(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers=1, bidirectional=False, dropout=0):
-        super().__init__()
-        self.gru = nn.GRU(input_size, hidden_size, num_layers=num_layers, bidirectional=bidirectional, dropout=dropout)
-
-    @property
-    def num_directions(self):
-        return 2 if self.gru.bidirectional else 1
-
-    @property
-    def num_output(self):
-        return self.gru.hidden_size * self.num_directions
-
-    def getInitHiddenState(self, device):
-        return torch.zeros((self.gru.num_layers * self.num_directions, self.gru.hidden_size), device=device)
-
-    def forward(self, x, h):
-        # x: (B, N) -> (1, B, N)
-        # h: (B, L, H) -> (L, B, H)
-        x, h = self.gru(x.unsqueeze(0), h.transpose(0, 1).contiguous())
-        # x: (1, B, N) -> (B, N)
-        # h: (L, B, H) -> (B, L, H)
-        return x.squeeze(0), h.transpose(0, 1)
-
-
-class PPONetwork(Network):
+class AlphaZeroNetwork(Network):
     def __init__(self, inputShape, n_outputs):
         super().__init__(inputShape, n_outputs)
 
-        self.eps = torch.finfo(torch.float).eps
         hidden_nodes = 256
         # semi_hidden_nodes = hidden_nodes // 2
         self.body = BodyLayers(inputShape, hidden_nodes)
-
-        self.gru = GRULayers(self.body.num_output, hidden_nodes, 
-            num_layers=2, bidirectional=True, dropout=0.2)
 
         # Define policy head
         self.policy = nn.Linear(self.body.num_output, n_outputs)
 
         # Define value head
-        self.value = nn.Linear(self.body.num_output, 1)
+        self.value = nn.Sequential(
+            nn.Linear(self.body.num_output, 1),
+            nn.Tanh())
 
+        # self.value = nn.Linear(self.body.num_output, 1)
+        
         self.initWeights()
 
     def buildOptimizer(self, learningRate):
@@ -408,13 +66,9 @@ class PPONetwork(Network):
         self.optimizer = optim.Adam(self.parameters(), lr=learningRate)
         return self
 
-    def getInitHiddenState(self, device):
-        return self.gru.getInitHiddenState(device)
-
-    def _body(self, x, h):
+    def _body(self, x):
         x = self.body(x)
-        # x, h = self.gru(x, h)
-        return x, h
+        return x
 
     def _policy(self, x, m=None):
         x = self.policy(x)
@@ -423,164 +77,90 @@ class PPONetwork(Network):
         x = F.softmax(x, dim=1)
         return x
 
-    def forward(self, x, h, m=None):
-        x, h = self._body(x, h)
-        return self._policy(x, m), self.value(x), h
+    def forward(self, x, m=None):
+        x = self._body(x)
+        return self._policy(x, m), self.value(x)
 
-    def getPolicy(self, x, h, m=None):
-        x, h = self._body(x, h)
-        return self._policy(x, m), h
+    def getPolicy(self, x, m=None):
+        x = self._body(x)
+        return self._policy(x, m)
 
-    def getValue(self, x, h):
-        x, h = self._body(x, h)
-        return self.value(x), h
+    def getValue(self, x):
+        x = self._body(x)
+        return self.value(x)
 
-
-class Config:
-    def __init__(self, sampleSize=512, batchSize=32, learningRate=3e-4):
-        self.sampleSize = sampleSize
-        self.batchSize = batchSize
-        self.learningRate = learningRate
-
-
-class PPOConfig(Config):
-    def __init__(self, sampleSize=32, batchSize=1024, learningRate=1e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+class AlphaZeroConfig(Config):
+    def __init__(self, sampleSize=32, batchSize=1024, learningRate=1e-3, simulations=100):
         super().__init__(sampleSize, batchSize, learningRate)
-        self.gamma = gamma
-        self.epsClip = epsClip
-        self.gaeCoeff = gaeCoeff
+        self.simulations = simulations
 
 
-C = TypeVar('C')
-
-
-class Algo(Generic[C]):
-    def __init__(self, name, config: C):
-        self.name = name
+class AlphaZeroHandler:
+    def __init__(self, config, env, role, device):
         self.config = config
-        self.device = torch.device(
-            "cuda:0" if torch.cuda.is_available() else "cpu")
+        self.env = env
+        self.network = AlphaZeroNetwork(env.observationShape, env.actionSpace)
+        self.device = device
+        self.network.to(self.device)
+        self.mcts = MCTS(self.getProb, n_playout=self.config.simulations)
+        if role == Role.Trainer:
+            self.optimizer = self.network.buildOptimizer(self.config.learningRate)
 
-    def createNetwork(self, inputShape, n_outputs) -> Network:
-        raise NotImplementedError
+    def dump(self):
+        data = {}
+        stateDict = self.network.state_dict()
+        for key, value in stateDict.items():
+            stateDict[key] = value.cpu()  # .detach().numpy()
+        data["network"] = stateDict
+        return data
 
-    def getAction(self, network, state, mask, isTraining: bool, hiddenState=None) -> Tuple[Action, Any]:
-        raise NotImplementedError
+    def load(self, data):
+        self.network.load_state_dict(data["network"])
 
-    def learn(self, network: Network, memory):
-        raise NotImplementedError
+    def reset(self):
+        self.mcts.update_with_move(-1)
 
-
-class Iterator:
-    def __init__(self, iterable):
-        self.iterable = iterable
-        self.current = 0
-
-    def __iter__(self) -> Iterator:
-        return Iterator(self.iterable)
-
-    def __next__(self):
-        if self.current < len(self.iterable):
-            result = self.iterable[self.current]
-            self.current += 1
-            return result
-        self.current = 0
-        raise StopIteration
-
-T = TypeVar('T')
-S = TypeVar('S')
-
-
-class Memory(Generic[T]):
-    def __init__(self, iter: List[T]) -> None:
-        self.memory = np.array(iter)
-
-    def select(self, property: Callable[[T], S]) -> Memory[S]:
-        return Memory([property(x) for x in self.memory])
-
-    def toArray(self) -> np.array:
-        return self.memory
-
-    def toTensor(self, dtype: torch.dtype, device: torch.device) -> torch.tensor:
-        return torch.tensor(self.memory, dtype=dtype, device=device).detach()
-
-    def get(self, fromPos: int, num: int) -> Memory[T]:
-        return Memory(self.memory[fromPos:fromPos+num])
-
-    def mean(self) -> float:
-        return self.memory.mean()
-
-    def std(self) -> float:
-        return self.memory.std()
-
-    def size(self) -> int:
-        return len(self.memory)
-
-    def __sub__(self, other):
-        if isinstance(other, Memory):
-            other = other.memory
-        return Memory(self.memory - other)
-
-    def __truediv__(self, other):
-        return Memory(self.memory / other)
-
-    def __len__(self) -> int:
-        return len(self.memory)
-
-    def __getitem__(self, i: int) -> T:
-        return self.memory[i]
-
-    def __iter__(self) -> Iterator:
-        return Iterator(self)
-
-    def __str__(self):
-        return str(self.memory)
-
-
-
-class PPOAlgo(Algo[PPOConfig]):
-    def __init__(self, config=PPOConfig()):
-        super().__init__("PPO", config)
-
-    def createNetwork(self, inputShape, n_outputs) -> Network:
-        return PPONetwork(inputShape, n_outputs)
-
-    def createICMNetwork(self, inputShape, n_outputs) -> Network:
-        return ICMNetwork(inputShape, n_outputs)
-
-    def getProb(self, network, state, mask, isTraining: bool, hiddenState=None) -> Tuple[Action, Any]:
-        network.eval()
-        with torch.no_grad():
-            stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
-            maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
-            prob, value, nextHiddenState = network(stateTensor, hiddenState.unsqueeze(0), maskTensor)
-            return prob.squeeze(0).cpu().detach().numpy(), \
-                value.item(), \
-                nextHiddenState.squeeze(0)
-
-    def getAction(self, network, state, mask, isTraining: bool, hiddenState=None) -> Tuple[Action, Any]:
-        network.eval()
-        with torch.no_grad():
-            stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
-            maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
-            prediction, nextHiddenState = network.getPolicy(stateTensor, hiddenState.unsqueeze(0), maskTensor)
-            dist = torch.distributions.Categorical(probs=prediction)
-            index = dist.sample() if isTraining else dist.probs.argmax(dim=-1, keepdim=True)
-            return Action(
-                index=index.item(),
-                mask=mask,
-                prediction=prediction.squeeze(0).cpu().detach().numpy()
-            ), nextHiddenState.squeeze(0)
-
-    def preprocess(self, network, memory, rewardNormalizer):
-        pass
-
-    def learn(self, network: Network, icm: Network, memory: Memory[Transition], rewardNormalizer):
-        network.train()
-        icm.train()
+    def reportStep(self, action):
+        self.mcts.update_with_move(action)
         
-        network.optimizer.zero_grad()
-        icm.optimizer.zero_grad()
+    def getProb(self, env, isTraining: bool) -> Tuple[Action, Any]:
+        self.network.eval()
+        with torch.no_grad():
+            state = env.getState()
+            mask = env.getMask(state)
+            stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
+            maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
+            prob, value = self.network(stateTensor, maskTensor)
+            return prob.squeeze(0).cpu().detach().numpy(), \
+                value.item()
+
+    def getAction(self, env, isTraining: bool) -> Tuple[Action, Any]:
+        acts, probs = self.mcts.get_move_probs(env, isTraining, temp=1)
+        noise_probs = 0.75 * probs + 0.25 * np.random.dirichlet(0.3 * np.ones(len(probs)))
+        index = np.random.choice(len(probs), p=noise_probs)
+        prediction = np.zeros(self.env.actionSpace)
+        prediction[list(acts)] = probs
+        state = env.getState()
+        mask = env.getMask(state)
+        print(state[0] + state[1] * 2, acts, probs, index, "\n")
+        self.mcts.update_with_move(acts[index])
+        return Action(
+            index=acts[index],
+            mask=mask,
+            prediction=prediction)
+
+    def preprocess(self, memory):
+        with torch.no_grad():
+            lastValue = 0
+            for i in reversed(range(len(memory))):
+                transition = memory[i]
+                transition.reward = transition.reward + lastValue
+                lastValue = transition.reward
+
+    def learn(self, memory):
+        self.network.train()
+        
+        self.network.optimizer.zero_grad()
         batchSize = min(memory.size(), self.config.batchSize)
         n_miniBatch = memory.size() // batchSize
         totalLoss = 0
@@ -591,22 +171,20 @@ class PPOAlgo(Algo[PPOConfig]):
 
             # Get Tensors
             states = minibatch.select(lambda x: x.state).toTensor(torch.float, self.device)
-            # nextStates = minibatch.select(lambda x: x.nextState).toTensor(torch.float, self.device)
-            # actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
             masks = minibatch.select(lambda x: x.action.mask).toTensor(torch.bool, self.device)
             batch_probs = minibatch.select(lambda x: x.action.prediction).toTensor(torch.float, self.device)
             batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
-            # batch_returns = returns.get(startIndex, batchSize).toTensor(torch.float, self.device)
-            # batch_values = minibatch.select(lambda x: x.value).toTensor(torch.float, self.device)
-            hiddenStates = minibatch.select(lambda x: x.hiddenState).toTensor(torch.float, self.device)
-            # print("hiddenStates:", hiddenStates[0])
 
-            probs, values, _ = network(states, hiddenStates, masks)
+            probs, values = self.network(states, masks)
 
             values = values.squeeze(-1)
+            eps = torch.finfo(torch.float).eps
+            log_probs = probs.clamp(eps, 1 - eps).log()
 
-            policy_loss = -(batch_probs * (1e-10 + probs).log()).sum(-1).mean()
+            # minimize policy loss using entropy like formula: mean(sum(-p*logp))
+            policy_loss = (-batch_probs * log_probs).sum(-1).mean()
             # print((batch_probs * probs.log()).sum(-1))
+            print(batch_returns, values)
             # MSE Loss
             value_loss = (batch_returns - values).pow(2).mean()
 
@@ -622,472 +200,16 @@ class PPOAlgo(Algo[PPOConfig]):
 
         # Chip grad with norm
         # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
-        nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
-        nn.utils.clip_grad.clip_grad_norm_(icm.parameters(), 0.5)
+        nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
 
-        network.optimizer.step()
-        icm.optimizer.step()
-        network.version += 1
+        self.network.optimizer.step()
 
         return totalLoss
 
-class Base:
-    def __init__(self, algo, gameFactory, sync):
-        self.algo = algo
-        self.algo.device = sync.getDevice()
-        self.gameFactory = gameFactory
-        self.sync = sync
-        self.networks = []
-        self.weightPath = "./weights/"
-        self.lastSave = 0
-
-    def save(self) -> None:
-        try:
-            path = self.getSavePath(True)
-            data = {
-                "totalSteps": self.sync.totalSteps.value,
-                "totalEpisodes": self.sync.totalEpisodes.value
-            }
-            for network in self.networks:
-                data[network.name] = network.state_dict()
-            torch.save(data, path)
-            self.lastSave = time.perf_counter()
-            # print("Saved Weights.")
-        except Exception as e:
-            print("Failed to save.", e)
-
-    def load(self) -> None:
-        try:
-            path = self.getSavePath()
-            print("Loading from path: ", path)
-            data = torch.load(path, map_location='cpu')
-            # data = torch.load(path, map_location=self.device)
-            self.sync.totalSteps.value = int(
-                data["totalSteps"]) if "totalSteps" in data else 0
-            self.sync.totalEpisodes.value = int(
-                data["totalEpisodes"]) if "totalEpisodes" in data else 0
-            for network in self.networks:
-                print(f"{network.name} weights loaded.")
-                network.load_state_dict(data[network.name])
-            print(
-                f"Trained: {Function.humanize(self.sync.totalEpisodes.value)} episodes, {Function.humanize(self.sync.totalSteps.value)} steps")
-        except Exception as e:
-            print("Failed to load.", e)
-
-    def getSavePath(self, makeDir: bool = False) -> str:
-        path = os.path.join(
-            self.weightPath, self.algo.name.lower(), self.gameFactory.name + ".h5")
-        if makeDir:
-            Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
-        return path
-
-
-class Trainer(Base):
-    def __init__(self, algo: Algo, gameFactory: GameFactory, sync):
-        super().__init__(algo, gameFactory, sync)
-        self.evaluators: List[EvaluatorService] = []
-        self.network = None
-        self.icm = None
-        self.rewardNormalizer = StdNormalizer()
-
-    def learn(self, experience):
-        try:
-            steps = len(experience)
-            for _ in range(5):
-                loss = self.algo.learn(self.network, self.icm, experience, self.rewardNormalizer)
-                # learn report handling
-                self.sync.epochManager.trained(loss, steps)
-                self.sync.totalEpisodes.value += 1
-                self.sync.totalSteps.value += steps
-        except Exception as e:
-            traceback.print_exc()
-            sys.exit(0)
-
-    def pushNewNetwork(self):
-        networkInfo = self.network.getInfo()
-        if networkInfo.version > self.sync.latestVersion.value:
-            self.sync.latestStateDict.update(networkInfo.stateDict)
-            self.sync.latestVersion.value = networkInfo.version
-
-    async def start(self, episodes=1000, load=False):
-        env = self.gameFactory.get()
-
-        # Create Evaluators
-        evaluators = []
-        n_workers = max(torch.cuda.device_count(), 1)
-        for _ in range(n_workers):
-            evaluator = EvaluatorService(
-                self.algo, self.gameFactory, self.sync).start()
-            evaluators.append(evaluator)
-
-        self.evaluators = np.array(evaluators)
-
-        self.network = self.algo.createNetwork(
-            env.observationShape, env.actionSpace).buildOptimizer(
-            self.algo.config.learningRate).to(self.algo.device)
-        self.icm = self.algo.createICMNetwork(
-            env.observationShape, env.actionSpace).buildOptimizer(
-            self.algo.config.learningRate).to(self.algo.device)
-        self.networks.append(self.network)
-        self.networks.append(self.icm)
-        if load:
-            self.load()
-        n_samples = self.algo.config.sampleSize * n_workers
-        evaulator_samples = self.algo.config.sampleSize
-
-        self.sync.epochManager.start(episodes)
-        self.lastSave = time.perf_counter()
-        while True:
-            # push new network
-            self.pushNewNetwork()
-            # collect samples
-            experience = collections.deque(maxlen=n_samples)
-            promises = np.array([x.call("roll", (evaulator_samples,))
-                                 for x in self.evaluators])
-            # https://docs.python.org/3/library/asyncio-task.html#asyncio.as_completed
-            for promise in asyncio.as_completed(promises):
-                response = await promise  # earliest result
-                for e in response.result:
-                    # print(type(e))
-                    e = Memory[Transition](e)
-                    self.algo.preprocess(self.network, e, self.rewardNormalizer)
-                    experience.extend(e)
-            # print("learn")
-            # learn
-            experience = Memory[Transition](experience)
-            self.learn(experience)
-
-            if time.perf_counter() - self.lastSave > 60:
-                self.save()
-
-
-class Evaluator(Base):
-    def __init__(self, algo: Algo, gameFactory, sync):
-        super().__init__(algo, gameFactory, sync)
-        self.env = gameFactory.get()
-        # self.algo.device = torch.device("cpu")
-        # self.algo.device = sync.getDevice()
-        self.network = self.algo.createNetwork(
-            self.env.observationShape, self.env.actionSpace).to(self.algo.device)
-        self.network.version = -1
-        self.networks.append(self.network)
-
-        self.playerCount = self.env.getPlayerCount()
-        self.mcts = MCTS(lambda s, m, x, y: self.algo.getProb(self.network, s, m, x, y))
-        self.agents = np.array(
-            [Agent(i + 1, self.env, self.network, algo, self.mcts) for i in range(self.playerCount)],)
-        self.started = False
-
-        self.reports: List[EnvReport] = []
-
-    def updateNetwork(self):
-        if self.network.version < self.sync.latestVersion.value:
-            networkInfo = NetworkInfo(
-                self.sync.latestStateDict, self.sync.latestVersion.value)
-            self.network.loadInfo(networkInfo)
-
-    def loop(self, num=0):
-        # auto reset
-        if not self.started:
-            self.env.reset()
-            self.started = True
-        elif self.env.isDone():
-            # reports = []
-            for agent in self.agents:
-                self.reports.append(agent.done())
-            self.env.reset()
-            self.mcts.update_with_move(-1)
-
-        # memoryCount = min([len(x.memory) for x in self.agents])
-        if num > 0:
-            memoryCount = min([len(x.memory) for x in self.agents])
-            return memoryCount < num
-        else:
-            return True
-
-    def flushReports(self):
-        if len(self.reports) > 0:
-            self.sync.epochManager.add(self.reports)
-            self.reports = []
-
-    def roll(self, num):
-        self.updateNetwork()
-        self.generateTransitions(num)
-        return [x.memory for x in self.agents]
-
-    def generateTransitions(self, num):
-        for agent in self.agents:
-            agent.resetMemory(num)
-        while self.loop(num):
-            for agent in self.agents:
-                agent.step(True)
-        self.flushReports()
-
-    async def eval(self):
-        self.load()
-        self.sync.epochManager.start(1)
-        while self.loop():
-            for agent in self.agents:
-                if agent.id == 1:
-                    player = self.env.getPlayer(agent.id)
-                    if not self.env.isDone() and player.canStep():
-                        while True:
-                            try:
-                                row, col = map(int, input(
-                                    "Your action: ").split())
-                                pos = row * self.env.size + col
-                                player.step(pos)
-                                break
-                            except Exception as e:
-                                print(e)
-                else:
-                    agent.step(False)
-                # os.system('cls')
-                print(self.env.getState(1).astype(int), "\n")
-                await asyncio.sleep(0.5)
-            if self.env.isDone():
-                print("Done:")
-                for agent in self.agents:
-                    print(agent.id, self.env.getDoneReward(agent.id))
-                await asyncio.sleep(3)
-            self.flushReports()
-
-
-class Agent:
-    def __init__(self, id, env, network, algo, mcts):
-        self.id = id
-        self.env = env
-        self.memory = None
-        self.report = EnvReport()
-        self.network = network
-        self.algo = algo
-        self.player = self.env.getPlayer(self.id)
-        self.hiddenState = self.network.getInitHiddenState(self.algo.device)
-        self.mcts = mcts
-
-    def step(self, isTraining=True) -> None:
-        if not self.env.isDone() and self.player.canStep():
-            state = self.player.getState()
-            print(state)
-            mask = self.player.getMask(state)
-            print(mask)
-            hiddenState = self.hiddenState
-
-            print(self.id, "thinking")
-            acts, probs = self.mcts.get_move_probs(self.player, isTraining, hiddenState)
-            index = np.random.choice(len(probs), p=probs),
-            prediction = np.zeros(self.env.actionSpace)
-            prediction[list(acts)] = probs
-            print(self.player.getState(), acts, probs, index)
-            action = Action(
-                index=acts[index[0]],
-                mask=mask,
-                prediction=prediction)
-            nextHiddenState = hiddenState
-            self.mcts.update_with_move(acts[index[0]])
-            
-            # action, nextHiddenState = self.algo.getAction(
-            #     self.network, state, mask, isTraining, hiddenState)
-
-            # if (hiddenState == 0).all():
-            #     print("Step:", hiddenState, nextHiddenState)
-            # print("Action:", action.index, action.prediction[action.index])
-            nextState, reward, done = self.player.step(action.index)
-            if self.memory is not None:
-                transition = Transition(
-                    state=state,
-                    hiddenState=hiddenState.cpu().detach().numpy(),
-                    action=action,
-                    reward=reward,
-                    nextState=nextState,
-                    nextHiddenState=nextHiddenState.cpu().detach().numpy(),
-                    done=done)
-                self.memory.append(transition)
-            self.hiddenState = nextHiddenState
-            # action reward
-            self.report.rewards += reward
-
-    def done(self):
-        report = self.report
-
-        # game episode reward
-        doneReward = self.player.getDoneReward()
-        # set last memory to done, as we may not be the last one to take action.
-        # do nothing if last memory has been processed.
-        if self.memory is not None and len(self.memory) > 0:
-            lastMemory = self.memory[-1]
-            lastMemory.done = True
-            lastMemory.reward += doneReward
-        report.rewards += doneReward
-
-        # reset env variables
-        self.hiddenState = self.network.getInitHiddenState(self.algo.device)
-        self.report = EnvReport()
-        return report
-
-    def resetMemory(self, num):
-        self.memory = collections.deque(maxlen=num)
-
-
-class RL:
-    def __init__(self, algo: Algo, gameFactory: GameFactory):
-        self.algo = algo
-        self.gameFactory = gameFactory
-
-        self.lastPrint: float = 0
-
-        mp.set_start_method("spawn")
-        self.sync = SyncContext()
-
-    def epochManagerRestartHandler(self):
-        self.update(0, "\n")
-        # pass
-
-    def epochManagerTrainedHandler(self):
-        self.update(0)
-
-    def epochManagerAddHandler(self):
-        self.update(0)
-
-    async def run(self, train: bool = True, load: bool = False, episodes: int = 1000, delay: float = 0) -> None:
-        self.delay = delay
-        self.isTraining = train
-        self.lastSave = time.perf_counter()
-        self.workingPath = os.path.dirname(__main__.__file__)
-        # multiprocessing.connection.BUFSIZE = 2 ** 24
-
-        print(f"Train: {self.isTraining}")
-        if self.isTraining:
-            trainer = TrainerProcess(
-                self.algo, self.gameFactory, self.sync, episodes, load).start()
-        else:
-            await Evaluator(self.algo, self.gameFactory, self.sync).eval()
-
-        self.sync.epochManager.on("restart", self.epochManagerRestartHandler)
-        # self.sync.epochManager.on("trained", self.epochManagerTrainedHandler)
-        # self.sync.epochManager.on("add", self.epochManagerAddHandler)
-
-        while True:
-            self.update()
-            await asyncio.sleep(0.01)
-
-    def update(self, freq=.1, end="\b\r") -> None:
-        if time.perf_counter() - self.lastPrint < freq:
-            return
-        epoch = self.sync.epochManager.epoch
-        if epoch is not None:
-            print(f"#{self.sync.epochManager.num} {Function.humanize(epoch.episodes):>6} {epoch.hitRate:>7.2%} | " +
-                  f'Loss: {Function.humanize(epoch.loss):>6}/ep | ' +
-                  f'Env: {Function.humanize(epoch.envs):>6} | ' +
-                  f'Best: {Function.humanize(epoch.bestRewards):>6}, Avg: {Function.humanize(epoch.avgRewards):>6} | ' +
-                  f'Steps: {Function.humanize(epoch.steps / epoch.duration):>6}/s | Episodes: {1 / epoch.durationPerEpisode:>6.2f}/s | ' +
-                  f' {Function.humanizeTime(epoch.duration):>6} > {Function.humanizeTime(epoch.estimateDuration):}' +
-                  '      ',
-                  end=end)
-            self.lastPrint = time.perf_counter()
-
-
-class MethodCallRequest(Message):
-    def __init__(self, method, args):
-        self.method = method
-        self.args = args
-
-
-class MethodCallResult(Message):
-    def __init__(self, result):
-        self.result = result
-
-
-class Promise:
-    def __init__(self):
-        self.result = None
-
-
-class Service(PipedProcess):
-    def __init__(self, factory):
-        super().__init__()
-        self.factory = factory
-        self.isRunning = True
-        self.callPipes = Pipe(True)
-        self.eventPipes = Pipe(False)
-
-    async def asyncRun(self, conn):
-        # print("Evaluator", os.getpid(), conn)
-        self.object = self.factory()
-        while self.isRunning:
-            if self.callPipes[1].poll():
-                message = self.callPipes[1].recv()
-                if isinstance(message, MethodCallRequest):
-                    # print("MMethodCallRequest", message.method)
-                    result = getattr(self.object, message.method)(
-                        *message.args)
-                    if inspect.isawaitable(result):
-                        result = await result
-                    self.callPipes[1].send(MethodCallResult(result))
-            await asyncio.sleep(0)
-
-    async def _waitResponse(self, future):
-        while not self.callPipes[0].poll():
-            await asyncio.sleep(0)
-        message = self.callPipes[0].recv()
-        future.set_result(message)
-
-    def call(self, method, args=()):
-        # print("Call", method)
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        self.callPipes[0].send(MethodCallRequest(method, args))
-        loop.create_task(self._waitResponse(future))
-        return future
-
-
-class EvaluatorService(Service):
-    def __init__(self, algo, gameFactory, sync):
-        self.algo = algo
-        self.gameFactory = gameFactory
-        self.sync = sync
-        super().__init__(self.factory)
-
-    def factory(self):
-        return Evaluator(self.algo, self.gameFactory, self.sync)
-
-
-class TrainerProcess(Process):
-    def __init__(self, algo, gameFactory, sync, episodes, load):
-        super().__init__()
-        self.algo = algo
-        self.gameFactory = gameFactory
-        self.sync = sync
-        self.episodes = episodes
-        self.load = load
-
-    async def asyncRun(self):
-        # print("Trainer", os.getpid())
-        await Trainer(self.algo, self.gameFactory, self.sync).start(self.episodes, self.load)
-
-class SyncContext:
-    # EpochProxy = Proxy(Epoch)
-    EpochManagerProxy = Proxy(EpochManager)
-
-    def __init__(self):
-        # manager = mp.Manager()
-        # SyncManager.register('Epoch', Epoch, self.EpochProxy)
-        SyncManager.register('EpochManager', EpochManager, self.EpochManagerProxy)
-        manager = SyncManager()
-        manager.start()
-
-        self.latestStateDict = manager.dict()
-        self.latestVersion = manager.Value('i', -1)
-        self.deviceIndex = manager.Value('i', 0)
-        self.totalEpisodes = manager.Value('i', 0)
-        self.totalSteps = manager.Value('i', 0)
-        self.epochManager = manager.EpochManager()
-        # self.epoch = manager.Epoch()
-
-    def getDevice(self) -> torch.device:
-        deviceName = "cpu"
-        if torch.cuda.is_available():
-            cudaId = self.deviceIndex.value % torch.cuda.device_count()
-            deviceName = "cuda:" + str(cudaId)
-            self.deviceIndex.value = self.deviceIndex.value + 1
-        return torch.device(deviceName)
+        
+class AlphaZeroAlgo(Algo[AlphaZeroConfig]):
+    def __init__(self, config=AlphaZeroConfig()):
+        super().__init__("AlphaZero", config)
+
+    def createHandler(self, env, role, device):
+        return AlphaZeroHandler(self.config, env, role, device)

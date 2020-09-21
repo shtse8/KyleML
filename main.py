@@ -60,7 +60,7 @@ async def main():
     # if args.load or not args.train:
     #     agent.load()
 
-    rl = RL(PPOAlgo(), gameFactory)
+    rl = RL(AlphaZeroAlgo(), gameFactory)
     await rl.run(train=args.train, load=args.load, delay=args.delay)
 
 

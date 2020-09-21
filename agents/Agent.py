@@ -26,7 +26,6 @@ from utils.multiprocessing import Proxy
 from utils.Network import Network
 from utils.Normalizer import RangeNormalizer, StdNormalizer
 from utils.KyleList import KyleList
-from .mcts import MCTS
 
 class TensorWrapper:
     def __init__(self, tensor):
@@ -45,7 +44,7 @@ class TensorWrapper:
         return self.tensor.item()
 
 class Action:
-    def __init__(self, index, probs, value):
+    def __init__(self, index=None, probs=None, value=None):
         self.index = index
         self.probs = probs
         self.value = value

@@ -368,11 +368,12 @@ class Trainer(Base):
 
     def learn(self, experience):
         steps = len(experience)
-        loss = self.handler.learn(experience)
-        # learn report handling
-        self.sync.epochManager.trained(loss, steps)
-        self.sync.totalEpisodes.value += 1
-        self.sync.totalSteps.value += steps
+        losses = self.handler.learn(experience)
+        for loss in losses:
+            # learn report handling
+            self.sync.epochManager.trained(loss, steps)
+            self.sync.totalEpisodes.value += 1
+            self.sync.totalSteps.value += steps
 
     def pushNewNetwork(self):
         data = self.handler.dump()
@@ -546,13 +547,14 @@ class Agent:
             reward = self.env.step(action.index)
             # print(reward)
             if self.memory is not None:
-                nextTransition = Transition()
-                nextTransition.info = self.handler.getInfo()
+                # nextTransition = Transition()
+                # nextTransition.info = self.handler.getInfo()
                 self.transition.action = action
                 self.transition.reward = reward
-                self.transition.next = nextTransition
+                self.transition.next = self.handler.getInfo()
                 self.memory.append(self.transition)
-                self.transition = nextTransition
+                self.transition = Transition()
+                # self.transition = nextTransition
             # action reward
             self.report.rewards += reward
 
@@ -565,7 +567,7 @@ class Agent:
         # do nothing if last memory has been processed.
         if self.memory is not None and len(self.memory) > 0:
             lastMemory = self.memory[-1]
-            lastMemory.next.info.done = True
+            lastMemory.next.done = True
             lastMemory.reward += doneReward
         report.rewards += doneReward
 

@@ -43,6 +43,9 @@ class TensorWrapper:
     def asItem(self):
         return self.tensor.item()
 
+    def __iter__(self):
+        return self.tensor.__iter__()
+
 class Action:
     def __init__(self, index=None, probs=None, value=None):
         self.index = index
@@ -394,6 +397,7 @@ class Trainer(Base):
         if load:
             self.load()
         n_samples = self.algo.config.sampleSize * n_workers
+        n_samples = 10000
         evaulator_samples = self.algo.config.sampleSize
 
         self.sync.epochManager.start(episodes)
@@ -535,25 +539,19 @@ class Agent:
         self.memory = None
         self.report = EnvReport()
         self.handler = handler.getAgentHandler(self.env)
-        self.transition = None
 
     def step(self, isTraining=True) -> None:
         if not self.env.isDone() and self.env.canStep():
-            if self.transition is None:
-                self.transition = Transition()
-            self.transition.info = self.handler.getInfo()
+            transition = Transition()
+            transition.info = self.handler.getInfo()
             action = self.handler.getAction(isTraining)
             reward = self.env.step(action.index)
             # print(reward)
             if self.memory is not None:
-                # nextTransition = Transition()
-                # nextTransition.info = self.handler.getInfo()
-                self.transition.action = action
-                self.transition.reward = reward
-                self.transition.next = self.handler.getInfo()
-                self.memory.append(self.transition)
-                self.transition = Transition()
-                # self.transition = nextTransition
+                transition.action = action
+                transition.reward = reward
+                transition.next = self.handler.getInfo()
+                self.memory.append(transition)
             # action reward
             self.report.rewards += reward
 

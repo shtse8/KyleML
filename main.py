@@ -11,6 +11,7 @@ import asyncio
 from games.GameFactory import GameFactory
 from agents.Agent import RL
 from agents.PPOAgent import PPOAlgo
+from agents.KyleAgent import KyleAlgo
 from agents.AlphaZeroAgent import AlphaZeroAlgo
 import torch
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -60,7 +61,7 @@ async def main():
     # if args.load or not args.train:
     #     agent.load()
 
-    rl = RL(AlphaZeroAlgo(), gameFactory)
+    rl = RL(KyleAlgo(), gameFactory)
     await rl.run(train=args.train, load=args.load, delay=args.delay)
 
 

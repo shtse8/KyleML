@@ -22,6 +22,9 @@ class KyleList(Generic[T]):
     def get(self, fromPos: int, num: int) -> KyleList[T]:
         return KyleList(self.array[fromPos:fromPos+num])
 
+    def sum(self) -> float:
+        return self.array.sum()
+
     def mean(self) -> float:
         return self.array.mean()
 

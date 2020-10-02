@@ -21,7 +21,7 @@ import sys
 import utils.Function as Function
 import traceback
 import copy
-
+import pickle
 from memories.Transition import Transition
 from games.GameFactory import GameFactory
 from multiprocessing.managers import NamespaceProxy, SyncManager
@@ -107,7 +107,7 @@ class KyleNetwork(Network):
         return policy, value, nextStates, nextMasks, nextDones
 
 class KyleConfig(Config):
-    def __init__(self, sampleSize=32, batchSize=1024, learningRate=1e-2, simulations=50):
+    def __init__(self, sampleSize=32, batchSize=1024, learningRate=1e-2, simulations=20):
         super().__init__(sampleSize, batchSize, learningRate)
         self.simulations = simulations
 
@@ -158,6 +158,7 @@ class KyleHandler(AlgoHandler):
         self.network = KyleNetwork(env.observationShape, env.actionSpace)
         self.network.to(self.device)
         self.mcts = MCTS(self, n_playout=self.config.simulations)
+        self.rewardNormalizer = StdNormalizer()
         if role == Role.Trainer:
             self.network.buildOptimizer(self.config.learningRate)
 
@@ -187,10 +188,12 @@ class KyleHandler(AlgoHandler):
     def dump(self):
         data = {}
         data["network"] = self._getStateDict(self.network)
+        data["rewardNormalizer"] = pickle.dumps(self.rewardNormalizer)
         return data
 
     def load(self, data):
         self.network.load_state_dict(data["network"])
+        self.rewardNormalizer = pickle.loads(data["rewardNormalizer"])
 
     def reset(self):
         self.mcts.update_with_move(-1)
@@ -199,7 +202,9 @@ class KyleHandler(AlgoHandler):
         self.mcts.update_with_move(action)
         
     def preprocess(self, memory):
-        totalScore = memory.select(lambda x: x.reward).sum()
+        returns = memory.select(lambda x: x.reward).toArray()
+        returns = self.rewardNormalizer.normalize(returns, update=True)
+        totalScore = returns.sum()
         for transition in memory:
             transition.reward = totalScore
 

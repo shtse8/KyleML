@@ -21,7 +21,7 @@ import sys
 import utils.Function as Function
 import traceback
 import copy
-
+import pickle
 from memories.Transition import Transition
 from games.GameFactory import GameFactory
 from multiprocessing.managers import NamespaceProxy, SyncManager
@@ -53,11 +53,10 @@ class AlphaZeroNetwork(Network):
         self.policy = nn.Linear(self.body.num_output, n_outputs)
 
         # Define value head
-        self.value = nn.Sequential(
-            nn.Linear(self.body.num_output, 1),
-            nn.Tanh())
-
-        # self.value = nn.Linear(self.body.num_output, 1)
+        # self.value = nn.Sequential(
+        #     nn.Linear(self.body.num_output, 1),
+        #     nn.Tanh())
+        self.value = nn.Linear(self.body.num_output, 1)
         
         self.initWeights()
 
@@ -90,7 +89,7 @@ class AlphaZeroNetwork(Network):
         return self.value(x)
 
 class AlphaZeroConfig(Config):
-    def __init__(self, sampleSize=32, batchSize=1024, learningRate=1e-3, simulations=100):
+    def __init__(self, sampleSize=32, batchSize=1024, learningRate=1e-3, simulations=20):
         super().__init__(sampleSize, batchSize, learningRate)
         self.simulations = simulations
 
@@ -116,7 +115,8 @@ class AgentHandler:
     def getAction(self, isTraining: bool):
         acts, probs = self.handler.mcts.get_move_probs(self.env, temp=1)
         if isTraining:
-            noise_probs = 0.75 * probs + 0.25 * np.random.dirichlet(0.3 * np.ones(len(probs)))
+            noiseWeight = 0.25
+            noise_probs = (1 - noiseWeight) * probs + noiseWeight * np.random.dirichlet(0.3 * np.ones(len(probs)))
             index = np.random.choice(len(probs), p=noise_probs)
         else:
             index = np.argmax(probs)
@@ -137,6 +137,7 @@ class AlphaZeroHandler(AlgoHandler):
         self.network = AlphaZeroNetwork(env.observationShape, env.actionSpace)
         self.network.to(self.device)
         self.mcts = MCTS(self.getProb, n_playout=self.config.simulations)
+        self.rewardNormalizer = StdNormalizer()
         if role == Role.Trainer:
             self.network.buildOptimizer(self.config.learningRate)
 
@@ -157,10 +158,12 @@ class AlphaZeroHandler(AlgoHandler):
     def dump(self):
         data = {}
         data["network"] = self._getStateDict(self.network)
+        data["rewardNormalizer"] = pickle.dumps(self.rewardNormalizer)
         return data
 
     def load(self, data):
         self.network.load_state_dict(data["network"])
+        self.rewardNormalizer = pickle.loads(data["rewardNormalizer"])
 
     def reset(self):
         self.mcts.update_with_move(-1)
@@ -169,12 +172,12 @@ class AlphaZeroHandler(AlgoHandler):
         self.mcts.update_with_move(action)
         
     def preprocess(self, memory):
-        with torch.no_grad():
-            lastValue = 0
-            for i in reversed(range(len(memory))):
-                transition = memory[i]
-                transition.reward = transition.reward + lastValue
-                lastValue = transition.reward
+        rewards = memory.select(lambda x: x.reward).toArray()
+        rewards.fill(rewards.sum())
+        rewards = self.rewardNormalizer.normalize(rewards, update=True)
+        rewards = sigmoid(rewards)
+        for transition, reward in zip(memory, rewards):
+            transition.reward = reward
 
     def learn(self, memory):
         self.network.train()
@@ -237,6 +240,9 @@ def softmax(x):
     probs = np.exp(x - np.max(x))
     probs /= np.sum(probs)
     return probs
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 #定义节点
 class TreeNode(object):
@@ -309,7 +315,8 @@ class TreeNode(object):
             value Q, and prior probability P, on this node's score.
         UCB = Q(s,a) + U(s,a)
         """
-        
+        c_puct = 1
+        # c_puct = self._parent._Q + 1e-8
         self._u = (c_puct * self._P *
                    np.sqrt(self._parent._n_visits) / (1 + self._n_visits))
         value = self._Q + self._u
@@ -352,15 +359,18 @@ class MCTS:
         
         node = self._root
         #直到去到叶子节点
+        n = 0
         while not node.is_leaf():
             # Greedily select next move.
             #找出UCB最大的动作，并执行。
-            # pred_node = node
+            pred_node = node
             action, node = node.select(self._c_puct, env.playerId)
-            # print(action, [(a, v.get_value(self._c_puct, env.playerId)) for a, v in pred_node._children.items()])
+            # if n == 0:
+            #     print(action, [(a, v.get_value(self._c_puct, env.playerId)) for a, v in pred_node._children.items()])
             # print(env.getState(), action)
             env.step(action)
             env = env.getNext()
+            n = n + 1
         # Evaluate the leaf using a network which outputs a list of
         # (action, probability) tuples p and also a score v in [-1, 1]
         # for the current player.
@@ -369,18 +379,18 @@ class MCTS:
         
         
         # Check for end of game.
+        prob, value = self._policy(env)
         if not env.isDone():
-            prob, value = self._policy(env)
             mask = env.getMask()
             node.expand(prob, mask, env.playerId)
         #如果结束了。
         # 如果平局，就设置成leaf_value = 0
         # 否则: 如果胜利者是当前的，那么leaf_value = 1， 否则leaf_value = -1
-        else:
+        # else:
             # for end state，return the "true" leaf_value
-            value = env.getDoneReward()
+            # value = env.getDoneReward()
         # extrinsic reward
-        value += env.getReward()
+        # value += env.getReward()
         
         # print("=====", value)
         # 向上更新祖先节点。

@@ -43,7 +43,7 @@ class ConvLayers(nn.Module):
 
 
 class FCLayers(nn.Module):
-    def __init__(self, n_inputs, hidden_size, num_layers=1, activator=nn.Tanh):
+    def __init__(self, n_inputs, hidden_size, num_layers=1, activator=nn.ELU):
         super().__init__()
         self.layers = nn.ModuleList()
         for i in range(num_layers):

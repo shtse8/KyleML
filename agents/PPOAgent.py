@@ -4,6 +4,7 @@ import asyncio
 import __main__
 import types
 from pathlib import Path
+import copy
 import os
 import math
 import torch.multiprocessing as mp
@@ -90,12 +91,14 @@ class PPONetwork(Network):
 
         # Define policy head
         self.policy = nn.Sequential(
-            FCLayers(self.gru.num_output, hidden_nodes, 3, nn.ELU),
+            BodyLayers(inputShape, hidden_nodes),
+            # FCLayers(self.body.num_output, hidden_nodes, 3, nn.ELU),
             nn.Linear(hidden_nodes, n_outputs))
 
         # Define value head
         self.value = nn.Sequential(
-            FCLayers(self.gru.num_output, hidden_nodes, 3, nn.ELU),
+            BodyLayers(inputShape, hidden_nodes),
+            # FCLayers(self.body.num_output, hidden_nodes, 3, nn.ELU),
             nn.Linear(hidden_nodes, 1))
 
         self.initWeights()
@@ -110,26 +113,26 @@ class PPONetwork(Network):
 
     def _body(self, x, h):
         x = self.body(x)
-        x, h = self.gru(x, h)
+        # x, h = self.gru(x, h)
         return x, h
 
     def _policy(self, x, m=None):
         x = self.policy(x)
         if m is not None:
             x = x.masked_fill(~m, -math.inf)
-        x = F.softmax(x, dim=1)
+        x = F.softmax(x, dim=-1)
         return x
 
     def forward(self, x, h, m=None):
-        x, h = self._body(x, h)
+        # x, h = self._body(x, h)
         return self._policy(x, m), self.value(x), h
 
     def getPolicy(self, x, h, m=None):
-        x, h = self._body(x, h)
+        # x, h = self._body(x, h)
         return self._policy(x, m), h
 
     def getValue(self, x, h):
-        x, h = self._body(x, h)
+        # x, h = self._body(x, h)
         return self.value(x), h
 
 
@@ -175,9 +178,16 @@ class AgentHandler:
 
         # valid_acts, valid_probs = [], []尸尸
         if isTraining:
+            # exec_probs = copy.deepcopy(probs)
             # info = self.env.getInfo()
             # for i, p in enumerate(probs):
-            #     if info.mask[i]:
+            #     if not info.mask[i]:
+            #         exec_probs[i] = 0
+            # exec_probs = exec_probs / exec_probs.sum()
+            
+            # info = self.env.getInfo()
+            # # for i, p in enumerate(probs):
+            # #     if info.mask[i]:
             #         valid_acts.append(i)
             #         valid_probs.append(p)
             # valid_acts = np.array(valid_acts)
@@ -234,30 +244,33 @@ class PPOHandler(AlgoHandler):
                 hiddenState = KyleList([lastMemory.next.hiddenState]).toTensor(torch.float, self.device)
                 lastValue, _ = self.network.getValue(lastState, hiddenState)
                 lastValue = lastValue.item()
-            
+            # print()
+            # print(memory[0].action.index, memory[0].action.probs)
             extrinsic_rewards = memory.select(lambda x: x.reward).toArray()
             extrinsic_rewards = KyleList(self.rewardNormalizer.normalize(extrinsic_rewards, update=True))
+            # print(extrinsic_rewards, self.rewardNormalizer.max)
 
-            batch_states = memory.select(lambda x: x.info.state).toTensor(torch.float, self.device)
-            batch_nextStates = memory.select(lambda x: x.next.state).toTensor(torch.float, self.device)
-            batch_actions = memory.select(lambda x: x.action.index).toTensor(torch.long, self.device)
-            real_next_state_feature, pred_next_state_feature, _ = self.icm(batch_states, batch_nextStates, batch_actions)
-            intrinsic_rewards = (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1).cpu().detach().numpy()
-
+            # batch_states = memory.select(lambda x: x.info.state).toTensor(torch.float, self.device)
+            # batch_nextStates = memory.select(lambda x: x.next.state).toTensor(torch.float, self.device)
+            # batch_actions = memory.select(lambda x: x.action.index).toTensor(torch.long, self.device)
+            # real_next_state_feature, pred_next_state_feature, _ = self.icm(batch_states, batch_nextStates, batch_actions)
+            # intrinsic_rewards = (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1).cpu().detach().numpy()
+            # print(intrinsic_rewards)
+            
             # GAE (General Advantage Estimation)
             # Paper: https://arxiv.org/abs/1506.02438
             # Code: https://github.com/openai/baselines/blob/master/baselines/ppo2/runner.py#L55-L64
             # gaeCoeff = 0, advantage = reward + next_value - value
             # gaeCoeff = 1, advantage = total_reward - value
-            intrinsic_weight = 0.01 / max(1, np.mean(intrinsic_rewards))
+            # intrinsic_weight = 0.01 / max(1, np.mean(intrinsic_rewards))
             # print(intrinsic_weight)
             lastAdvantage = 0
             for i, transition in reversed(list(enumerate(memory))):
                 transition.reward = extrinsic_rewards[i]
-                transition.reward += intrinsic_weight * intrinsic_rewards[i]
+                # transition.reward += intrinsic_weight * intrinsic_rewards[i]
                 # print(extrinsic_rewards[i], intrinsic_rewards[i])
                 transition.advantage = transition.reward + self.config.gamma * lastValue * (1 - transition.next.done) - transition.action.value
-                transition.advantage += self.config.gamma * self.config.gaeCoeff * lastAdvantage * (1 - transition.next.done)
+                transition.advantage += self.config.gaeCoeff * self.config.gamma * lastAdvantage * (1 - transition.next.done)
                 transition.reward = transition.advantage + transition.action.value
                 lastAdvantage = transition.advantage
                 lastValue = transition.action.value
@@ -279,13 +292,14 @@ class PPOHandler(AlgoHandler):
         # advantages = Function.normalize(advantages)
 
         losses = []
-        for _ in range(4):
+        for n in range(4):
             self.network.optimizer.zero_grad()
             self.icm.optimizer.zero_grad()
             totalLoss = 0
             for i in range(n_miniBatch):
                 startIndex = i * batchSize
                 minibatch = memory.get(startIndex, batchSize)
+                # print(minibatch)
 
                 # Get Tensors
                 batch_states = minibatch.select(lambda x: x.info.state).toTensor(torch.float, self.device)
@@ -293,30 +307,27 @@ class PPOHandler(AlgoHandler):
                 batch_masks = minibatch.select(lambda x: x.info.mask).toTensor(torch.bool, self.device)
                 batch_hiddenStates = minibatch.select(lambda x: x.info.hiddenState).toTensor(torch.float, self.device)
 
-                batch_nextStates = minibatch.select(lambda x: x.next.state).toTensor(torch.float, self.device)
+                # batch_nextStates = minibatch.select(lambda x: x.next.state).toTensor(torch.float, self.device)
                 batch_actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
                 batch_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
                 # batch_probs = minibatch.select(lambda x: x.action.probs).toTensor(torch.float, self.device)
                 batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
                 # batch_returns = returns.get(startIndex, batchSize).toTensor(torch.float, self.device)
-                # batch_values = minibatch.select(lambda x: x.action.value).toTensor(torch.float, self.device)
+                batch_values = minibatch.select(lambda x: x.action.value).toTensor(torch.float, self.device)
                 # print("hiddenStates:", batch_hiddenStates)
 
                 # for Curiosity Network
-                real_next_state_feature, pred_next_state_feature, pred_action = self.icm(batch_states, batch_nextStates, batch_actions)
+                # real_next_state_feature, pred_next_state_feature, pred_action = self.icm(batch_states, batch_nextStates, batch_actions)
                 
-                inverse_loss = nn.CrossEntropyLoss()(pred_action, batch_actions)
-                forward_loss = nn.MSELoss()(pred_next_state_feature, real_next_state_feature.detach())
-                if batch_actions[0] == 2:
-                    print(batch_actions[0], nn.MSELoss(reduction="none")(pred_next_state_feature, real_next_state_feature.detach())[0].mean())
-                icm_loss = forward_loss
+                # inverse_loss = nn.CrossEntropyLoss()(pred_action, batch_actions)
+                # forward_loss = nn.MSELoss()(pred_next_state_feature, real_next_state_feature.detach())
                 # icm_loss = inverse_loss + forward_loss
-                # icm_loss = 0
+                icm_loss = 0
                 
                 # for AC Network
-                batch_advantages = minibatch.select(lambda x: x.advantage).toTensor(torch.float, self.device)
+                # batch_advantages = minibatch.select(lambda x: x.advantage).toTensor(torch.float, self.device)
                 # batch_advantages = advantages.get(startIndex, batchSize).toTensor(torch.float, self.device)
-                # batch_advantages = batch_returns - batch_values
+                batch_advantages = batch_returns - batch_values
                 # print(batch_advantages)
                 probs, values, _ = self.network(batch_states, batch_hiddenStates, batch_masks)
                 values = values.squeeze(-1)
@@ -324,6 +335,8 @@ class PPOHandler(AlgoHandler):
                 # PPO2 - Confirm the samples aren't too far from pi.
                 dist = torch.distributions.Categorical(probs=probs)
                 ratios = torch.exp(dist.log_prob(batch_actions) - batch_log_probs)
+                # if n == 0:
+                #     print(batch_returns[0], batch_values[0], batch_advantages[0])
                 policy_losses1 = ratios * batch_advantages
                 policy_losses2 = ratios.clamp(1 - self.config.epsClip, 1 + self.config.epsClip) * batch_advantages
 

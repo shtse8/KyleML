@@ -386,7 +386,7 @@ class Trainer(Base):
 
         # Create Evaluators
         evaluators = []
-        n_workers = max(torch.cuda.device_count(), 1)
+        n_workers = max(torch.cuda.device_count() * 4, 1)
         for _ in range(n_workers):
             evaluator = EvaluatorService(self.algo, self.gameFactory, self.sync).start()
             evaluators.append(evaluator)
@@ -396,9 +396,8 @@ class Trainer(Base):
         self.handler = self.algo.createHandler(env, Role.Trainer, self.sync.getDevice())
         if load:
             self.load()
-        n_samples = self.algo.config.sampleSize * n_workers
-        n_samples = 10000
-        evaulator_samples = self.algo.config.sampleSize
+        n_samples = self.algo.config.sampleSize
+        evaulator_samples = math.ceil(n_samples / n_workers)
 
         self.sync.epochManager.start(episodes)
         self.lastSave = time.perf_counter()
@@ -450,6 +449,9 @@ class AlgoHandler:
     def reportStep(self, action):
         pass
 
+class EvaulationTerminated(Exception):
+    def __init__(self):
+        super().__init__("Evaulation Terminiated.")
 
 class Evaluator(Base):
     def __init__(self, algo: Algo, gameFactory, sync):
@@ -470,11 +472,12 @@ class Evaluator(Base):
         self.started = False
 
         self.reports: List[EnvReport] = []
+        self.i = 0
 
     def updateNetwork(self):
         self.handler.load(self.sync.latestStateDict)
 
-    def loop(self, num=0):
+    def next(self, num=0):
         # auto reset
         if not self.started:
             self.env.reset()
@@ -485,15 +488,18 @@ class Evaluator(Base):
                 self.reports.append(agent.done())
             self.env.reset()
             self.handler.reset()
-            return False
+            # return False
 
-        return True
+        # return True
         # memoryCount = min([len(x.memory) for x in self.agents])
         if num > 0:
-            memoryCount = min([len(x.memory) for x in self.agents])
-            return memoryCount < num
-        else:
-            return True
+            memoryCount = np.sum([len(x.memory) for x in self.agents])
+            if memoryCount >= num:
+                raise EvaulationTerminated()
+        
+        agent = self.agents[self.i]
+        self.i = (self.i + 1) % len(self.agents)
+        return agent
 
     def flushReports(self):
         if len(self.reports) > 0:
@@ -501,7 +507,6 @@ class Evaluator(Base):
             self.reports = []
 
     def roll(self, num):
-        num = 10000
         self.updateNetwork()
         self.generateTransitions(num)
         return [x.memory for x in self.agents]
@@ -509,27 +514,31 @@ class Evaluator(Base):
     def generateTransitions(self, num):
         for agent in self.agents:
             agent.resetMemory(num)
-        while self.loop(num):
-            for agent in self.agents:
-                agent.step(True)
+        while True:
+            try:
+                self.next(num).step(True)
+            except EvaulationTerminated:
+                break
         self.flushReports()
 
     async def eval(self):
         self.agents[0] = HumanAgent(1, self.env, self.handler)
         self.load()
         self.sync.epochManager.start(1)
-        while self.loop():
-            for agent in self.agents:
-                agent.step(False)
+        while True:
+            try:
+                self.next(num).step(False)
                 # os.system('cls')
                 state = self.env.getState(1).astype(int)
                 print(state[0] + state[1] * 2, "\n")
                 await asyncio.sleep(0.5)
-            if self.env.isDone():
-                print("Done:")
-                for agent in self.agents:
-                    print(agent.id, self.env.getDoneReward(agent.id))
-                await asyncio.sleep(3)
+                if self.env.isDone():
+                    print("Done:")
+                    for agent in self.agents:
+                        print(agent.id, self.env.getDoneReward(agent.id))
+                    await asyncio.sleep(3)
+            except EvaulationTerminated:
+                break
             self.flushReports()
      
 class Agent:
@@ -643,7 +652,7 @@ class RL:
         epoch = self.sync.epochManager.epoch
         if epoch is not None:
             print(f"#{self.sync.epochManager.num} {Function.humanize(epoch.episodes):>6} {epoch.hitRate:>7.2%} | " +
-                  f'Loss: {Function.humanize(epoch.loss):>6}/ep | ' +
+                  f'Loss: {epoch.loss:.4f}/ep | ' +
                   f'Env: {Function.humanize(epoch.envs):>6} | ' +
                   f'Best: {Function.humanize(epoch.bestRewards):>6}, Avg: {Function.humanize(epoch.avgRewards):>6} | ' +
                   f'Steps: {Function.humanize(epoch.steps / epoch.duration):>6}/s | Episodes: {1 / epoch.durationPerEpisode:>6.2f}/s | ' +

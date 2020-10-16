@@ -48,6 +48,18 @@ class StdNormalizer(Normalizer):
             self.update(x)
         return (x - self.mean) / (np.sqrt(self.var) + self.epsilon)
         
+    def dump(self):
+        data = {}
+        data['mean'] = self.mean
+        data['var'] = self.var
+        data['count'] = self.count
+        return data
+
+    def load(self, data):
+        self.mean = data['mean']
+        self.var = data['var']
+        self.count = data['count']
+
     def __str__(self):
         return f"StdNormalizer(mean={self.mean:.4f};var={self.var:.4f};count={self.count})"
 
@@ -72,6 +84,16 @@ class RangeNormalizer(Normalizer):
         if update:
             self.update(x)
         return (x - self.min) / (self.max - self.min + self.epsilon)
-        
+    
+    def dump(self):
+        data = {}
+        data['max'] = self.max
+        data['min'] = self.min
+        return data
+
+    def load(self, data):
+        self.max = data['max']
+        self.min = data['min']
+
     def __str__(self):
         return f"RangeNormalizer(max={self.max:.4f};min={self.min:.4f})"

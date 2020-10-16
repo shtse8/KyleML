@@ -92,13 +92,13 @@ class PPONetwork(Network):
         # Define policy head
         self.policy = nn.Sequential(
             BodyLayers(inputShape, hidden_nodes),
-            # FCLayers(self.body.num_output, hidden_nodes, 3, nn.ELU),
+            FCLayers(hidden_nodes, hidden_nodes, 3, nn.ELU),
             nn.Linear(hidden_nodes, n_outputs))
 
         # Define value head
         self.value = nn.Sequential(
             BodyLayers(inputShape, hidden_nodes),
-            # FCLayers(self.body.num_output, hidden_nodes, 3, nn.ELU),
+            FCLayers(hidden_nodes, hidden_nodes, 3, nn.ELU),
             nn.Linear(hidden_nodes, 1))
 
         self.initWeights()
@@ -138,7 +138,7 @@ class PPONetwork(Network):
 
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=256, batchSize=1024, learningRate=1e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-5, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -176,7 +176,7 @@ class AgentHandler:
         probs = probs.cpu().detach().numpy()
         value = value.item()
 
-        # valid_acts, valid_probs = [], []尸尸
+        # valid_acts, valid_probs = [], []
         if isTraining:
             # exec_probs = copy.deepcopy(probs)
             # info = self.env.getInfo()
@@ -204,8 +204,8 @@ class AgentHandler:
             probs=probs,
             value=value)
 
-def sigmoid(x):
-  return 1 / (1 + np.exp(-x))
+# def sigmoid(x):
+#   return 1 / (1 + np.exp(-x))
 
 
 class PPOHandler(AlgoHandler):
@@ -227,13 +227,13 @@ class PPOHandler(AlgoHandler):
         data = {}
         data["network"] = self._getStateDict(self.network)
         data["icm"] = self._getStateDict(self.icm)
-        data["rewardNormalizer"] = pickle.dumps(self.rewardNormalizer)
+        data["rewardNormalizer"] = self.rewardNormalizer.dump()
         return data
 
     def load(self, data):
         self.network.load_state_dict(data["network"])
         self.icm.load_state_dict(data["icm"])
-        self.rewardNormalizer = pickle.loads(data["rewardNormalizer"])
+        self.rewardNormalizer.load(data["rewardNormalizer"])
     
     def preprocess(self, memory):
         with torch.no_grad():
@@ -246,8 +246,8 @@ class PPOHandler(AlgoHandler):
                 lastValue = lastValue.item()
             # print()
             # print(memory[0].action.index, memory[0].action.probs)
-            extrinsic_rewards = memory.select(lambda x: x.reward).toArray()
-            extrinsic_rewards = KyleList(self.rewardNormalizer.normalize(extrinsic_rewards, update=True))
+            # extrinsic_rewards = memory.select(lambda x: x.reward).toArray()
+            # extrinsic_rewards = KyleList(self.rewardNormalizer.normalize(extrinsic_rewards, update=True))
             # print(extrinsic_rewards, self.rewardNormalizer.max)
 
             # batch_states = memory.select(lambda x: x.info.state).toTensor(torch.float, self.device)
@@ -266,7 +266,7 @@ class PPOHandler(AlgoHandler):
             # print(intrinsic_weight)
             lastAdvantage = 0
             for i, transition in reversed(list(enumerate(memory))):
-                transition.reward = extrinsic_rewards[i]
+                # transition.reward = extrinsic_rewards[i]
                 # transition.reward += intrinsic_weight * intrinsic_rewards[i]
                 # print(extrinsic_rewards[i], intrinsic_rewards[i])
                 transition.advantage = transition.reward + self.config.gamma * lastValue * (1 - transition.next.done) - transition.action.value
@@ -274,6 +274,12 @@ class PPOHandler(AlgoHandler):
                 transition.reward = transition.advantage + transition.action.value
                 lastAdvantage = transition.advantage
                 lastValue = transition.action.value
+
+            extrinsic_rewards = memory.select(lambda x: x.reward).toArray()
+            extrinsic_rewards = KyleList(self.rewardNormalizer.normalize(extrinsic_rewards, update=True))
+            # print(extrinsic_rewards - memory.select(lambda x: x.action.value))
+            for i, transition in enumerate(memory):
+                transition.reward = extrinsic_rewards[i]
 
     def learn(self, memory):
         self.network.train()
@@ -288,7 +294,7 @@ class PPOHandler(AlgoHandler):
         # https://github.com/openai/baselines/blob/master/baselines/ppo2/model.py#L139
         # advantages = Function.normalize(advantages)
         # advantages = returns - memory.select(lambda x: x.action.value)
-        # advantages = memory.select(lambda x: x.advantage)
+        # advantages = memory.select(lambda x: x.reward) - memory.select(lambda x: x.action.value)
         # advantages = Function.normalize(advantages)
 
         losses = []
@@ -352,7 +358,7 @@ class PPOHandler(AlgoHandler):
                 value_loss = nn.MSELoss()(values, batch_returns)
                 # value_loss = (batch_returns - values).pow(2).mean()
             
-                network_loss = policy_loss + 0.01 * entropy_loss + value_loss
+                network_loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
 
                 # Calculating Total loss
                 # the weight of this minibatch
@@ -366,12 +372,12 @@ class PPOHandler(AlgoHandler):
 
             # Chip grad with norm
             # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
-            # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
-            nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 10)
+            nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
+            # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 10)
             # nn.utils.clip_grad.clip_grad_norm_(self.icm.parameters(), 10)
 
             self.network.optimizer.step()
-            self.icm.optimizer.step()
+            # self.icm.optimizer.step()
 
             losses.append(totalLoss)
 

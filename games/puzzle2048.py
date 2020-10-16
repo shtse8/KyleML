@@ -10,7 +10,8 @@ class Puzzle2048(Game):
         super().__init__()
         self.name: str = "game2048"
         self.size: int = size
-        self.game = Src(self.size, 0)
+        self.seed = 0
+        self.game = Src(self.size, self.seed)
         self.observationShape: tuple = (1, self.size, self.size)
         self.actionSpace: int = 4
         self.tileColors: dict = {
@@ -40,7 +41,7 @@ class Puzzle2048(Game):
         return True
 
     def reset(self):
-        self.game = Src(self.size, 0)
+        self.game = Src(self.size, self.seed)
 
     def getState(self, playerId: int):
         state = np.zeros(self.observationShape, dtype=float)

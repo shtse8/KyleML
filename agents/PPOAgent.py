@@ -99,7 +99,8 @@ class PPONetwork(Network):
         self.value = nn.Sequential(
             BodyLayers(inputShape, hidden_nodes),
             FCLayers(hidden_nodes, hidden_nodes, 3, nn.ELU),
-            nn.Linear(hidden_nodes, 1))
+            nn.Linear(hidden_nodes, 1),
+            nn.Sigmoid())
 
         self.initWeights()
 
@@ -138,7 +139,7 @@ class PPONetwork(Network):
 
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-5, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-4, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -277,7 +278,6 @@ class PPOHandler(AlgoHandler):
 
             extrinsic_rewards = memory.select(lambda x: x.reward).toArray()
             extrinsic_rewards = KyleList(self.rewardNormalizer.normalize(extrinsic_rewards, update=True))
-            # print(extrinsic_rewards - memory.select(lambda x: x.action.value))
             for i, transition in enumerate(memory):
                 transition.reward = extrinsic_rewards[i]
 
@@ -358,7 +358,7 @@ class PPOHandler(AlgoHandler):
                 value_loss = nn.MSELoss()(values, batch_returns)
                 # value_loss = (batch_returns - values).pow(2).mean()
             
-                network_loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
+                network_loss = policy_loss + 0.0001 * entropy_loss + 0.5 * value_loss
 
                 # Calculating Total loss
                 # the weight of this minibatch

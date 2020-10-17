@@ -526,7 +526,7 @@ class Evaluator(Base):
         self.sync.epochManager.start(1)
         while True:
             try:
-                self.next(num).step(False)
+                self.next(0).step(False)
                 # os.system('cls')
                 state = self.env.getState(1).astype(int)
                 print(state[0] + state[1] * 2, "\n")

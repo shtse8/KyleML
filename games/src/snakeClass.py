@@ -39,7 +39,7 @@ class Player(GameObject):
     def __init__(self, direction=Direction.Right):
         super().__init__()
         self.direction = direction
-        self.length = 0
+        self.length = 3
         self.nextBody: PlayerBody = None
 
 
@@ -69,12 +69,12 @@ class Grid:
                     emptySpaces.append(Coord(x, y))
         return self.rng.choice(emptySpaces)
 
-    def add(self, obj: GameObject, coord: Coord=None):
+    def set(self, obj: GameObject, coord: Coord=None):
         if coord is None:
             coord = self.getRandomEmpty()
 
-        if self.get(coord) is not None:
-            raise Exception("Block is not empty.")
+        # if self.get(coord) is not None:
+        #     raise Exception("Block is not empty.")
 
         self.grid[coord.x, coord.y] = obj
         obj.setCoord(coord)
@@ -103,22 +103,22 @@ class Game:
 
         # Walls
         for x in range(self.width):
-            self.grid.add(Block(), Coord(x, 0))
-            self.grid.add(Block(), Coord(x, self.height - 1))
+            self.grid.set(Block(), Coord(x, 0))
+            self.grid.set(Block(), Coord(x, self.height - 1))
 
         for y in range(1, self.height - 1):
-            self.grid.add(Block(), Coord(0, y))
-            self.grid.add(Block(), Coord(self.width - 1, y))
+            self.grid.set(Block(), Coord(0, y))
+            self.grid.set(Block(), Coord(self.width - 1, y))
 
         # Player
         self.player = Player()
-        self.grid.add(self.player, Coord(
+        self.grid.set(self.player, Coord(
             x=math.floor((self.width - 1) * 0.45),
             y=math.floor((self.height - 1) * 0.5)))
 
         # Food
         self.food = Food()
-        self.grid.add(self.food)
+        self.grid.set(self.food)
 
     def getTargetCoord(self, action: Action):
         direction = Direction((self.player.direction.value + action.value) % len(Direction))
@@ -140,7 +140,24 @@ class Game:
         if self.isEnd:
             raise Exception("Game Over.")
         
+        
         targetCoord = self.getTargetCoord(action)
+        self.player.direction = Direction((self.player.direction.value + action.value) % len(Direction))
+        # Move Player Body
+        coord = self.player.coord
+        curLen = 0
+        playerBody = self.player
+        while playerBody.nextBody is not None:
+            playerBody = playerBody.nextBody
+            coord = self._moveTo(playerBody, coord)
+            curLen += 1
+        
+        # every step add one body item
+        if curLen < self.player.length:
+            playerBody.nextBody = PlayerBody()
+            self.grid.set(playerBody.nextBody, coord)
+
+        # move player Head and detect collision
         targetObj = self.grid.get(targetCoord)
         if targetObj is not None:
             if isinstance(targetObj, self.dangerObjects):
@@ -149,24 +166,11 @@ class Game:
                 self.score += 1
                 self.player.length += 1
                 self.food = Food()
-                self.grid.add(self.food)
-            self.grid.clear(targetCoord)
-        coord = self._moveTo(self.player, targetCoord)
-
-        # Move Player Body
-        curLen = 0
-        playerBody = self.player.nextBody
-        while playerBody is not None:
-            coord = self._moveTo(playerBody, coord)
-            playerBody = self.player.nextBody
-            curLen += 1
-        
-        # every step add one body item
-        if curLen < self.player.length:
-            self.grid.add(PlayerBody(), coord)
+                self.grid.set(self.food)
+        self.grid.set(self.player, targetCoord)
             
     def _moveTo(self, obj: GameObject, coord: Coord):
         oldCoord = obj.coord
-        self.grid.add(obj, coord)
+        self.grid.set(obj, coord)
         self.grid.clear(oldCoord)
         return oldCoord

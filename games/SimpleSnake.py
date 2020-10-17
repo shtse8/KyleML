@@ -1,88 +1,68 @@
 import numpy as np
-
-from operator import add
-from .src.snakeClass import Game as GameSrc
+from .src.snakeClass import Game as GameSrc, Action, Direction, PlayerBody, Block, Player, Food
 from .Game import Game
+
 
 class SimpleSnake(Game):
     def __init__(self):
         super().__init__()
         self.name = "SimpleSnake"
-        self.game = GameSrc(22, 22, seed=0)
+        self.seed = None
+        self.game = GameSrc(22, 22, self.seed)
         self.observationShape = 11
-        self.actionSpace = 3
-    
-    def getPlayerCount(self):
-        return 1
+
+    @property
+    def players(self):
+        return [0]
+
+    @property
+    def actionSpaces(self):
+        return [x for x in Action]
 
     def canStep(self, playerId):
         return True
 
     def reset(self):
-        self.game = GameSrc(22, 22, seed=0)
-        self.game.food.x = self.game.player.x + 2
-        self.game.food.y = self.game.player.y
+        self.game = GameSrc(22, 22, self.seed)
         
     def getState(self, playerId):
-        state = np.array([
-            (self.game.player.x_change == 1 and self.game.player.y_change == 0 and ((list(map(add, self.game.player.position[-1], [1, 0])) in self.game.player.position) or
-            self.game.player.position[-1][0] + 1 >= (self.game.width - 1))) or (self.game.player.x_change == -1 and self.game.player.y_change == 0 and ((list(map(add, self.game.player.position[-1], [-1, 0])) in self.game.player.position) or
-            self.game.player.position[-1][0] - 1 < 1)) or (self.game.player.x_change == 0 and self.game.player.y_change == -1 and ((list(map(add, self.game.player.position[-1], [0, -1])) in self.game.player.position) or
-            self.game.player.position[-1][-1] - 1 < 1)) or (self.game.player.x_change == 0 and self.game.player.y_change == 1 and ((list(map(add, self.game.player.position[-1], [0, 1])) in self.game.player.position) or
-            self.game.player.position[-1][-1] + 1 >= (self.game.height-1))),  # danger straight
+        # grid = np.zeros((22, 22), dtype=int)
+        # for x, col in enumerate(self.game.grid.grid):
+        #     for y, cell in enumerate(col):
+        #         if isinstance(cell, Block):
+        #             grid[x, y] = '9'
+        #         elif isinstance(cell, Food):
+        #             grid[x, y] = '3'
+        #         elif isinstance(cell, Player):
+        #             grid[x, y] = '1'
+        #         elif isinstance(cell, PlayerBody):
+        #             grid[x, y] = '2'
+        # print(grid)
 
-            (self.game.player.x_change == 0 and self.game.player.y_change == -1 and ((list(map(add,self.game.player.position[-1],[1, 0])) in self.game.player.position) or
-            self.game.player.position[ -1][0] + 1 > (self.game.width-1))) or (self.game.player.x_change == 0 and self.game.player.y_change == 1 and ((list(map(add,self.game.player.position[-1],
-            [-1,0])) in self.game.player.position) or self.game.player.position[-1][0] - 1 < 1)) or (self.game.player.x_change == -1 and self.game.player.y_change == 0 and ((list(map(
-            add,self.game.player.position[-1],[0,-1])) in self.game.player.position) or self.game.player.position[-1][-1] - 1 < 1)) or (self.game.player.x_change == 1 and self.game.player.y_change == 0 and (
-            (list(map(add,self.game.player.position[-1],[0,1])) in self.game.player.position) or self.game.player.position[-1][
-             -1] + 1 >= (self.game.height-1))),  # danger right
-
-             (self.game.player.x_change == 0 and self.game.player.y_change == 1 and ((list(map(add,self.game.player.position[-1],[1,0])) in self.game.player.position) or
-             self.game.player.position[-1][0] + 1 > (self.game.width-1))) or (self.game.player.x_change == 0 and self.game.player.y_change == -1 and ((list(map(
-             add, self.game.player.position[-1],[-1,0])) in self.game.player.position) or self.game.player.position[-1][0] - 1 < 1)) or (self.game.player.x_change == 1 and self.game.player.y_change == 0 and (
-            (list(map(add,self.game.player.position[-1],[0,-1])) in self.game.player.position) or self.game.player.position[-1][-1] - 1 < 1)) or (
-            self.game.player.x_change == -1 and self.game.player.y_change == 0 and ((list(map(add,self.game.player.position[-1],[0,1])) in self.game.player.position) or
-            self.game.player.position[-1][-1] + 1 >= (self.game.height-1))), #danger left
-
-
-            self.game.player.x_change == -1,  # move left
-            self.game.player.x_change == 1,  # move right
-            self.game.player.y_change == -1,  # move up
-            self.game.player.y_change == 1,  # move down
-            self.game.food.x < self.game.player.x,  # self.game.food left
-            self.game.food.x > self.game.player.x,  # self.game.food right
-            self.game.food.y < self.game.player.y,  # self.game.food up
-            self.game.food.y > self.game.player.y  # self.game.food down
-        
+        return np.array([
+            self.game.isEnd or isinstance(self.game.grid.get(self.game.getTargetCoord(Action.Left)), self.game.dangerObjects),  # danger Left
+            self.game.isEnd or isinstance(self.game.grid.get(self.game.getTargetCoord(Action.Right)), self.game.dangerObjects),  # danger Right
+            self.game.isEnd or isinstance(self.game.grid.get(self.game.getTargetCoord(Action.Void)), self.game.dangerObjects),  # danger Straight
+            self.game.player.direction == Direction.Left,  # move left
+            self.game.player.direction == Direction.Right,  # move right
+            self.game.player.direction == Direction.Up,  # move up
+            self.game.player.direction == Direction.Down,  # move down
+            self.game.food.coord.x < self.game.player.coord.x,  # self.game.food left
+            self.game.food.coord.x > self.game.player.coord.x,  # self.game.food right
+            self.game.food.coord.y < self.game.player.coord.y,  # self.game.food up
+            self.game.food.coord.y > self.game.player.coord.y  # self.game.food down
         ]).astype(int)
         
-        # state = np.array([
-            # self.game.player.x,
-            # self.game.player.y,
-            # self.game.player.x_change,
-            # self.game.player.y_change,
-            # self.game.food.x,
-            # self.game.food.y,
-            # self.game.width,
-            # self.game.height
-        # ]).astype(int)
-        # state = np.concatenate((state, np.array(self.game.player.position).flatten()), axis = 0)
-        # state = np.pad(state, (0, self.observationShape - len(state)))
-        return state
-        
-    def getMask(self, playerId, state):
-        return np.ones(self.actionSpace)
+    def getMask(self, playerId: int):
+        return np.ones(self.actionCount)
 
     def _step(self, playerId, action):
-        action_array = np.zeros(self.actionSpace)
-        action_array[action] = 1
-        self.game.player.do_move(action_array, self.game)
-        self.game.display()
-        self.reward[playerId] = 1 if self.game.player.eaten else 0
+        score = self.game.score
+        self.game.step(self.actionSpaces[action])
+        self.reward[playerId] = self.game.score - score
         
     def isDone(self):
-        return self.game.end
+        return self.game.isEnd
 
     
     

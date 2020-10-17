@@ -1,185 +1,172 @@
-import os
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
-#import tensorflow as tf    
-#tf.get_logger().setLevel('ERROR')
-
-import pygame
 import math
 import numpy as np
-import time
-from collections import deque
-from random import randint
-import atexit
-import signal
-import sys
-
-PIXEL_SIZE = 20
+from enum import Enum
 
 
-class Game:
-    def __init__(self, width, height, render = False, seed=0):
+class Direction(Enum):
+    Up = 0
+    Left = 1
+    Down = 2
+    Right = 3
+
+
+class Action(Enum):
+    Left = -1
+    Right = 1
+    Void = 0
+
+
+class Coord:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+
+class GameObject:
+    def __init__(self):
+        self.coord = None
+
+    def setCoord(self, coord):
+        self.coord = coord
+
+
+class Block(GameObject):
+    def __init__(self):
+        super().__init__()
+
+
+class Player(GameObject):
+    def __init__(self, direction=Direction.Right):
+        super().__init__()
+        self.direction = direction
+        self.length = 0
+        self.nextBody: PlayerBody = None
+
+
+class PlayerBody(GameObject):
+    def __init__(self):
+        super().__init__()
+        self.nextBody: PlayerBody = None
+
+
+class Food(GameObject):
+    def __init__(self):
+        super().__init__()
+
+
+class Grid:
+    def __init__(self, width, height, rng):
         self.width = width
         self.height = height
-        self.is_display = render
-        
+        self.rng = rng
+        self.grid = np.empty((width, height), dtype=object)
+
+    def getRandomEmpty(self):
+        emptySpaces = []
+        for x, col in enumerate(self.grid):
+            for y, cell in enumerate(col):
+                if cell is None:
+                    emptySpaces.append(Coord(x, y))
+        return self.rng.choice(emptySpaces)
+
+    def add(self, obj: GameObject, coord: Coord=None):
+        if coord is None:
+            coord = self.getRandomEmpty()
+
+        if self.get(coord) is not None:
+            raise Exception("Block is not empty.")
+
+        self.grid[coord.x, coord.y] = obj
+        obj.setCoord(coord)
+
+    def get(self, coord: Coord):
+        return self.grid[coord.x, coord.y]
+
+    def clear(self, coord: Coord):
+        self.grid[coord.x, coord.y] = None
+
+    def isValidCoord(self, coord: Coord):
+        return coord.x >= 0 and coord.x < self.grid.width and coord.y >= 0 and coord.y < self.grid.height
+
+class Game:
+    def __init__(self, width, height, seed=None):
+        self.width = width
+        self.height = height
+        self.seed = seed
         self.rng = np.random.default_rng(seed)
-        self.record = 0
-        self.counter = 0
-        self.last_update = 0
-        self.resources = {}
-        self.bgImagePath = 'img/background.png'
-        self.playerImagePath = 'img/snakeBody.png'
-        self.foodImagePath = 'img/food2.png'
-        self.isResourceLoaded = False
-        self.crash = False
-        self.end = False
-        self.player = Player(self)
-        self.food = Food(self)
-        self.steps = 0
-        self.temp_steps = 0
+        self.dangerObjects = (Block, PlayerBody)
+
+        # reset
         self.score = 0
-        self.counter += 1
+        self.isEnd = False
+        self.grid = Grid(self.width, self.height, self.rng)
+
+        # Walls
+        for x in range(self.width):
+            self.grid.add(Block(), Coord(x, 0))
+            self.grid.add(Block(), Coord(x, self.height - 1))
+
+        for y in range(1, self.height - 1):
+            self.grid.add(Block(), Coord(0, y))
+            self.grid.add(Block(), Coord(self.width - 1, y))
+
+        # Player
+        self.player = Player()
+        self.grid.add(self.player, Coord(
+            x=math.floor((self.width - 1) * 0.45),
+            y=math.floor((self.height - 1) * 0.5)))
+
+        # Food
+        self.food = Food()
+        self.grid.add(self.food)
+
+    def getTargetCoord(self, action: Action):
+        direction = Direction((self.player.direction.value + action.value) % len(Direction))
+
+        # Move Player Head
+        player = self.player
+        if direction == Direction.Up:
+            targetCoord = Coord(player.coord.x, player.coord.y - 1)
+        elif direction == Direction.Down:
+            targetCoord = Coord(player.coord.x, player.coord.y + 1)
+        elif direction == Direction.Left:
+            targetCoord = Coord(player.coord.x - 1, player.coord.y)
+        elif direction == Direction.Right:
+            targetCoord = Coord(player.coord.x + 1, player.coord.y)
+
+        return targetCoord
+
+    def step(self, action: Action):
+        if self.isEnd:
+            raise Exception("Game Over.")
         
-    def eat(self):
-        if self.player.x == self.food.x and self.player.y == self.food.y:
-            self.food.new()
-            self.player.eaten = True
-            self.score = self.score + 1
-            if self.score > self.record:
-                self.record = self.score
-    def load_resource(self):
-    
-        pygame.init()
-        pygame.font.init()
-        pygame.display.set_caption('SnakeGen')
-        self.gameDisplay = pygame.display.set_mode((self.width * PIXEL_SIZE, self.height * PIXEL_SIZE + 60))
+        targetCoord = self.getTargetCoord(action)
+        targetObj = self.grid.get(targetCoord)
+        if targetObj is not None:
+            if isinstance(targetObj, self.dangerObjects):
+                self.isEnd = True
+            elif isinstance(targetObj, Food):
+                self.score += 1
+                self.player.length += 1
+                self.food = Food()
+                self.grid.add(self.food)
+            self.grid.clear(targetCoord)
+        coord = self._moveTo(self.player, targetCoord)
+
+        # Move Player Body
+        curLen = 0
+        playerBody = self.player.nextBody
+        while playerBody is not None:
+            coord = self._moveTo(playerBody, coord)
+            playerBody = self.player.nextBody
+            curLen += 1
         
-        self.resources['playerImage'] = pygame.image.load(self.playerImagePath)
-        self.resources['foodImage'] = pygame.image.load(self.foodImagePath)
-        self.resources['bgImage'] = pygame.image.load(self.bgImagePath)
-        
-        self.resources['myfont'] = pygame.font.SysFont('Segoe UI', 20)
-        self.resources['myfont_bold'] = pygame.font.SysFont('Segoe UI', 20, True)
-        self.resources['text_score'] = self.resources['myfont'].render('SCORE: ', True, (0, 0, 0))
-        self.resources['text_score_number'] = self.resources['myfont'].render(str(self.score), True, (0, 0, 0))
-        self.resources['text_highest'] = self.resources['myfont'].render('HIGHEST SCORE: ', True, (0, 0, 0))
-        self.resources['text_highest_number'] = self.resources['myfont_bold'].render(str(self.record), True, (0, 0, 0))
-        self.isResourceLoaded = True
-        
-    def display(self):
-        if not self.is_display:
-            return
-        
-        if time.perf_counter() - self.last_update < 1/30:
-            return
-        self.last_update = time.perf_counter()
-        
-        if not self.isResourceLoaded:
-            self.load_resource()
+        # every step add one body item
+        if curLen < self.player.length:
+            self.grid.add(PlayerBody(), coord)
             
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                quit()
-        
-            
-        # Clear
-        self.gameDisplay.fill((255, 255, 255))
-        
-        # Draw UI
-        self.gameDisplay.blit(self.resources['text_score'], (45, 440))
-        self.gameDisplay.blit(self.resources['text_score_number'], (120, 440))
-        self.gameDisplay.blit(self.resources['text_highest'], (190, 440))
-        self.gameDisplay.blit(self.resources['text_highest_number'], (350, 440))
-        self.gameDisplay.blit(self.resources['bgImage'], (10, 10))
-        
-        # Draw Player
-        if self.crash == False:
-            for i in range(self.player.food):
-                x_temp, y_temp = self.player.position[len(self.player.position) - 1 - i]
-                self.gameDisplay.blit(self.resources['playerImage'], (x_temp * PIXEL_SIZE, y_temp * PIXEL_SIZE))
-                
-        # Draw new food
-        self.gameDisplay.blit(self.resources['foodImage'], (self.food.x * PIXEL_SIZE, self.food.y * PIXEL_SIZE))
-        
-        pygame.display.update()
-        
-
-
-class Player(object):
-    def __init__(self, game):
-        self.x = math.floor((game.width - 1) * 0.45)
-        self.y = math.floor((game.height - 1) * 0.5)
-        self.position = []
-        self.position.append([self.x, self.y])
-        self.food = 1
-        self.eaten = False
-        self.x_change = 1
-        self.y_change = 0
-
-    def update_position(self, x, y):
-        if self.position[-1][0] != x or self.position[-1][1] != y:
-            if self.food > 1:
-                for i in range(0, self.food - 1):
-                    self.position[i][0], self.position[i][1] = self.position[i + 1]
-            self.position[-1][0] = x
-            self.position[-1][1] = y
-
-    def do_move(self, move, game):
-        move_array = [self.x_change, self.y_change]
-        game.steps += 1
-        game.temp_steps += 1
-        
-        if self.eaten:
-            game.temp_steps = 0
-            self.position.append([self.x, self.y])
-            self.eaten = False
-            self.food = self.food + 1
-            
-        if np.array_equal(move, [1, 0, 0]):
-            move_array = self.x_change, self.y_change
-        elif np.array_equal(move, [0, 1, 0]) and self.y_change == 0:  # right - going horizontal
-            move_array = [0, self.x_change]
-        elif np.array_equal(move, [0, 1, 0]) and self.x_change == 0:  # right - going vertical
-            move_array = [-self.y_change, 0]
-        elif np.array_equal(move, [0, 0, 1]) and self.y_change == 0:  # left - going horizontal
-            move_array = [0, -self.x_change]
-        elif np.array_equal(move, [0, 0, 1]) and self.x_change == 0:  # left - going vertical
-            move_array = [self.y_change, 0]
-        self.x_change, self.y_change = move_array
-        self.x += self.x_change
-        self.y += self.y_change
-        
-        if self.x <= 0 or self.x >= game.width - 1 \
-                or self.y <= 0 \
-                or self.y >= game.height - 1 \
-                or [self.x, self.y] in self.position:
-            game.crash = True
-            game.end = True
-            
-        if game.temp_steps >= 100:
-            game.end = True
-            
-        game.eat()
-
-        self.update_position(self.x, self.y)
-        
-
-
-
-class Food(object):
-    def __init__(self, game):
-        self.game = game
-        self.new()
-        
-    def new(self):
-        while True:
-            self.x = self.game.rng.choice(range(1, self.game.width - 1, 1))
-            self.y = self.game.rng.choice(range(1, self.game.width - 1, 1))
-
-            # self.x = self.game.rng.randrange(1, self.game.width - 2)
-            # self.y = self.game.rng.randrange(1, self.game.height - 2)
-            if [self.x, self.y] not in self.game.player.position:
-                break
-
-
+    def _moveTo(self, obj: GameObject, coord: Coord):
+        oldCoord = obj.coord
+        self.grid.add(obj, coord)
+        self.grid.clear(oldCoord)
+        return oldCoord

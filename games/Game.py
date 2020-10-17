@@ -1,5 +1,3 @@
-# TODO: rewards should be based on player
-
 class GameInfo:
     def __init__(self, state, mask, done, hiddenState=None):
         self.state = state
@@ -7,10 +5,27 @@ class GameInfo:
         self.done = done
         self.hiddenState = hiddenState
 
+
 class Game(object):
     def __init__(self):
         self.rendered = False
         self.reward = {}
+
+    @property
+    def actionSpaces(self):
+        raise NotImplementedError()
+
+    @property
+    def players(self):
+        raise NotImplementedError()
+
+    @property
+    def actionCount(self):
+        return len(self.actionSpaces)
+
+    @property
+    def playerCount(self):
+        return len(self.players)
 
     # Game methods
     def setPlayer(self, playerId: int):

@@ -13,7 +13,6 @@ class Puzzle2048(Game):
         self.seed = 0
         self.game = Src(self.size, self.seed)
         self.observationShape: tuple = (1, self.size, self.size)
-        self.actionSpace: int = 4
         self.tileColors: dict = {
             1: (204, 192, 179),
             2: (238, 228, 218),
@@ -34,9 +33,19 @@ class Puzzle2048(Game):
             65536: (234, 120, 33),
         }
 
-    def getPlayerCount(self):
-        return 1
+    @property
+    def players(self):
+        return [1]
       
+    @property
+    def actionSpaces(self):
+        return [
+            (0, -1),  # Up
+            (1, 0),  # Right
+            (0, 1),  # Down
+            (-1, 0)  # Left
+        ]
+
     def canStep(self, playerId):
         return True
 
@@ -52,15 +61,9 @@ class Puzzle2048(Game):
         return state
 
     def getMask(self, playerId: int):
-        actions = [
-            (0, -1),  # Up
-            (1, 0),  # Right
-            (0, 1),  # Down
-            (-1, 0)  # Left
-        ]
         state = self.game.grid.cells
-        mask = np.zeros(self.actionSpace, dtype=bool)
-        for i, vector in enumerate(actions):
+        mask = np.zeros(self.actionCount, dtype=bool)
+        for i, vector in enumerate(self.actionSpaces):
             for x, col in enumerate(state):
                 if mask[i]:
                     break

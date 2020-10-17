@@ -16,7 +16,6 @@ import sys
 PIXEL_SIZE = 20
 
 
-
 class Game:
     def __init__(self, width, height, render = False, seed=0):
         self.width = width

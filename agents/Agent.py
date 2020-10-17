@@ -466,9 +466,8 @@ class Evaluator(Base):
         # self.network.version = -1
         # self.networks.append(self.network)
 
-        self.playerCount = self.env.getPlayerCount()
         # self.mcts = MCTS(lambda s, m, x: self.algo.getProb(self.network, s, m, x), n_playout=100)
-        self.agents = np.array([Agent(i + 1, self.env, self.handler) for i in range(self.playerCount)])
+        self.agents = np.array([Agent(id, self.env, self.handler) for id in self.env.players])
         self.started = False
 
         self.reports: List[EnvReport] = []

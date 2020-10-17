@@ -11,8 +11,8 @@ class Direction(Enum):
 
 
 class Action(Enum):
-    Left = -1
-    Right = 1
+    Right = -1
+    Left = 1
     Void = 0
 
 

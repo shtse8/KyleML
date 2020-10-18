@@ -120,19 +120,25 @@ class Game:
         self.food = Food()
         self.grid.set(self.food)
 
-    def getTargetCoord(self, action: Action):
-        direction = Direction((self.player.direction.value + action.value) % len(Direction))
+    def isDanger(self, action: Action):
+        return isinstance(self.grid.get(self._getTargetCoord(self._getNewDirection(action))), self.dangerObjects)
+
+    def _getNewDirection(self, action: Action):
+        return Direction((self.player.direction.value + action.value) % len(Direction))
+
+    def _getTargetCoord(self, direction: Direction = None):
+        if direction is None:
+            direction = self.player.direction
 
         # Move Player Head
-        player = self.player
         if direction == Direction.Up:
-            targetCoord = Coord(player.coord.x, player.coord.y - 1)
+            targetCoord = Coord(self.player.coord.x, self.player.coord.y - 1)
         elif direction == Direction.Down:
-            targetCoord = Coord(player.coord.x, player.coord.y + 1)
+            targetCoord = Coord(self.player.coord.x, self.player.coord.y + 1)
         elif direction == Direction.Left:
-            targetCoord = Coord(player.coord.x - 1, player.coord.y)
+            targetCoord = Coord(self.player.coord.x - 1, self.player.coord.y)
         elif direction == Direction.Right:
-            targetCoord = Coord(player.coord.x + 1, player.coord.y)
+            targetCoord = Coord(self.player.coord.x + 1, self.player.coord.y)
 
         return targetCoord
 
@@ -140,9 +146,7 @@ class Game:
         if self.isEnd:
             raise Exception("Game Over.")
         
-        
-        targetCoord = self.getTargetCoord(action)
-        self.player.direction = Direction((self.player.direction.value + action.value) % len(Direction))
+        self.player.direction = self._getNewDirection(action)
         self.grid.clear(self.player.coord)
 
         # Move Player Body
@@ -154,12 +158,8 @@ class Game:
             coord = self._moveTo(playerBody, coord)
             curLen += 1
         
-        # every step add one body item
-        if curLen < self.player.length:
-            playerBody.nextBody = PlayerBody()
-            self.grid.set(playerBody.nextBody, coord)
-
         # move player Head and detect collision
+        targetCoord = self._getTargetCoord()
         targetObj = self.grid.get(targetCoord)
         if targetObj is not None:
             if isinstance(targetObj, self.dangerObjects):
@@ -170,6 +170,11 @@ class Game:
                 self.food = Food()
                 self.grid.set(self.food)
         self.grid.set(self.player, targetCoord)
+
+        # every step add one body item
+        if curLen < self.player.length:
+            playerBody.nextBody = PlayerBody()
+            self.grid.set(playerBody.nextBody, coord)
             
     def _moveTo(self, obj: GameObject, coord: Coord):
         oldCoord = obj.coord

@@ -39,7 +39,7 @@ class Player(GameObject):
     def __init__(self, direction=Direction.Right):
         super().__init__()
         self.direction = direction
-        self.length = 3
+        self.length = 0
         self.nextBody: PlayerBody = None
 
 
@@ -143,6 +143,8 @@ class Game:
         
         targetCoord = self.getTargetCoord(action)
         self.player.direction = Direction((self.player.direction.value + action.value) % len(Direction))
+        self.grid.clear(self.player.coord)
+
         # Move Player Body
         coord = self.player.coord
         curLen = 0

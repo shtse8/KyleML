@@ -88,35 +88,41 @@ class Puzzle2048(Game):
         return self.game.isGameTerminated()
 
     def render(self) -> None:
-        if self.rendered:
-            return
-
-        self.rendered = True
-        self.width = 500
-        self.height = 600
-        self.display = pygame.display.set_mode((self.width, self.height))
-        pygame.display.set_caption(self.name)
-        pygame.init()
+        self.renderer = Renderer(self)
 
     def update(self) -> None:
-        if not self.rendered:
+        if self.renderer is None:
             return
+        self.renderer.update()
 
+
+class Renderer:
+    def __init__(self, game):
+        self.game = game
+        self.width = 500
+        self.height = 600
+        self.scoreHeight = 100
+        self.display = pygame.display.set_mode((self.width, self.height))
+        pygame.display.set_caption(self.game.name)
+        pygame.init()
+
+    def update(self):
         pygame.event.get()
-        state = self.getState()
-        font = pygame.font.Font(pygame.font.get_default_font(), 36)
-        scoreHeight = 100
+        bg_rect = pygame.Rect(0, 0, self.width, self.height)
+        pygame.draw.rect(self.display, (0, 0, 0), bg_rect)
 
-        score_rect = pygame.Rect(0, 0, self.width, scoreHeight)
-        pygame.draw.rect(self.display, (0, 0, 0), score_rect)
-        text = font.render(str(self.game.score), True, (255, 255, 255))
+        # state = self.getState()
+        font = pygame.font.Font(pygame.font.get_default_font(), 36)
+        score_rect = pygame.Rect(0, 0, self.width, self.scoreHeight)
+        text = font.render(str(self.game.game.score), True, (255, 255, 255))
         text_rect = text.get_rect()
         text_rect.center = score_rect.center
+
         self.display.blit(text, text_rect)
-        for x, col in enumerate(state[0]):
+        for x, col in enumerate(self.game.game.grid.cells):
             for y, cell in enumerate(col):
-                block_size = ((self.height - scoreHeight) / self.observationShape[1], self.width / self.observationShape[2])
-                block_rect = pygame.Rect(x * block_size[1], scoreHeight + y * block_size[0], block_size[1], block_size[0])
+                block_size = ((self.height - self.scoreHeight) / self.game.game.height, self.width / self.game.game.width)
+                block_rect = pygame.Rect(x * block_size[1], self.scoreHeight + y * block_size[0], block_size[1], block_size[0])
                 pygame.draw.rect(self.display, self.tileColors[2 ** cell], block_rect)
                 if not cell == 0:
                     text = font.render(str(2 ** cell), True, (0, 0, 0))

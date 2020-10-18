@@ -520,17 +520,18 @@ class Evaluator(Base):
                 break
         self.flushReports()
 
-    async def eval(self):
-        self.agents[0] = HumanAgent(1, self.env, self.handler)
+    async def eval(self, delay=0):
+        # self.agents[0] = HumanAgent(1, self.env, self.handler)
+        self.env.render()
         self.load()
         self.sync.epochManager.start(1)
         while True:
             try:
                 self.next(0).step(False)
                 # os.system('cls')
-                state = self.env.getState(1).astype(int)
-                print(state[0] + state[1] * 2, "\n")
-                await asyncio.sleep(0.5)
+                # state = self.env.getState(1).astype(int)
+                # print(state[0] + state[1] * 2, "\n")
+                await asyncio.sleep(delay)
                 if self.env.isDone():
                     print("Done:")
                     for agent in self.agents:
@@ -635,7 +636,9 @@ class RL:
             trainer = TrainerProcess(
                 self.algo, self.gameFactory, self.sync, episodes, load).start()
         else:
-            await Evaluator(self.algo, self.gameFactory, self.sync).eval()
+            await Evaluator(self.algo, self.gameFactory, self.sync).eval(
+                delay=self.delay
+            )
 
         self.sync.epochManager.on("restart", self.epochManagerRestartHandler)
         # self.sync.epochManager.on("trained", self.epochManagerTrainedHandler)

@@ -252,11 +252,11 @@ class PPOHandler(AlgoHandler):
             # extrinsic_rewards = KyleList(self.rewardNormalizer.normalize(extrinsic_rewards, update=True))
             # print(extrinsic_rewards, self.rewardNormalizer.max)
 
-            batch_states = memory.select(lambda x: x.info.state).toTensor(torch.float, self.device)
-            batch_nextStates = memory.select(lambda x: x.next.state).toTensor(torch.float, self.device)
-            batch_actions = memory.select(lambda x: x.action.index).toTensor(torch.long, self.device)
-            real_next_state_feature, pred_next_state_feature, _ = self.icm(batch_states, batch_nextStates, batch_actions)
-            intrinsic_rewards = (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1).cpu().detach().numpy()
+            # batch_states = memory.select(lambda x: x.info.state).toTensor(torch.float, self.device)
+            # batch_nextStates = memory.select(lambda x: x.next.state).toTensor(torch.float, self.device)
+            # batch_actions = memory.select(lambda x: x.action.index).toTensor(torch.long, self.device)
+            # real_next_state_feature, pred_next_state_feature, _ = self.icm(batch_states, batch_nextStates, batch_actions)
+            # intrinsic_rewards = (real_next_state_feature.detach() - pred_next_state_feature.detach()).pow(2).mean(-1).cpu().detach().numpy()
             
             # GAE (General Advantage Estimation)
             # Paper: https://arxiv.org/abs/1506.02438
@@ -276,10 +276,11 @@ class PPOHandler(AlgoHandler):
 
             extrinsic_rewards = memory.select(lambda x: x.reward).toArray()
             extrinsic_rewards = KyleList(self.rewardNormalizer.normalize(extrinsic_rewards, update=True))
-            intrinsic_weight = 0.1
+            # intrinsic_weight = 0.1
             for i, transition in enumerate(memory):
-                transition.reward = (1 - intrinsic_weight) * extrinsic_rewards[i]
-                transition.reward += intrinsic_weight * intrinsic_rewards[i]
+                transition.reward = extrinsic_rewards[i]
+                # transition.reward = (1 - intrinsic_weight) * extrinsic_rewards[i]
+                # transition.reward += intrinsic_weight * intrinsic_rewards[i]
 
     def learn(self, memory):
         self.network.train()
@@ -313,7 +314,7 @@ class PPOHandler(AlgoHandler):
                 batch_masks = minibatch.select(lambda x: x.info.mask).toTensor(torch.bool, self.device)
                 batch_hiddenStates = minibatch.select(lambda x: x.info.hiddenState).toTensor(torch.float, self.device)
 
-                batch_nextStates = minibatch.select(lambda x: x.next.state).toTensor(torch.float, self.device)
+                # batch_nextStates = minibatch.select(lambda x: x.next.state).toTensor(torch.float, self.device)
                 batch_actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
                 batch_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
                 # batch_probs = minibatch.select(lambda x: x.action.probs).toTensor(torch.float, self.device)
@@ -323,12 +324,12 @@ class PPOHandler(AlgoHandler):
                 # print("hiddenStates:", batch_hiddenStates)
 
                 # for Curiosity Network
-                real_next_state_feature, pred_next_state_feature, pred_action = self.icm(batch_states, batch_nextStates, batch_actions)
+                # real_next_state_feature, pred_next_state_feature, pred_action = self.icm(batch_states, batch_nextStates, batch_actions)
                 
-                inverse_loss = nn.CrossEntropyLoss()(pred_action, batch_actions)
-                forward_loss = nn.MSELoss()(pred_next_state_feature, real_next_state_feature.detach())
-                icm_loss = inverse_loss + forward_loss
-                # icm_loss = 0
+                # inverse_loss = nn.CrossEntropyLoss()(pred_action, batch_actions)
+                # forward_loss = nn.MSELoss()(pred_next_state_feature, real_next_state_feature.detach())
+                # icm_loss = inverse_loss + forward_loss
+                icm_loss = 0
                 
                 # for AC Network
                 # batch_advantages = minibatch.select(lambda x: x.advantage).toTensor(torch.float, self.device)
@@ -358,7 +359,7 @@ class PPOHandler(AlgoHandler):
                 value_loss = nn.MSELoss()(values, batch_returns)
                 # value_loss = (batch_returns - values).pow(2).mean()
             
-                network_loss = policy_loss + 0.001 * entropy_loss + 0.5 * value_loss
+                network_loss = policy_loss + 0.0001 * entropy_loss + 0.5 * value_loss
 
                 # Calculating Total loss
                 # the weight of this minibatch
@@ -373,10 +374,10 @@ class PPOHandler(AlgoHandler):
             # Chip grad with norm
             # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
             nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
-            nn.utils.clip_grad.clip_grad_norm_(self.icm.parameters(), 0.5)
+            # nn.utils.clip_grad.clip_grad_norm_(self.icm.parameters(), 0.5)
 
             self.network.optimizer.step()
-            self.icm.optimizer.step()
+            # self.icm.optimizer.step()
 
             losses.append(totalLoss)
 

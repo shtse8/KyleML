@@ -13,25 +13,6 @@ class Puzzle2048(Game):
         self.seed = 0
         self.game = Src(self.size, self.seed)
         self.observationShape: tuple = (1, self.size, self.size)
-        self.tileColors: dict = {
-            1: (204, 192, 179),
-            2: (238, 228, 218),
-            4: (237, 224, 200),
-            8: (242, 177, 121),
-            16: (244, 149, 99),
-            32: (245, 121, 77),
-            64: (245, 93, 55),
-            128: (238, 232, 99),
-            256: (237, 176, 77),
-            512: (236, 176, 77),
-            1024: (235, 148, 55),
-            2048: (234, 120, 33),
-            4096: (234, 120, 33),
-            8192: (234, 120, 33),
-            16384: (234, 120, 33),
-            32768: (234, 120, 33),
-            65536: (234, 120, 33),
-        }
 
     @property
     def players(self):
@@ -105,6 +86,25 @@ class Renderer:
         self.display = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption(self.game.name)
         pygame.init()
+        self.tileColors: dict = {
+            1: (204, 192, 179),
+            2: (238, 228, 218),
+            4: (237, 224, 200),
+            8: (242, 177, 121),
+            16: (244, 149, 99),
+            32: (245, 121, 77),
+            64: (245, 93, 55),
+            128: (238, 232, 99),
+            256: (237, 176, 77),
+            512: (236, 176, 77),
+            1024: (235, 148, 55),
+            2048: (234, 120, 33),
+            4096: (234, 120, 33),
+            8192: (234, 120, 33),
+            16384: (234, 120, 33),
+            32768: (234, 120, 33),
+            65536: (234, 120, 33),
+        }
 
     def update(self):
         pygame.event.get()
@@ -121,11 +121,11 @@ class Renderer:
         self.display.blit(text, text_rect)
         for x, col in enumerate(self.game.game.grid.cells):
             for y, cell in enumerate(col):
-                block_size = ((self.height - self.scoreHeight) / self.game.game.height, self.width / self.game.game.width)
+                block_size = ((self.height - self.scoreHeight) / self.game.game.size, self.width / self.game.game.size)
                 block_rect = pygame.Rect(x * block_size[1], self.scoreHeight + y * block_size[0], block_size[1], block_size[0])
-                pygame.draw.rect(self.display, self.tileColors[2 ** cell], block_rect)
-                if not cell == 0:
-                    text = font.render(str(2 ** cell), True, (0, 0, 0))
+                if cell is not None:
+                    pygame.draw.rect(self.display, self.tileColors[cell.value], block_rect)
+                    text = font.render(str(cell.value), True, (0, 0, 0))
                     text_rect = text.get_rect()
                     text_rect.center = block_rect.center
                     self.display.blit(text, text_rect)

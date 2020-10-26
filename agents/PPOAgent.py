@@ -100,8 +100,7 @@ class PPONetwork(Network):
         self.value = nn.Sequential(
             BodyLayers(inputShape, hidden_nodes),
             FCLayers(hidden_nodes, hidden_nodes, 3, nn.ELU),
-            nn.Linear(hidden_nodes, 1),
-            nn.Sigmoid())
+            nn.Linear(hidden_nodes, 1))
 
         self.initWeights()
 
@@ -125,9 +124,13 @@ class PPONetwork(Network):
         x = F.softmax(x, dim=-1)
         return x
 
-    def forward(self, x, h, m=None):
+    def forward(self, x, h, m=None, postProcess=True):
         # x, h = self._body(x, h)
-        return self._policy(x, m), self.value(x), h
+        policy = self._policy(x, m)
+        value = self.value(x)
+        # if postProcess:
+        #     value = torch.sigmoid(value)
+        return policy, value, h
 
     def getPolicy(self, x, h, m=None):
         # x, h = self._body(x, h)
@@ -138,9 +141,8 @@ class PPONetwork(Network):
         return self.value(x), h
 
 
-
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=1024, learningRate=5e-5, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-5, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -215,12 +217,12 @@ class PPOHandler(AlgoHandler):
         super().__init__(config, env, role, device)
         self.network = PPONetwork(env.observationShape, env.actionCount)
         self.network.to(self.device)
-        self.icm = ICMNetwork(env.observationShape, env.actionCount)
-        self.icm.to(self.device)
-        self.rewardNormalizer = RangeNormalizer()
+        # self.icm = ICMNetwork(env.observationShape, env.actionCount)
+        # self.icm.to(self.device)
+        self.rewardNormalizer = StdNormalizer()
         if role == Role.Trainer:
             self.network.buildOptimizer(self.config.learningRate)
-            self.icm.buildOptimizer(self.config.learningRate)
+            # self.icm.buildOptimizer(self.config.learningRate)
 
     def getAgentHandler(self, env):
         return AgentHandler(self, env)
@@ -228,13 +230,13 @@ class PPOHandler(AlgoHandler):
     def dump(self):
         data = {}
         data["network"] = self._getStateDict(self.network)
-        data["icm"] = self._getStateDict(self.icm)
+        # data["icm"] = self._getStateDict(self.icm)
         data["rewardNormalizer"] = self.rewardNormalizer.dump()
         return data
 
     def load(self, data):
         self.network.load_state_dict(data["network"])
-        self.icm.load_state_dict(data["icm"])
+        # self.icm.load_state_dict(data["icm"])
         self.rewardNormalizer.load(data["rewardNormalizer"])
     
     def preprocess(self, memory):
@@ -284,7 +286,7 @@ class PPOHandler(AlgoHandler):
 
     def learn(self, memory):
         self.network.train()
-        self.icm.train()
+        # self.icm.train()
         
         batchSize = min(memory.size(), self.config.batchSize)
         n_miniBatch = math.ceil(memory.size() / batchSize)
@@ -301,7 +303,7 @@ class PPOHandler(AlgoHandler):
         losses = []
         for n in range(4):
             self.network.optimizer.zero_grad()
-            self.icm.optimizer.zero_grad()
+            # self.icm.optimizer.zero_grad()
             totalLoss = 0
             for i in range(n_miniBatch):
                 startIndex = i * batchSize
@@ -336,7 +338,9 @@ class PPOHandler(AlgoHandler):
                 # batch_advantages = advantages.get(startIndex, batchSize).toTensor(torch.float, self.device)
                 batch_advantages = batch_returns - batch_values
                 # print(batch_advantages)
-                probs, values, _ = self.network(batch_states, batch_hiddenStates, batch_masks)
+                probs, values, _ = self.network(batch_states, batch_hiddenStates, batch_masks, postProcess=False)
+                # if n == 0:
+                #     print(probs[0])
                 values = values.squeeze(-1)
 
                 # PPO2 - Confirm the samples aren't too far from pi.
@@ -357,15 +361,22 @@ class PPOHandler(AlgoHandler):
 
                 # Minimize Value Loss  (MSE)
                 value_loss = nn.MSELoss()(values, batch_returns)
+                # value_loss = nn.BCEWithLogitsLoss()(values, batch_returns)
                 # value_loss = (batch_returns - values).pow(2).mean()
-            
-                network_loss = policy_loss + 0.0001 * entropy_loss + 0.5 * value_loss
+
+                # p = np.full(self.env.actionCount, 1 / self.env.actionCount)
+                # eps = torch.finfo(torch.float).eps
+                # logp = np.log(np.array([max(eps, min(x, 1 - eps)) for x in p]))
+                # max_entropy = np.sum(-p*logp)
+
+                network_loss = policy_loss + 0.0001 * entropy_loss + value_loss
 
                 # Calculating Total loss
                 # the weight of this minibatch
                 weight = len(minibatch) / len(memory)
                 loss = (network_loss + icm_loss) * weight
                 # print("Loss:", loss, policy_loss, entropy_loss, value_loss, inverse_loss, forward_loss)
+                # print("Loss:", loss, policy_loss, entropy_loss, value_loss)
 
                 # Accumulating the loss to the graph
                 loss.backward()

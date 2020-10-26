@@ -5,9 +5,17 @@ class Categorical:
     def __init__(self, probs, masks=None):
         self.probs = probs
         self.masks = masks
-        
+        if masks is not None:
+            self.probs = self.probs.masked_fill(~self.masks, 0)
+        self.probs = self.probs / self.probs.sum(axis=-1, keepdims=True)
+    
+    @property
+    def logits(self):
+        eps = torch.finfo(torch.float).eps
+        return self.probs.clamp(eps, 1 - eps).log()
+
     def entropy(self):
+        values = self.probs * self.logits
         if self.masks is not None:
-            return torch.stack([torch.distributions.Categorical(probs=p[m.to(bool)]).entropy() for p, m in zip(self.probs, self.masks)])
-        else:
-            return torch.distributions.Categorical(probs=self.probs).entropy()
+            values = values.masked_fill(~self.masks, 0)
+        return -values.sum(axis=-1)

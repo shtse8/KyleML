@@ -35,6 +35,7 @@ from utils.Network import Network, BodyLayers, GRULayers, FCLayers
 from utils.multiprocessing import Proxy
 from utils.PredictionHandler import PredictionHandler
 from utils.KyleList import KyleList
+from utils.Distributions import Categorical
 
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(suppress=True)
@@ -142,7 +143,7 @@ class PPONetwork(Network):
 
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-5, gamma=0.99, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-5, gamma=1, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -270,7 +271,7 @@ class PPOHandler(AlgoHandler):
                 # transition.reward = extrinsic_rewards[i]
                 # transition.reward += intrinsic_weight * intrinsic_rewards[i]
                 # print(extrinsic_rewards[i], intrinsic_rewards[i])
-                transition.advantage = transition.reward + self.config.gamma * lastValue * (1 - transition.next.done) - transition.action.value
+                transition.advantage = transition.reward - 1e-6 + self.config.gamma * lastValue * (1 - transition.next.done) - transition.action.value
                 transition.advantage += self.config.gaeCoeff * self.config.gamma * lastAdvantage * (1 - transition.next.done)
                 transition.reward = transition.advantage + transition.action.value
                 lastAdvantage = transition.advantage
@@ -357,7 +358,7 @@ class PPOHandler(AlgoHandler):
                 # Maximize Entropy Loss  (MSE)
                 # print(memory[0].action.probs)
                 # print(batch_probs[0], dist.entropy()[0])
-                entropy_loss = -dist.entropy().mean()
+                entropy_loss = -Categorical(probs, batch_masks).entropy().mean()
 
                 # Minimize Value Loss  (MSE)
                 value_loss = nn.MSELoss()(values, batch_returns)
@@ -369,7 +370,7 @@ class PPOHandler(AlgoHandler):
                 # logp = np.log(np.array([max(eps, min(x, 1 - eps)) for x in p]))
                 # max_entropy = np.sum(-p*logp)
 
-                network_loss = policy_loss + 0.0001 * entropy_loss + value_loss
+                network_loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
 
                 # Calculating Total loss
                 # the weight of this minibatch

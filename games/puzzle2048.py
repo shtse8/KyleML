@@ -10,7 +10,7 @@ class Puzzle2048(Game):
         super().__init__()
         self.name: str = "game2048"
         self.size: int = size
-        self.seed = 0
+        self.seed = None
         self.game = Src(self.size, self.seed)
         self.observationShape: tuple = (1, self.size, self.size)
 

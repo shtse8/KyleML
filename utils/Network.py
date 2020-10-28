@@ -13,15 +13,15 @@ class ConvLayers(nn.Module):
             # small CNN
             self.layers = nn.Sequential(
                 nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(16),
                 nn.ELU(),
-                # nn.BatchNorm2d(16),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(32),
                 nn.ELU(),
-                # nn.BatchNorm2d(32),
                 nn.Flatten(),
                 nn.Linear(32 * inputShape[1] * inputShape[2], hidden_size),
+                nn.BatchNorm1d(hidden_size),
                 nn.ELU())
-                # nn.BatchNorm1d(hidden_size))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
@@ -49,6 +49,7 @@ class FCLayers(nn.Module):
         for i in range(num_layers):
             in_nodes = n_inputs if i == 0 else hidden_size
             self.layers.append(nn.Linear(in_nodes, hidden_size))
+            self.layers.append(nn.BatchNorm1d(hidden_size))
             self.layers.append(activator())
         self.num_output = hidden_size
 
@@ -56,7 +57,6 @@ class FCLayers(nn.Module):
         for m in self.layers:
             x = m(x)
         return x
-
 
 class BodyLayers(nn.Module):
     def __init__(self, inputShape, hidden_nodes):

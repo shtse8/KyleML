@@ -35,7 +35,7 @@ from utils.Network import Network, BodyLayers, GRULayers, FCLayers
 from utils.multiprocessing import Proxy
 from utils.PredictionHandler import PredictionHandler
 from utils.KyleList import KyleList
-from utils.Distributions import Categorical
+# from utils.Distributions import Categorical
 
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(suppress=True)
@@ -241,6 +241,7 @@ class PPOHandler(AlgoHandler):
         self.rewardNormalizer.load(data["rewardNormalizer"])
     
     def preprocess(self, memory):
+        self.network.eval()
         with torch.no_grad():
             lastValue = 0
             lastMemory = memory[-1]
@@ -358,7 +359,7 @@ class PPOHandler(AlgoHandler):
                 # Maximize Entropy Loss  (MSE)
                 # print(memory[0].action.probs)
                 # print(batch_probs[0], dist.entropy()[0])
-                entropy_loss = -Categorical(probs, batch_masks).entropy().mean()
+                entropy_loss = -dist.entropy().mean()
 
                 # Minimize Value Loss  (MSE)
                 value_loss = nn.MSELoss()(values, batch_returns)
@@ -385,6 +386,7 @@ class PPOHandler(AlgoHandler):
 
             # Chip grad with norm
             # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
+            # https://github.com/pytorch/pytorch/blob/master/torch/nn/utils/clip_grad.py
             nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
             # nn.utils.clip_grad.clip_grad_norm_(self.icm.parameters(), 0.5)
 

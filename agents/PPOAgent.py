@@ -31,7 +31,7 @@ from .Agent import Base, EvaluatorService, SyncContext, Action, Config, Role, Al
 from utils.PipedProcess import Process, PipedProcess
 from utils.Normalizer import RangeNormalizer, StdNormalizer
 from utils.Message import NetworkInfo, LearnReport, EnvReport
-from utils.Network import Network, BodyLayers, GRULayers, FCLayers
+from utils.Network import Network, BodyLayers, GRULayers, FCLayers, Activator, Norm
 from utils.multiprocessing import Proxy
 from utils.PredictionHandler import PredictionHandler
 from utils.KyleList import KyleList
@@ -94,13 +94,13 @@ class PPONetwork(Network):
         # Define policy head
         self.policy = nn.Sequential(
             BodyLayers(inputShape, hidden_nodes),
-            FCLayers(hidden_nodes, hidden_nodes, 3, nn.ELU),
+            FCLayers(hidden_nodes, hidden_nodes, 3, norm=None),
             nn.Linear(hidden_nodes, n_outputs))
 
         # Define value head
         self.value = nn.Sequential(
             BodyLayers(inputShape, hidden_nodes),
-            FCLayers(hidden_nodes, hidden_nodes, 3, nn.ELU),
+            FCLayers(hidden_nodes, hidden_nodes, 3, norm=None),
             nn.Linear(hidden_nodes, 1))
 
         self.initWeights()
@@ -125,13 +125,15 @@ class PPONetwork(Network):
         x = F.softmax(x, dim=-1)
         return x
 
+    def _value(self, x, postProcess=True):
+        x = self.value(x)
+        # if postProcess:
+        #     x = torch.sigmoid(x)
+        return x
+
     def forward(self, x, h, m=None, postProcess=True):
         # x, h = self._body(x, h)
-        policy = self._policy(x, m)
-        value = self.value(x)
-        # if postProcess:
-        #     value = torch.sigmoid(value)
-        return policy, value, h
+        return self._policy(x, m), self._value(x, postProcess), h
 
     def getPolicy(self, x, h, m=None):
         # x, h = self._body(x, h)
@@ -139,11 +141,11 @@ class PPONetwork(Network):
 
     def getValue(self, x, h):
         # x, h = self._body(x, h)
-        return self.value(x), h
+        return self._value(x), h
 
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-5, gamma=1, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-4, gamma=1, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -371,7 +373,7 @@ class PPOHandler(AlgoHandler):
                 # logp = np.log(np.array([max(eps, min(x, 1 - eps)) for x in p]))
                 # max_entropy = np.sum(-p*logp)
 
-                network_loss = policy_loss + 0.01 * entropy_loss + 0.5 * value_loss
+                network_loss = policy_loss + 0.001 * entropy_loss + 0.5 * value_loss
 
                 # Calculating Total loss
                 # the weight of this minibatch

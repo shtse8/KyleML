@@ -5,36 +5,92 @@ import torch.optim as optim
 import torch.nn as nn
 import torch
 from .Message import NetworkInfo
+from enum import Enum
+
+
+class Activator(Enum):
+    ReLU = 0
+    ELU = 1
+
+
+class Norm(Enum):
+    BatchNorm = 0
+    GroupNorm = 1
+
+
+class Norm2dLayer(nn.Module):
+    def __init__(self, num_features, type):
+        super().__init__()
+        self.layer = lambda x: x
+        if type == Norm.BatchNorm:
+            self.layer = nn.BatchNorm2d(num_features)
+        elif type == Norm.GroupNorm:
+            raise Exception("Group norm is not supported.")
+
+    def forward(self, x):
+        return self.layer(x)
+
+
+class Norm1dLayer(nn.Module):
+    def __init__(self, num_features, type):
+        super().__init__()
+        self.layer = lambda x: x
+        if type == Norm.BatchNorm:
+            self.layer = nn.BatchNorm1d(num_features)
+        elif type == Norm.GroupNorm:
+            raise Exception("Group norm is not supported.")
+
+    def forward(self, x):
+        return self.layer(x)
+
+
+class ActivatorLayer(nn.Module):
+    def __init__(self, type):
+        super().__init__()
+        self.layer = lambda x: x
+        if type == Activator.ELU:
+            self.layer = nn.ELU()
+        elif type == Activator.ReLU:
+            self.layer = nn.ReLU()
+
+    def forward(self, x):
+        return self.layer(x)
+
 
 class ConvLayers(nn.Module):
-    def __init__(self, inputShape, hidden_size):
+    def __init__(self, inputShape, hidden_size, activator: Activator = Activator.ELU, norm: Norm = Norm.BatchNorm):
         super().__init__()
         if min(inputShape[1], inputShape[2]) < 20:
+            
             # small CNN
             self.layers = nn.Sequential(
                 nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
-                nn.BatchNorm2d(16),
-                nn.ELU(),
+                Norm2dLayer(16, norm),
+                ActivatorLayer(activator),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
-                nn.BatchNorm2d(32),
-                nn.ELU(),
+                Norm2dLayer(32, norm),
+                ActivatorLayer(activator),
                 nn.Flatten(),
                 nn.Linear(32 * inputShape[1] * inputShape[2], hidden_size),
-                nn.BatchNorm1d(hidden_size),
-                nn.ELU())
+                Norm1dLayer(hidden_size, norm),
+                ActivatorLayer(activator))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
                 nn.Conv2d(inputShape[0], 32, kernel_size=8, stride=4),
-                nn.ELU(),
+                Norm2dLayer(32, norm),
+                ActivatorLayer(activator),
                 nn.Conv2d(32, 64, kernel_size=4, stride=2),
-                nn.ELU(),
+                Norm2dLayer(64, norm),
+                ActivatorLayer(activator),
                 nn.Conv2d(64, 64, kernel_size=3, stride=1),
-                nn.ELU(),
+                Norm2dLayer(64, norm),
+                ActivatorLayer(activator),
                 # [64, H, W] -> [64 * H * W]
                 nn.Flatten(),
                 nn.Linear(64 * inputShape[1] * inputShape[2], hidden_size),
-                nn.ELU())
+                Norm1dLayer(hidden_size, norm),
+                ActivatorLayer(activator))
         self.num_output = hidden_size
 
     def forward(self, x):
@@ -43,14 +99,14 @@ class ConvLayers(nn.Module):
 
 
 class FCLayers(nn.Module):
-    def __init__(self, n_inputs, hidden_size, num_layers=1, activator=nn.ELU):
+    def __init__(self, n_inputs, hidden_size, num_layers=1, activator: Activator = Activator.ELU, norm: Norm = Norm.BatchNorm):
         super().__init__()
         self.layers = nn.ModuleList()
         for i in range(num_layers):
             in_nodes = n_inputs if i == 0 else hidden_size
             self.layers.append(nn.Linear(in_nodes, hidden_size))
-            self.layers.append(nn.BatchNorm1d(hidden_size))
-            self.layers.append(activator())
+            self.layers.append(Norm1dLayer(hidden_size, norm))
+            self.layers.append(ActivatorLayer(activator))
         self.num_output = hidden_size
 
     def forward(self, x):
@@ -59,14 +115,14 @@ class FCLayers(nn.Module):
         return x
 
 class BodyLayers(nn.Module):
-    def __init__(self, inputShape, hidden_nodes):
+    def __init__(self, inputShape, hidden_nodes, activator: Activator = Activator.ELU, norm: Norm = Norm.BatchNorm):
         super().__init__()
         if type(inputShape) is tuple and len(inputShape) == 3:
-            self.layers = ConvLayers(inputShape, hidden_nodes)
+            self.layers = ConvLayers(inputShape, hidden_nodes, activator=activator, norm=norm)
         else:
             if type(inputShape) is tuple and len(inputShape) == 1:
                 inputShape = inputShape[0]
-            self.layers = FCLayers(inputShape, hidden_nodes, num_layers=3)
+            self.layers = FCLayers(inputShape, hidden_nodes, num_layers=3, activator=activator, norm=norm)
         self.num_output = hidden_nodes
             
     def forward(self, x):

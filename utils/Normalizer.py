@@ -15,33 +15,26 @@ class Normalizer:
 
 class StdNormalizer(Normalizer):
     # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
-    def __init__(self, epsilon=1e-8, shape=(), maxCount=0):
+    def __init__(self, epsilon=1e-8, shape=(), momentum=0.8):
         self.mean = np.zeros(shape, np.float64)
         self.var = np.ones(shape, np.float64)
-        self.count = 0
+        self.momentum = momentum
+        # self.count = 0
         self.epsilon = epsilon
-        self.maxCount = maxCount
 
     def update(self, x):
         batch_mean = np.mean(x, axis=0)
         batch_var = np.var(x, axis=0)
-        batch_count = x.shape[0]
-        self.update_from_moments(batch_mean, batch_var, batch_count)
+        self.update_from_moments(batch_mean, batch_var)
 
-    def update_from_moments(self, batch_mean, batch_var, batch_count):
+    def update_from_moments(self, batch_mean, batch_var):
         delta = batch_mean - self.mean
-        total_count = self.count + batch_count
 
-        self.mean = self.mean + delta * batch_count / total_count
+        self.mean = self.mean + delta * (1 - self.momentum)
 
-        m_a = self.var * self.count
-        m_b = batch_var * batch_count
-        M2 = m_a + m_b + np.square(delta) * self.count * batch_count / total_count
-        self.var = M2 / total_count
-
-        self.count = total_count
-        if self.maxCount > 0:
-            self.count = min(self.maxCount, self.count)
+        m_a = self.var * self.momentum
+        m_b = batch_var * (1 - self.momentum)
+        self.var = m_a + m_b + np.square(delta) * self.momentum * (1 - self.momentum)
 
     def normalize(self, x, update=False):
         if update:
@@ -52,16 +45,64 @@ class StdNormalizer(Normalizer):
         data = {}
         data['mean'] = self.mean
         data['var'] = self.var
-        data['count'] = self.count
         return data
 
     def load(self, data):
         self.mean = data['mean']
         self.var = data['var']
-        self.count = data['count']
 
     def __str__(self):
-        return f"StdNormalizer(mean={self.mean:.4f};var={self.var:.4f};count={self.count})"
+        return f"StdNormalizer(mean={self.mean:.4f};var={self.var:.4f})"
+
+# class StdNormalizer(Normalizer):
+#     # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
+#     def __init__(self, epsilon=1e-8, shape=(), maxCount=0):
+#         self.mean = np.zeros(shape, np.float64)
+#         self.var = np.ones(shape, np.float64)
+#         self.count = 0
+#         self.epsilon = epsilon
+#         self.maxCount = maxCount
+
+#     def update(self, x):
+#         batch_mean = np.mean(x, axis=0)
+#         batch_var = np.var(x, axis=0)
+#         batch_count = x.shape[0]
+#         self.update_from_moments(batch_mean, batch_var, batch_count)
+
+#     def update_from_moments(self, batch_mean, batch_var, batch_count):
+#         delta = batch_mean - self.mean
+#         total_count = self.count + batch_count
+
+#         self.mean = self.mean + delta * batch_count / total_count
+
+#         m_a = self.var * self.count
+#         m_b = batch_var * batch_count
+#         M2 = m_a + m_b + np.square(delta) * self.count * batch_count / total_count
+#         self.var = M2 / total_count
+
+#         self.count = total_count
+#         if self.maxCount > 0:
+#             self.count = min(self.maxCount, self.count)
+
+#     def normalize(self, x, update=False):
+#         if update:
+#             self.update(x)
+#         return (x - self.mean) / (np.sqrt(self.var) + self.epsilon)
+        
+#     def dump(self):
+#         data = {}
+#         data['mean'] = self.mean
+#         data['var'] = self.var
+#         data['count'] = self.count
+#         return data
+
+#     def load(self, data):
+#         self.mean = data['mean']
+#         self.var = data['var']
+#         self.count = data['count']
+
+#     def __str__(self):
+#         return f"StdNormalizer(mean={self.mean:.4f};var={self.var:.4f};count={self.count})"
 
 
 class RangeNormalizer(Normalizer):

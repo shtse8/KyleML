@@ -65,32 +65,32 @@ class ConvLayers(nn.Module):
             # small CNN
             self.layers = nn.Sequential(
                 nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
+                ActivatorLayer(activator),
                 Norm2dLayer(16, norm),
-                ActivatorLayer(activator),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
-                Norm2dLayer(32, norm),
                 ActivatorLayer(activator),
+                Norm2dLayer(32, norm),
                 nn.Flatten(),
                 nn.Linear(32 * inputShape[1] * inputShape[2], hidden_size),
-                Norm1dLayer(hidden_size, norm),
-                ActivatorLayer(activator))
+                ActivatorLayer(activator),
+                Norm1dLayer(hidden_size, norm))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
                 nn.Conv2d(inputShape[0], 32, kernel_size=8, stride=4),
+                ActivatorLayer(activator),
                 Norm2dLayer(32, norm),
-                ActivatorLayer(activator),
                 nn.Conv2d(32, 64, kernel_size=4, stride=2),
-                Norm2dLayer(64, norm),
                 ActivatorLayer(activator),
+                Norm2dLayer(64, norm),
                 nn.Conv2d(64, 64, kernel_size=3, stride=1),
-                Norm2dLayer(64, norm),
                 ActivatorLayer(activator),
+                Norm2dLayer(64, norm),
                 # [64, H, W] -> [64 * H * W]
                 nn.Flatten(),
                 nn.Linear(64 * inputShape[1] * inputShape[2], hidden_size),
-                Norm1dLayer(hidden_size, norm),
-                ActivatorLayer(activator))
+                ActivatorLayer(activator),
+                Norm1dLayer(hidden_size, norm))
         self.num_output = hidden_size
 
     def forward(self, x):
@@ -105,8 +105,8 @@ class FCLayers(nn.Module):
         for i in range(num_layers):
             in_nodes = n_inputs if i == 0 else hidden_size
             self.layers.append(nn.Linear(in_nodes, hidden_size))
-            self.layers.append(Norm1dLayer(hidden_size, norm))
             self.layers.append(ActivatorLayer(activator))
+            self.layers.append(Norm1dLayer(hidden_size, norm))
         self.num_output = hidden_size
 
     def forward(self, x):

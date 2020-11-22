@@ -86,21 +86,21 @@ class PPONetwork(Network):
         # self.eps = torch.finfo(torch.float).eps
         hidden_nodes = 256
         # semi_hidden_nodes = hidden_nodes // 2
-        self.body = BodyLayers(inputShape, hidden_nodes)
+        self.body = BodyLayers(inputShape, hidden_nodes, activator=Activator.ReLU, norm=None)
         
         self.gru = GRULayers(self.body.num_output, hidden_nodes, 
             num_layers=2, bidirectional=True)
 
         # Define policy head
         self.policy = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes),
-            FCLayers(hidden_nodes, hidden_nodes, 3, norm=None),
+            BodyLayers(inputShape, hidden_nodes, activator=Activator.ReLU),
+            FCLayers(hidden_nodes, hidden_nodes, 3, activator=Activator.ReLU, norm=None),
             nn.Linear(hidden_nodes, n_outputs))
 
         # Define value head
         self.value = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes),
-            FCLayers(hidden_nodes, hidden_nodes, 3, norm=None),
+            BodyLayers(inputShape, hidden_nodes, activator=Activator.ReLU),
+            FCLayers(hidden_nodes, hidden_nodes, 3, activator=Activator.ReLU, norm=None),
             nn.Linear(hidden_nodes, 1))
 
         self.initWeights()
@@ -145,7 +145,7 @@ class PPONetwork(Network):
 
 
 class PPOConfig(Config):
-    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-4, gamma=1, epsClip=0.2, gaeCoeff=0.95):
+    def __init__(self, sampleSize=512, batchSize=1024, learningRate=1e-5, gamma=0.999, epsClip=0.2, gaeCoeff=0.95):
         super().__init__(sampleSize, batchSize, learningRate)
         self.gamma = gamma
         self.epsClip = epsClip
@@ -222,7 +222,7 @@ class PPOHandler(AlgoHandler):
         self.network.to(self.device)
         # self.icm = ICMNetwork(env.observationShape, env.actionCount)
         # self.icm.to(self.device)
-        self.rewardNormalizer = StdNormalizer()
+        self.rewardNormalizer = RangeNormalizer()
         if role == Role.Trainer:
             self.network.buildOptimizer(self.config.learningRate)
             # self.icm.buildOptimizer(self.config.learningRate)
@@ -254,8 +254,8 @@ class PPOHandler(AlgoHandler):
                 lastValue = lastValue.item()
             # print()
             # print(memory[0].action.index, memory[0].action.probs)
-            # extrinsic_rewards = memory.select(lambda x: x.reward).toArray()
-            # extrinsic_rewards = KyleList(self.rewardNormalizer.normalize(extrinsic_rewards, update=True))
+            extrinsic_rewards = memory.select(lambda x: x.reward)
+            extrinsic_rewards = self.rewardNormalizer.normalize(extrinsic_rewards, update=True)
             # print(extrinsic_rewards, self.rewardNormalizer.max)
 
             # batch_states = memory.select(lambda x: x.info.state).toTensor(torch.float, self.device)
@@ -270,23 +270,20 @@ class PPOHandler(AlgoHandler):
             # gaeCoeff = 0, advantage = reward + next_value - value
             # gaeCoeff = 1, advantage = total_reward - value
             lastAdvantage = 0
+            # intrinsic_weight = 0.1
             for i, transition in reversed(list(enumerate(memory))):
-                # transition.reward = extrinsic_rewards[i]
+                # transition.reward /= 10000
+                transition.reward = extrinsic_rewards[i]
+                # transition.reward += intrinsic_weight * intrinsic_rewards[i]
+                # transition.reward = (1 - intrinsic_weight) * extrinsic_rewards[i]
                 # transition.reward += intrinsic_weight * intrinsic_rewards[i]
                 # print(extrinsic_rewards[i], intrinsic_rewards[i])
-                transition.advantage = transition.reward - 1e-6 + self.config.gamma * lastValue * (1 - transition.next.done) - transition.action.value
+                transition.advantage = transition.reward+ self.config.gamma * lastValue * (1 - transition.next.done) - transition.action.value
                 transition.advantage += self.config.gaeCoeff * self.config.gamma * lastAdvantage * (1 - transition.next.done)
                 transition.reward = transition.advantage + transition.action.value
                 lastAdvantage = transition.advantage
                 lastValue = transition.action.value
 
-            extrinsic_rewards = memory.select(lambda x: x.reward).toArray()
-            extrinsic_rewards = KyleList(self.rewardNormalizer.normalize(extrinsic_rewards, update=True))
-            # intrinsic_weight = 0.1
-            for i, transition in enumerate(memory):
-                transition.reward = extrinsic_rewards[i]
-                # transition.reward = (1 - intrinsic_weight) * extrinsic_rewards[i]
-                # transition.reward += intrinsic_weight * intrinsic_rewards[i]
 
     def learn(self, memory):
         self.network.train()
@@ -364,6 +361,7 @@ class PPOHandler(AlgoHandler):
                 entropy_loss = -dist.entropy().mean()
 
                 # Minimize Value Loss  (MSE)
+                # print("diff", (batch_returns - values).pow(2), (batch_returns - values).pow(2).mean())
                 value_loss = nn.MSELoss()(values, batch_returns)
                 # value_loss = nn.BCEWithLogitsLoss()(values, batch_returns)
                 # value_loss = (batch_returns - values).pow(2).mean()

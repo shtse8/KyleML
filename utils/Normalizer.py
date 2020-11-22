@@ -15,25 +15,24 @@ class Normalizer:
 
 class StdNormalizer(Normalizer):
     # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
-    def __init__(self, epsilon=1e-8, shape=(), momentum=0.8):
+    def __init__(self, epsilon=1e-8, shape=(), momentum=0.1):
         self.mean = np.zeros(shape, np.float64)
         self.var = np.ones(shape, np.float64)
         self.momentum = momentum
-        # self.count = 0
         self.epsilon = epsilon
 
     def update(self, x):
-        batch_mean = np.mean(x, axis=0)
-        batch_var = np.var(x, axis=0)
+        batch_mean = x.mean(axis=0)
+        batch_var = x.var(axis=0)
         self.update_from_moments(batch_mean, batch_var)
 
     def update_from_moments(self, batch_mean, batch_var):
         delta = batch_mean - self.mean
 
-        self.mean = self.mean + delta * (1 - self.momentum)
+        self.mean = self.mean + delta * self.momentum
 
-        m_a = self.var * self.momentum
-        m_b = batch_var * (1 - self.momentum)
+        m_a = self.var * (1 - self.momentum)
+        m_b = batch_var * self.momentum
         self.var = m_a + m_b + np.square(delta) * self.momentum * (1 - self.momentum)
 
     def normalize(self, x, update=False):

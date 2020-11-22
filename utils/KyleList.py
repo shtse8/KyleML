@@ -22,11 +22,14 @@ class KyleList(Generic[T]):
     def get(self, fromPos: int, num: int) -> KyleList[T]:
         return KyleList(self.array[fromPos:fromPos+num])
 
-    def sum(self) -> float:
+    def sum(self):
         return self.array.sum()
 
-    def mean(self) -> float:
-        return self.array.mean()
+    def mean(self, axis=None):
+        return self.array.mean(axis=axis)
+
+    def var(self, axis=None):
+        return self.array.var(axis=axis)
 
     def std(self) -> float:
         return self.array.std()
@@ -40,6 +43,8 @@ class KyleList(Generic[T]):
         return KyleList(self.array - other)
 
     def __truediv__(self, other):
+        if isinstance(other, KyleList):
+            other = other.array
         return KyleList(self.array / other)
 
     def __len__(self) -> int:
@@ -52,7 +57,7 @@ class KyleList(Generic[T]):
         return Iterator(self)
 
     def __str__(self):
-        return str(self.array)
+        return f"KyleList({str(self.array)})"
 
 
 class Iterator:

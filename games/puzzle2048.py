@@ -12,6 +12,7 @@ class Puzzle2048(Game):
         self.size: int = size
         self.seed = None
         self.game = Src(self.size, self.seed)
+        # self.observationShape: tuple = (12, self.size, self.size)
         self.observationShape: tuple = (1, self.size, self.size)
 
     @property
@@ -39,6 +40,8 @@ class Puzzle2048(Game):
         for _, _, cell in self.game.grid.eachCell():
             if cell:
                 state[0][cell.x][cell.y] = math.log2(cell.value)
+                # state[0][cell.x][cell.y] = 1
+                # state[int(math.log2(cell.value))][cell.x][cell.y] = 1
         return state
 
     def getMask(self, playerId: int):

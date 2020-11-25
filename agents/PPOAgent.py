@@ -86,21 +86,21 @@ class PPONetwork(Network):
         # self.eps = torch.finfo(torch.float).eps
         hidden_nodes = 256
         # semi_hidden_nodes = hidden_nodes // 2
-        self.body = BodyLayers(inputShape, hidden_nodes, activator=Activator.ReLU, norm=None)
+        self.body = BodyLayers(inputShape, hidden_nodes, activator=Activator.ELU, norm=None)
         
         self.gru = GRULayers(self.body.num_output, hidden_nodes, 
             num_layers=2, bidirectional=True)
 
         # Define policy head
         self.policy = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes, activator=Activator.ReLU),
-            FCLayers(hidden_nodes, hidden_nodes, 3, activator=Activator.ReLU, norm=None),
+            # BodyLayers(inputShape, hidden_nodes, activator=Activator.ELU),
+            FCLayers(self.gru.num_output, hidden_nodes, 3, activator=Activator.ELU, norm=None),
             nn.Linear(hidden_nodes, n_outputs))
 
         # Define value head
         self.value = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes, activator=Activator.ReLU),
-            FCLayers(hidden_nodes, hidden_nodes, 3, activator=Activator.ReLU, norm=None),
+            # BodyLayers(inputShape, hidden_nodes, activator=Activator.ELU),
+            FCLayers(self.gru.num_output, hidden_nodes, 3, activator=Activator.ELU, norm=None),
             nn.Linear(hidden_nodes, 1))
 
         self.initWeights()
@@ -115,7 +115,7 @@ class PPONetwork(Network):
 
     def _body(self, x, h):
         x = self.body(x)
-        # x, h = self.gru(x, h)
+        x, h = self.gru(x, h)
         return x, h
 
     def _policy(self, x, m=None):
@@ -132,15 +132,15 @@ class PPONetwork(Network):
         return x
 
     def forward(self, x, h, m=None, postProcess=True):
-        # x, h = self._body(x, h)
+        x, h = self._body(x, h)
         return self._policy(x, m), self._value(x, postProcess), h
 
     def getPolicy(self, x, h, m=None):
-        # x, h = self._body(x, h)
+        x, h = self._body(x, h)
         return self._policy(x, m), h
 
     def getValue(self, x, h):
-        # x, h = self._body(x, h)
+        x, h = self._body(x, h)
         return self._value(x), h
 
 

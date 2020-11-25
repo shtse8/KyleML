@@ -12,10 +12,16 @@ class TicTacToe(Game):
         self.sizeX = sizeX
         self.sizeY = sizeY
         self.winSize = winSize
-        self.playerCount = 2
         self.game = Src(sizeX, sizeY, winSize)
         self.observationShape: tuple = (self.playerCount, sizeX, sizeY)
-        self.actionSpace: int = sizeX * sizeY
+
+    @property
+    def players(self):
+        return [1, 2]
+      
+    @property
+    def actionSpaces(self):
+        return range(self.sizeX * self.sizeY)
 
     def getPlayerCount(self):
         return self.playerCount

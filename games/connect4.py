@@ -5,7 +5,10 @@ class Connect4(TicTacToe):
     def __init__(self, sizeX=7, sizeY=6):
         super().__init__(sizeX, sizeY, 4)
         self.name: str = "Connect4"
-        self.actionSpace: int = sizeX
+
+    @property
+    def actionSpaces(self):
+        return range(self.sizeX)
 
     def _step(self, playerId, action):
         posX = action
@@ -20,7 +23,7 @@ class Connect4(TicTacToe):
         self.game.step(playerId, action)
 
     def getMask(self, playerId):
-        mask = np.zeros(self.actionSpace, dtype=int)
+        mask = np.zeros(self.actionSpaces.length, dtype=int)
         for x, rows in enumerate(self.game.cells):
             if rows[0] == 0:
                 mask[x] = 1

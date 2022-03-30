@@ -1,39 +1,41 @@
 from __future__ import annotations
-import asyncio
+
 import __main__
-import types
-from pathlib import Path
-import os
+import asyncio
+import collections
+import copy
 import math
+import numpy as np
+import os
+import pickle
+import sys
+import time
+import torch
 import torch.multiprocessing as mp
-import torch.optim.lr_scheduler as schedular
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torch.nn as nn
-import torch
+import torch.optim.lr_scheduler as schedular
+import traceback
+import types
+from enum import Enum
+from multiprocessing.connection import Pipe
+from multiprocessing.managers import NamespaceProxy, SyncManager
+from pathlib import Path
 # from .Agent import Agent
 from typing import List, Callable, TypeVar, Generic, Tuple, Any
-import collections
-import numpy as np
-from enum import Enum
-import time
-import sys
+
 import utils.Function as Function
-import traceback
-import copy
-import pickle
-from memories.Transition import Transition
 from games.GameFactory import GameFactory
-from multiprocessing.managers import NamespaceProxy, SyncManager
-from multiprocessing.connection import Pipe
-from .Agent import Base, EvaluatorService, SyncContext, Action, Config, TrainerProcess, Algo, Evaluator, Role, AlgoHandler, TensorWrapper
-from utils.PipedProcess import Process, PipedProcess
-from utils.Normalizer import RangeNormalizer, StdNormalizer
+from memories.Transition import Transition
+from utils.KyleList import KyleList
 from utils.Message import NetworkInfo, LearnReport, EnvReport
 from utils.Network import Network, BodyLayers
+from utils.Normalizer import RangeNormalizer, StdNormalizer
+from utils.PipedProcess import Process, PipedProcess
 from utils.PredictionHandler import PredictionHandler
-from utils.KyleList import KyleList
-
+from .Agent import Base, EvaluatorService, SyncContext, Action, Config, TrainerProcess, Algo, Evaluator, Role, \
+    AlgoHandler, TensorWrapper
 
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(suppress=True)

@@ -1,8 +1,7 @@
 import numpy as np
-
+import time
 import torch
 from torch.distributions import Categorical
-import time
 
 # Entropy
 """

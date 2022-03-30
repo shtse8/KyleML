@@ -1,10 +1,12 @@
 import os
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
-
+import warnings
 import sys
 import signal
 import argparse
 import asyncio
+
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 # from agents.DQNAgent import DQNAgent
@@ -68,6 +70,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
-    loop.close()
+    asyncio.run(main())

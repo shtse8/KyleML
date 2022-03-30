@@ -1,7 +1,9 @@
-import random
-import numpy as np
 import math
+import numpy as np
+import random
+
 from .Transition import Transition
+
 
 class PrioritizedMemory(object):
     e = 0.01

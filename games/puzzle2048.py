@@ -1,8 +1,9 @@
-import numpy as np
 import math
-from .src.game2048 import Game2048 as Src
-from .Game import Game
+import numpy as np
 import pygame
+
+from .Game import Game
+from .src.game2048 import Game2048 as Src
 
 
 class Puzzle2048(Game):

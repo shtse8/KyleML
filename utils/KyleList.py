@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 import numpy as np
-from typing import List, Callable, TypeVar, Generic, Tuple, Any
 import torch
+from typing import List, Callable, TypeVar, Generic, Tuple, Any
 
 T = TypeVar('T')
 S = TypeVar('S')

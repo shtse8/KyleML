@@ -1,22 +1,23 @@
-import os
 import __main__
-import random
-import numpy as np
-import sys
 import collections
 import math
+import numpy as np
+import os
+import random
+import sys
 import time
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import torchvision.transforms as T
+
 from memories.PrioritizedMemory import PrioritizedMemory
 from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
-from .Agent import Agent
 from utils.PredictionHandler import PredictionHandler
+from .Agent import Agent
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-import torchvision.transforms as T
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

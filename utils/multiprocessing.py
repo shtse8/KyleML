@@ -1,7 +1,8 @@
-from multiprocessing.managers import NamespaceProxy
-import types
 import sys
 import time
+import types
+from multiprocessing.managers import NamespaceProxy
+
 
 def Proxy(target, moduel=None):
     dic = {

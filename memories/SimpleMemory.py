@@ -1,7 +1,8 @@
-import numpy as np
 import collections
 import itertools
+import numpy as np
 import time
+
 from memories.Transition import Transition
 
 

@@ -1,9 +1,8 @@
 import numpy as np
-
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
+import torch.optim as optim
 
 s = torch.FloatTensor(np.array([0.1, 0.2, 0.4, 0.3]))
 

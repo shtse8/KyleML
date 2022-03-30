@@ -1,40 +1,42 @@
 from __future__ import annotations
-import inspect
-import asyncio
+
 import __main__
-import types
-from pathlib import Path
+import asyncio
+import collections
 import copy
-import os
+import inspect
 import math
+import numpy as np
+import os
+import pickle
+import sys
+import time
+import torch
 import torch.multiprocessing as mp
-import torch.optim.lr_scheduler as schedular
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torch.nn as nn
-import torch
-import utils.Function as Function
-from typing import List, Callable, TypeVar, Generic, Tuple, Any
-import collections
-import numpy as np
+import torch.optim.lr_scheduler as schedular
+import types
 from enum import Enum
-import time
-import sys
-import pickle
-
-from memories.Transition import Transition
-from memories.SimpleMemory import SimpleMemory
-from games.GameFactory import GameFactory
-from multiprocessing.managers import NamespaceProxy, SyncManager
 from multiprocessing.connection import Pipe
-from .Agent import Base, EvaluatorService, SyncContext, Action, Config, Role, AlgoHandler, Algo, TensorWrapper
-from utils.PipedProcess import Process, PipedProcess
-from utils.Normalizer import RangeNormalizer, StdNormalizer
+from multiprocessing.managers import NamespaceProxy, SyncManager
+from pathlib import Path
+from typing import List, Callable, TypeVar, Generic, Tuple, Any
+
+import utils.Function as Function
+from games.GameFactory import GameFactory
+from memories.SimpleMemory import SimpleMemory
+from memories.Transition import Transition
+from utils.KyleList import KyleList
 from utils.Message import NetworkInfo, LearnReport, EnvReport
 from utils.Network import Network, BodyLayers, GRULayers, FCLayers, Activator, Norm
-from utils.multiprocessing import Proxy
+from utils.Normalizer import RangeNormalizer, StdNormalizer
+from utils.PipedProcess import Process, PipedProcess
 from utils.PredictionHandler import PredictionHandler
-from utils.KyleList import KyleList
+from utils.multiprocessing import Proxy
+from .Agent import Base, EvaluatorService, SyncContext, Action, Config, Role, AlgoHandler, Algo, TensorWrapper
+
 # from utils.Distributions import Categorical
 
 np.set_printoptions(threshold=sys.maxsize)

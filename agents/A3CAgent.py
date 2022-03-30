@@ -1,17 +1,18 @@
 import numpy as np
 import time
+import torch
+import torch.multiprocessing as mp
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
 import traceback
+
 from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
-from .Agent import Agent, EpisodeReport
+from optimizers.sharedadam import SharedAdam
 from utils.PredictionHandler import PredictionHandler
 from utils.errors import InvalidAction
-from optimizers.sharedadam import SharedAdam
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-import torch.multiprocessing as mp
+from .Agent import Agent, EpisodeReport
 
 
 class Network(nn.Module):

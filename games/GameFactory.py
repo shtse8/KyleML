@@ -1,11 +1,12 @@
 from .SimpleSnake import SimpleSnake
 from .Snake import Snake
-from .puzzle2048 import Puzzle2048
-from .mario import Mario
-from .gymgame import GymGame
-from .tictactoe import TicTacToe
-from .gomoku import Gomoku
 from .connect4 import Connect4
+from .gomoku import Gomoku
+# from .mario import Mario
+from .gymgame import GymGame
+from .puzzle2048 import Puzzle2048
+from .tictactoe import TicTacToe
+
 
 class GameFactory:
     def __init__(self, name: str):
@@ -20,8 +21,8 @@ class GameFactory:
             return GymGame("CartPole-v0")
         if self.name == "2048":
             return Puzzle2048()
-        if self.name == "mario":
-            return Mario()
+#        if self.name == "mario":
+#            return Mario()
         if self.name == "pong":
             return GymGame("Pong-v0")
         if self.name == "breakout":

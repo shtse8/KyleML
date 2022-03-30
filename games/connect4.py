@@ -1,5 +1,7 @@
-from .tictactoe import TicTacToe
 import numpy as np
+
+from .tictactoe import TicTacToe
+
 
 class Connect4(TicTacToe):
     def __init__(self, sizeX=7, sizeY=6):

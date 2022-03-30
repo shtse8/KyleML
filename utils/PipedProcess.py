@@ -1,6 +1,8 @@
-from .BufferConnection import BufferConnection
-import torch.multiprocessing as mp
 import asyncio
+import torch.multiprocessing as mp
+
+from .BufferConnection import BufferConnection
+
 
 class Process:
     def __init__(self):
@@ -12,9 +14,7 @@ class Process:
         self.process.start()
 
     def _createLoop(self):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.asyncRun())
-        loop.close()
+        asyncio.run(self.asyncRun())
 
     def start(self):
         if self.started:
@@ -43,9 +43,7 @@ class PipedProcess(Process):
         self.process.start()
 
     def _createLoop(self, conn):
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.asyncRun(conn))
-        loop.close()
+        asyncio.run(self.asyncRun(conn))
 
     def poll(self):
         return self.conn.poll()

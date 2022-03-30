@@ -1,31 +1,32 @@
-import os
 import __main__
-import numpy as np
-import collections
-import math
-import inspect
-import time
-from enum import Enum
 import asyncio
-
-from pathlib import Path
+import collections
+import inspect
+import math
 import matplotlib.pyplot as plt
-from memories.Transition import Transition
+import numpy as np
+import os
+import time
 import torch
-import torch.nn as nn
-from games.Game import Game
-from typing import List, Callable, TypeVar, Generic, Tuple, Any
 import torch.multiprocessing as mp
-from multiprocessing.managers import NamespaceProxy, SyncManager
+import torch.nn as nn
+from enum import Enum
 from multiprocessing.connection import Pipe
-from games.GameFactory import GameFactory
+from multiprocessing.managers import NamespaceProxy, SyncManager
+from pathlib import Path
+from typing import List, Callable, TypeVar, Generic, Tuple, Any
+
 import utils.Function as Function
+from games.Game import Game
+from games.GameFactory import GameFactory
+from memories.Transition import Transition
+from utils.KyleList import KyleList
 from utils.Message import NetworkInfo, LearnReport, EnvReport, MethodCallRequest, MethodCallResult
-from utils.PipedProcess import Process, PipedProcess
-from utils.multiprocessing import Proxy
 from utils.Network import Network
 from utils.Normalizer import RangeNormalizer, StdNormalizer
-from utils.KyleList import KyleList
+from utils.PipedProcess import Process, PipedProcess
+from utils.multiprocessing import Proxy
+
 
 class TensorWrapper:
     def __init__(self, tensor):

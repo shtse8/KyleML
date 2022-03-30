@@ -1,11 +1,12 @@
+import torch
 import torch.multiprocessing as mp
-import torch.optim.lr_scheduler as schedular
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torch.nn as nn
-import torch
-from .Message import NetworkInfo
+import torch.optim.lr_scheduler as schedular
 from enum import Enum
+
+from .Message import NetworkInfo
 
 
 class Activator(Enum):

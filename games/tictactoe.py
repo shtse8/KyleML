@@ -1,8 +1,9 @@
-import numpy as np
 import math
-from .src.tictactoe import TicTacToe as Src
-from .Game import Game
+import numpy as np
 import pygame
+
+from .Game import Game
+from .src.tictactoe import TicTacToe as Src
 
 
 class TicTacToe(Game):

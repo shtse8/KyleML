@@ -1,5 +1,6 @@
-import numpy as np
 import math
+import numpy as np
+
 
 class PredictionHandler:
     def __init__(self, prediction, mask = None):

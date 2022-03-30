@@ -1,14 +1,14 @@
 import numpy as np
-from memories.SimpleMemory import SimpleMemory
-from memories.Transition import Transition
-from .Agent import Agent
-from utils.PredictionHandler import PredictionHandler
-import utils.Function as Function
-
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
+import torch.optim as optim
+
+import utils.Function as Function
+from memories.SimpleMemory import SimpleMemory
+from memories.Transition import Transition
+from utils.PredictionHandler import PredictionHandler
+from .Agent import Agent
 
 
 class Network(nn.Module):

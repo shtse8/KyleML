@@ -1,8 +1,9 @@
 import numpy as np
-
 from operator import add
-from .src.snakeClass import Game as GameSrc
+
 from .Game import Game
+from .src.snakeClass import Game as GameSrc
+
 
 class Snake(Game):
     def __init__(self):

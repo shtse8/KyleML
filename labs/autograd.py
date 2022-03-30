@@ -1,7 +1,7 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
 x = torch.ones(2, 4)
 linear = nn.Linear(4, 4)

@@ -1,7 +1,8 @@
-import sys
-import torch
 import math
 import pickle
+import sys
+import torch
+
 
 #   數組為正態分佈
 #   計算出最後每個數值的標準差

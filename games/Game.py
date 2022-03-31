@@ -91,7 +91,7 @@ class Game(Generic[P], metaclass=ABCMeta):
             self._players = [self._create_player(i) for i in range(self.player_count)]
         return self._players
 
-    def update_display(self):
+    def update_display(self, surface: pygame.Surface):
         pass
 
     def process_event(self, event):
@@ -120,8 +120,6 @@ class Renderer:
         self.__event = SimpleQueue()
         self.width: int = 500
         self.height: int = 600
-        self.scoreHeight: int = 100
-        self.display = pygame.display.set_mode((self.width, self.height))
         pygame.init()
 
     @property
@@ -148,17 +146,18 @@ class Renderer:
             try:
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_UP:
-                        self.__events.put(RendererEvent.UP)
+                        self.__event.put(RendererEvent.UP)
                     if event.key == pygame.K_RIGHT:
-                        self.__events.put(RendererEvent.RIGHT)
+                        self.__event.put(RendererEvent.RIGHT)
                     if event.key == pygame.K_DOWN:
-                        self.__events.put(RendererEvent.DOWN)
+                        self.__event.put(RendererEvent.DOWN)
                     if event.key == pygame.K_LEFT:
-                        self.__events.put(RendererEvent.LEFT)
+                        self.__event.put(RendererEvent.LEFT)
             except Exception as e:
                 print(str(e))
 
-        self.__game.update_display()
+        display = pygame.display.set_mode((self.width, self.height))
+        self.__game.update_display(display)
+        pygame.display.update(display.get_rect())
 
         # Update UI
-        pygame.display.update()

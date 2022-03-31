@@ -44,12 +44,12 @@ torch.set_printoptions(edgeitems=sys.maxsize)
 
 
 class AlphaZeroNetwork(Network):
-    def __init__(self, inputShape, n_outputs):
-        super().__init__(inputShape, n_outputs)
+    def __init__(self, input_shape, n_outputs):
+        super().__init__(input_shape, n_outputs)
 
         hidden_nodes = 256
         # semi_hidden_nodes = hidden_nodes // 2
-        self.body = BodyLayers(inputShape, hidden_nodes)
+        self.body = BodyLayers(input_shape, hidden_nodes)
 
         # Define policy head
         self.policy = nn.Linear(self.body.num_output, n_outputs)
@@ -108,7 +108,7 @@ class AgentHandler:
         self.handler.reportStep(action)
 
     def getInfo(self):
-        info = self.env.getInfo()
+        info = self.env.get_info()
         return info
 
     def getProb(self):
@@ -146,8 +146,8 @@ class AlphaZeroHandler(AlgoHandler):
     def getProb(self, env):
         self.network.eval()
         with torch.no_grad():
-            state = env.getState()
-            mask = env.getMask()
+            state = env.get_state()
+            mask = env.get_mask()
             stateTensor = torch.tensor([state], dtype=torch.float, device=self.device)
             maskTensor = torch.tensor([mask], dtype=torch.bool, device=self.device)
             prob, value = self.network(stateTensor, maskTensor)
@@ -174,7 +174,7 @@ class AlphaZeroHandler(AlgoHandler):
         self.mcts.update_with_move(action)
         
     def preprocess(self, memory):
-        rewards = memory.select(lambda x: x.reward).toArray()
+        rewards = memory.select(lambda x: x.reward).to_array()
         rewards.fill(rewards.sum())
         rewards = self.rewardNormalizer.normalize(rewards, update=True)
         rewards = sigmoid(rewards)
@@ -193,10 +193,10 @@ class AlphaZeroHandler(AlgoHandler):
             minibatch = memory.get(startIndex, batchSize)
 
             # Get Tensors
-            states = minibatch.select(lambda x: x.info.state).toTensor(torch.float, self.device)
-            masks = minibatch.select(lambda x: x.info.mask).toTensor(torch.bool, self.device)
-            batch_probs = minibatch.select(lambda x: x.action.probs).toTensor(torch.float, self.device)
-            batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
+            states = minibatch.select(lambda x: x.info.state).to_tensor(torch.float, self.device)
+            masks = minibatch.select(lambda x: x.info.mask).to_tensor(torch.bool, self.device)
+            batch_probs = minibatch.select(lambda x: x.action.probs).to_tensor(torch.float, self.device)
+            batch_returns = minibatch.select(lambda x: x.reward).to_tensor(torch.float, self.device)
 
             probs, values = self.network(states, masks)
 

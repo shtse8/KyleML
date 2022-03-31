@@ -6,23 +6,24 @@ from .gomoku import Gomoku
 from .gymgame import GymGame
 from .puzzle2048 import Puzzle2048
 from .tictactoe import TicTacToe
+from .Game import Game
 
 
 class GameFactory:
     def __init__(self, name: str):
         self.name: str = name
 
-    def get(self):
+    def get(self) -> Game:
         if self.name == "snake":
             return Snake()
-        if self.name == "simple-snake": 
+        if self.name == "simple-snake":
             return SimpleSnake()
         if self.name == "cartpole":
             return GymGame("CartPole-v0")
         if self.name == "2048":
             return Puzzle2048()
-#        if self.name == "mario":
-#            return Mario()
+        #        if self.name == "mario":
+        #            return Mario()
         if self.name == "pong":
             return GymGame("Pong-v0")
         if self.name == "breakout":

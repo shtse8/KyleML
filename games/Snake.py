@@ -16,9 +16,9 @@ class Snake(Game):
         self.game.start()
         # self.game.food.x = self.game.player.x + 2
         # self.game.food.y = self.game.player.y
-        return self.getState()
+        return self.get_state()
         
-    def getState(self):
+    def get_state(self):
     
         # return state
         
@@ -90,12 +90,12 @@ class Snake(Game):
         action_array[action] = 1
         self.game.player.do_move(action_array, self.game)
         self.game.display()
-        return self.getState(), self.getReward(), self.getDone()
+        return self.get_state(), self.get_reward(), self.getDone()
         
     def getDone(self):
         return self.game.end
         
-    def getReward(self):
+    def get_reward(self):
         reward = 0
         # if self.game.crash:
         #     reward = -1

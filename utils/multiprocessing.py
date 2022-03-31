@@ -4,7 +4,7 @@ import types
 from multiprocessing.managers import NamespaceProxy
 
 
-def Proxy(target, moduel=None):
+def Proxy(target, module=None):
     dic = {
         'types': types,
         'time': time}
@@ -17,8 +17,8 @@ def Proxy(target, moduel=None):
                 self._callmethod(key, args, kwargs)
             return wrapper
         return result''', dic)
-    proxyName = target.__name__ + "Proxy"
-    ProxyType = type(proxyName, (NamespaceProxy,), dic)
-    ProxyType._exposed_ = tuple(dir(target))
-    setattr(sys.modules[__name__], ProxyType.__name__, ProxyType)
-    return ProxyType
+    proxy_name = target.__name__ + "Proxy"
+    proxy_type = type(proxy_name, (NamespaceProxy,), dic)
+    proxy_type._exposed_ = tuple(dir(target))
+    setattr(sys.modules[__name__], proxy_type.__name__, proxy_type)
+    return proxy_type

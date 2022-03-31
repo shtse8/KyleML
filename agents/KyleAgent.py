@@ -44,10 +44,10 @@ torch.set_printoptions(edgeitems=sys.maxsize)
 
 
 class KyleNetwork(Network):
-    def __init__(self, inputShape, n_outputs):
-        super().__init__(inputShape, n_outputs)
+    def __init__(self, input_shape, n_outputs):
+        super().__init__(input_shape, n_outputs)
 
-        self.inputShape = inputShape
+        self.inputShape = input_shape
         self.n_outputs = n_outputs
         hidden_nodes = 1024
         # semi_hidden_nodes = hidden_nodes // 2
@@ -55,26 +55,26 @@ class KyleNetwork(Network):
 
         # Define policy head
         self.policy = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes),
+            BodyLayers(input_shape, hidden_nodes),
             nn.Linear(hidden_nodes, n_outputs))
 
         # Define value head
         self.value = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes),
+            BodyLayers(input_shape, hidden_nodes),
             nn.Linear(hidden_nodes, 1))
 
         # self.nextPlayerId = nn.Linear(self.body.num_output, np.product(inputShape) * n_outputs)
 
         self.nextState = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes),
-            nn.Linear(hidden_nodes, np.product(inputShape) * n_outputs))
+            BodyLayers(input_shape, hidden_nodes),
+            nn.Linear(hidden_nodes, np.product(input_shape) * n_outputs))
 
         self.nextMask = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes),
+            BodyLayers(input_shape, hidden_nodes),
             nn.Linear(hidden_nodes, n_outputs * n_outputs))
 
         self.nextDone = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes),
+            BodyLayers(input_shape, hidden_nodes),
             nn.Linear(hidden_nodes, n_outputs))
 
         self.initWeights()
@@ -126,11 +126,11 @@ class AgentHandler:
         self.handler.reportStep(action)
 
     def getInfo(self):
-        info = self.env.getInfo()
+        info = self.env.get_info()
         return info
 
     def getProb(self):
-        return self.handler.getProb(self.env.getState(), self.env.getMask())
+        return self.handler.getProb(self.env.get_state(), self.env.get_mask())
 
     def getAction(self, isTraining: bool):
         # tic = time.perf_counter()
@@ -204,7 +204,7 @@ class KyleHandler(AlgoHandler):
         self.mcts.update_with_move(action)
         
     def preprocess(self, memory):
-        returns = memory.select(lambda x: x.reward).toArray()
+        returns = memory.select(lambda x: x.reward).to_array()
         returns = self.rewardNormalizer.normalize(returns, update=True)
         totalScore = returns.sum()
         for transition in memory:
@@ -223,14 +223,14 @@ class KyleHandler(AlgoHandler):
                 minibatch = memory.get(startIndex, batchSize)
 
                 # Get Tensors
-                batch_states = minibatch.select(lambda x: x.info.state).toTensor(torch.float, self.device)
-                batch_masks = minibatch.select(lambda x: x.info.mask).toTensor(torch.bool, self.device)
-                batch_actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
-                batch_probs = minibatch.select(lambda x: x.action.probs).toTensor(torch.float, self.device)
-                batch_nextStates = minibatch.select(lambda x: x.next.state).toTensor(torch.float, self.device)
-                batch_nextMasks = minibatch.select(lambda x: x.next.mask).toTensor(torch.float, self.device)
-                batch_nextDones = minibatch.select(lambda x: x.next.done).toTensor(torch.float, self.device)
-                batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
+                batch_states = minibatch.select(lambda x: x.info.state).to_tensor(torch.float, self.device)
+                batch_masks = minibatch.select(lambda x: x.info.mask).to_tensor(torch.bool, self.device)
+                batch_actions = minibatch.select(lambda x: x.action.index).to_tensor(torch.long, self.device)
+                batch_probs = minibatch.select(lambda x: x.action.probs).to_tensor(torch.float, self.device)
+                batch_nextStates = minibatch.select(lambda x: x.next.state).to_tensor(torch.float, self.device)
+                batch_nextMasks = minibatch.select(lambda x: x.next.mask).to_tensor(torch.float, self.device)
+                batch_nextDones = minibatch.select(lambda x: x.next.done).to_tensor(torch.float, self.device)
+                batch_returns = minibatch.select(lambda x: x.reward).to_tensor(torch.float, self.device)
                 # print(batch_returns)
                 probs, values, nextStates, nextMasks, nextDones = self.network(batch_states, batch_masks)
                 values = values.squeeze(-1)
@@ -437,9 +437,9 @@ class MCTS:
         temp: temperature parameter in (0, 1] controls the level of exploration
         """
 
-        state = KyleList(env.getState()).toTensor(torch.float, self._handler.device)
-        mask = KyleList(env.getMask()).toTensor(torch.bool, self._handler.device)
-        done = KyleList(env.isDone()).toTensor(torch.bool, self._handler.device)
+        state = KyleList(env.get_state()).to_tensor(torch.float, self._handler.device)
+        mask = KyleList(env.get_mask()).to_tensor(torch.bool, self._handler.device)
+        done = KyleList(env.is_done()).to_tensor(torch.bool, self._handler.device)
         isSame = self._root is not None and (self._root.state == state).all() and (self._root.mask == mask).all()
         if not isSame:
             # if self._root is not None:

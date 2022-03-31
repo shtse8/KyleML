@@ -45,14 +45,14 @@ torch.set_printoptions(edgeitems=sys.maxsize)
 
 
 class ICMNetwork(Network):
-    def __init__(self, inputShape, output_size):
-        super().__init__(inputShape, output_size)
+    def __init__(self, input_shape, output_size):
+        super().__init__(input_shape, output_size)
 
         hidden_nodes = 256
         self.output_size = output_size
 
         self.feature = nn.Sequential(
-            BodyLayers(inputShape, hidden_nodes),
+            BodyLayers(input_shape, hidden_nodes),
             nn.Linear(hidden_nodes, hidden_nodes),
             nn.Sigmoid())
         
@@ -82,13 +82,13 @@ class ICMNetwork(Network):
         return encode_next_state, pred_next_state_feature, pred_action
 
 class PPONetwork(Network):
-    def __init__(self, inputShape, n_outputs):
-        super().__init__(inputShape, n_outputs)
+    def __init__(self, input_shape, n_outputs):
+        super().__init__(input_shape, n_outputs)
 
         # self.eps = torch.finfo(torch.float).eps
         hidden_nodes = 256
         # semi_hidden_nodes = hidden_nodes // 2
-        self.body = BodyLayers(inputShape, hidden_nodes, activator=Activator.ELU, norm=None)
+        self.body = BodyLayers(input_shape, hidden_nodes, activator=Activator.ELU, norm=None)
         
         self.gru = GRULayers(self.body.num_output, hidden_nodes, 
             num_layers=2, bidirectional=True)
@@ -166,16 +166,16 @@ class AgentHandler:
         self.handler.reportStep(action)
 
     def getInfo(self):
-        info = self.env.getInfo()
+        info = self.env.get_info()
         info.hiddenState = self.hiddenState.cpu().detach().numpy()
         return info
 
     def getProb(self):
         self.handler.network.eval()
         with torch.no_grad():
-            info = self.env.getInfo()
-            state = KyleList([info.state]).toTensor(torch.float, self.handler.device)
-            mask = KyleList([info.mask]).toTensor(torch.bool, self.handler.device)
+            info = self.env.get_info()
+            state = KyleList([info.state]).to_tensor(torch.float, self.handler.device)
+            mask = KyleList([info.mask]).to_tensor(torch.bool, self.handler.device)
             prob, value, hiddenState = self.handler.network(state, self.hiddenState.unsqueeze(0), mask)
             return prob.squeeze(0), value, hiddenState.squeeze(0)
 
@@ -220,7 +220,7 @@ class AgentHandler:
 class PPOHandler(AlgoHandler):
     def __init__(self, config, env, role, device):
         super().__init__(config, env, role, device)
-        self.network = PPONetwork(env.observationShape, env.actionCount)
+        self.network = PPONetwork(env.observationShape, env.action_count)
         self.network.to(self.device)
         # self.icm = ICMNetwork(env.observationShape, env.actionCount)
         # self.icm.to(self.device)
@@ -250,8 +250,8 @@ class PPOHandler(AlgoHandler):
             lastValue = 0
             lastMemory = memory[-1]
             if not lastMemory.next.done:
-                lastState = KyleList([lastMemory.next.state]).toTensor(torch.float, self.device)
-                hiddenState = KyleList([lastMemory.next.hiddenState]).toTensor(torch.float, self.device)
+                lastState = KyleList([lastMemory.next.state]).to_tensor(torch.float, self.device)
+                hiddenState = KyleList([lastMemory.next.hiddenState]).to_tensor(torch.float, self.device)
                 lastValue, _ = self.network.getValue(lastState, hiddenState)
                 lastValue = lastValue.item()
             # print()
@@ -314,18 +314,18 @@ class PPOHandler(AlgoHandler):
                 # print(minibatch)
 
                 # Get Tensors
-                batch_states = minibatch.select(lambda x: x.info.state).toTensor(torch.float, self.device)
+                batch_states = minibatch.select(lambda x: x.info.state).to_tensor(torch.float, self.device)
                 
-                batch_masks = minibatch.select(lambda x: x.info.mask).toTensor(torch.bool, self.device)
-                batch_hiddenStates = minibatch.select(lambda x: x.info.hiddenState).toTensor(torch.float, self.device)
+                batch_masks = minibatch.select(lambda x: x.info.mask).to_tensor(torch.bool, self.device)
+                batch_hiddenStates = minibatch.select(lambda x: x.info.hiddenState).to_tensor(torch.float, self.device)
 
                 # batch_nextStates = minibatch.select(lambda x: x.next.state).toTensor(torch.float, self.device)
-                batch_actions = minibatch.select(lambda x: x.action.index).toTensor(torch.long, self.device)
-                batch_log_probs = minibatch.select(lambda x: x.action.log).toTensor(torch.float, self.device)
+                batch_actions = minibatch.select(lambda x: x.action.index).to_tensor(torch.long, self.device)
+                batch_log_probs = minibatch.select(lambda x: x.action.log).to_tensor(torch.float, self.device)
                 # batch_probs = minibatch.select(lambda x: x.action.probs).toTensor(torch.float, self.device)
-                batch_returns = minibatch.select(lambda x: x.reward).toTensor(torch.float, self.device)
+                batch_returns = minibatch.select(lambda x: x.reward).to_tensor(torch.float, self.device)
                 # batch_returns = returns.get(startIndex, batchSize).toTensor(torch.float, self.device)
-                batch_values = minibatch.select(lambda x: x.action.value).toTensor(torch.float, self.device)
+                batch_values = minibatch.select(lambda x: x.action.value).to_tensor(torch.float, self.device)
                 # print("hiddenStates:", batch_hiddenStates)
 
                 # for Curiosity Network

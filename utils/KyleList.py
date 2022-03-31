@@ -7,6 +7,7 @@ from typing import List, Callable, TypeVar, Generic, Tuple, Any
 T = TypeVar('T')
 S = TypeVar('S')
 
+
 class KyleList(Generic[T]):
     def __init__(self, iter: List[T]) -> None:
         self.array = np.array(iter)
@@ -14,14 +15,14 @@ class KyleList(Generic[T]):
     def select(self, property: Callable[[T], S]) -> KyleList[S]:
         return KyleList([property(x) for x in self.array])
 
-    def toArray(self) -> np.array:
+    def to_array(self) -> np.array:
         return self.array
 
-    def toTensor(self, dtype: torch.dtype, device: torch.device) -> torch.tensor:
+    def to_tensor(self, dtype: torch.dtype, device: torch.device) -> torch.tensor:
         return torch.tensor(self.array, dtype=dtype, device=device).detach()
 
-    def get(self, fromPos: int, num: int) -> KyleList[T]:
-        return KyleList(self.array[fromPos:fromPos+num])
+    def get(self, from_pos: int, num: int) -> KyleList[T]:
+        return KyleList(self.array[from_pos:from_pos + num])
 
     def sum(self):
         return self.array.sum()
@@ -76,4 +77,3 @@ class Iterator:
             return result
         self.current = 0
         raise StopIteration
-

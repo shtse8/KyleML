@@ -37,7 +37,7 @@ class GymGame(Game):
         self.done = False
         return self.state
         
-    def getState(self):
+    def get_state(self):
         return self.state
         
     def takeAction(self, action):
@@ -58,7 +58,7 @@ class GymGame(Game):
     def getDone(self):
         return self.done
         
-    def getReward(self):
+    def get_reward(self):
         return self.reward
     
     

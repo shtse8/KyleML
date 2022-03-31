@@ -21,7 +21,7 @@ class Puzzle2048(Game):
         return [1]
       
     @property
-    def actionSpaces(self):
+    def action_spaces(self):
         return [
             (0, -1),  # Up
             (1, 0),  # Right
@@ -29,13 +29,13 @@ class Puzzle2048(Game):
             (-1, 0)  # Left
         ]
 
-    def canStep(self, playerId):
+    def can_step(self, player_id):
         return True
 
     def reset(self):
         self.game = Src(self.size, self.seed)
 
-    def getState(self, playerId: int):
+    def get_state(self, player_id: int):
         state = np.zeros(self.observationShape, dtype=float)
         # state = np.zeros((1, self.size, self.size), dtype=int)
         for _, _, cell in self.game.grid.eachCell():
@@ -45,10 +45,10 @@ class Puzzle2048(Game):
                 # state[int(math.log2(cell.value))][cell.x][cell.y] = 1
         return state
 
-    def getMask(self, playerId: int):
+    def get_mask(self, player_id: int):
         state = self.game.grid.cells
-        mask = np.zeros(self.actionCount, dtype=bool)
-        for i, vector in enumerate(self.actionSpaces):
+        mask = np.zeros(self.action_count, dtype=bool)
+        for i, vector in enumerate(self.action_spaces):
             for x, col in enumerate(state):
                 if mask[i]:
                     break
@@ -62,18 +62,19 @@ class Puzzle2048(Game):
                                 break
         return mask
 
-    def _step(self, playerId: int, action) -> None:
+    def _step(self, player_id: int, action) -> None:
         score = self.game.score
         moved = self.game.move(action)
         if not moved:
             raise Exception("Invalid move")
-        self.reward[playerId] = self.game.score - score
+        self.reward[player_id] = self.game.score - score
 
-    def isDone(self) -> bool:
+    def is_done(self) -> bool:
         return self.game.isGameTerminated()
 
     def render(self) -> None:
         self.renderer = Renderer(self)
+        return self.renderer
 
     def update(self) -> None:
         if self.renderer is None:
@@ -111,7 +112,22 @@ class Renderer:
         }
 
     def update(self):
-        pygame.event.get()
+
+        events = pygame.event.get()
+        for event in events:
+            try:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_UP:
+                        self.game.step(1, 0)
+                    if event.key == pygame.K_RIGHT:
+                        self.game.step(1, 1)
+                    if event.key == pygame.K_DOWN:
+                        self.game.step(1, 2)
+                    if event.key == pygame.K_LEFT:
+                        self.game.step(1, 3)
+            except Exception as e:
+                print(str(e))
+
         bg_rect = pygame.Rect(0, 0, self.width, self.height)
         pygame.draw.rect(self.display, (0, 0, 0), bg_rect)
 

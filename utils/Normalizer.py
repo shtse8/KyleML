@@ -41,9 +41,7 @@ class StdNormalizer(Normalizer):
         return (x - self.mean) / (np.sqrt(self.var) + self.epsilon)
         
     def dump(self):
-        data = {}
-        data['mean'] = self.mean
-        data['var'] = self.var
+        data = {'mean': self.mean, 'var': self.var}
         return data
 
     def load(self, data):

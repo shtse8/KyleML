@@ -33,12 +33,12 @@ class Norm2dLayer(nn.Module):
 
 
 class Norm1dLayer(nn.Module):
-    def __init__(self, num_features, type):
+    def __init__(self, num_features, norm_type):
         super().__init__()
         self.layer = lambda x: x
-        if type == Norm.BatchNorm:
+        if norm_type == Norm.BatchNorm:
             self.layer = nn.BatchNorm1d(num_features)
-        elif type == Norm.GroupNorm:
+        elif norm_type == Norm.GroupNorm:
             raise Exception("Group norm is not supported.")
 
     def forward(self, x):
@@ -46,12 +46,12 @@ class Norm1dLayer(nn.Module):
 
 
 class ActivatorLayer(nn.Module):
-    def __init__(self, type):
+    def __init__(self, norm_type):
         super().__init__()
         self.layer = lambda x: x
-        if type == Activator.ELU:
+        if norm_type == Activator.ELU:
             self.layer = nn.ELU()
-        elif type == Activator.ReLU:
+        elif norm_type == Activator.ReLU:
             self.layer = nn.ReLU()
 
     def forward(self, x):
@@ -59,26 +59,26 @@ class ActivatorLayer(nn.Module):
 
 
 class ConvLayers(nn.Module):
-    def __init__(self, inputShape, hidden_size, activator: Activator = Activator.ELU, norm: Norm = Norm.BatchNorm):
+    def __init__(self, input_shape, hidden_size, activator: Activator = Activator.ELU, norm: Norm = Norm.BatchNorm):
         super().__init__()
-        if min(inputShape[1], inputShape[2]) < 20:
+        if min(input_shape[1], input_shape[2]) < 20:
             
             # small CNN
             self.layers = nn.Sequential(
-                nn.Conv2d(inputShape[0], 16, kernel_size=3, stride=1, padding=1),
+                nn.Conv2d(input_shape[0], 16, kernel_size=3, stride=1, padding=1),
                 ActivatorLayer(activator),
                 Norm2dLayer(16, norm),
                 nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
                 ActivatorLayer(activator),
                 Norm2dLayer(32, norm),
                 nn.Flatten(),
-                nn.Linear(32 * inputShape[1] * inputShape[2], hidden_size),
+                nn.Linear(32 * input_shape[1] * input_shape[2], hidden_size),
                 ActivatorLayer(activator),
                 Norm1dLayer(hidden_size, norm))
         else:
             self.layers = nn.Sequential(
                 # [C, H, W] -> [32, H, W]
-                nn.Conv2d(inputShape[0], 32, kernel_size=8, stride=4),
+                nn.Conv2d(input_shape[0], 32, kernel_size=8, stride=4),
                 ActivatorLayer(activator),
                 Norm2dLayer(32, norm),
                 nn.Conv2d(32, 64, kernel_size=4, stride=2),
@@ -89,7 +89,7 @@ class ConvLayers(nn.Module):
                 Norm2dLayer(64, norm),
                 # [64, H, W] -> [64 * H * W]
                 nn.Flatten(),
-                nn.Linear(64 * inputShape[1] * inputShape[2], hidden_size),
+                nn.Linear(64 * input_shape[1] * input_shape[2], hidden_size),
                 ActivatorLayer(activator),
                 Norm1dLayer(hidden_size, norm))
         self.num_output = hidden_size
@@ -131,7 +131,7 @@ class BodyLayers(nn.Module):
 
 
 class Network(nn.Module):
-    def __init__(self, inputShape, n_outputs, name="network"):
+    def __init__(self, input_shape, n_outputs, name="network"):
         super().__init__()
         self.name = name
         self.optimizer = None

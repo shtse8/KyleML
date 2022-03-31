@@ -277,7 +277,7 @@ class Service(PipedProcess):
         self.callPipes = Pipe(True)
         self.eventPipes = Pipe(False)
 
-    async def asyncRun(self, conn):
+    async def async_run(self, conn):
         # print("Evaluator", os.getpid(), conn)
         self.object = self.factory()
         while self.isRunning:
@@ -327,7 +327,7 @@ class TrainerProcess(Process):
         self.episodes = episodes
         self.load = load
 
-    async def asyncRun(self):
+    async def async_run(self):
         # print("Trainer", os.getpid())
         await Trainer(self.algo, self.gameFactory, self.sync).start(self.episodes, self.load)
 
@@ -482,7 +482,7 @@ class Evaluator(Base):
         if not self.started:
             self.env.reset()
             self.started = True
-        elif self.env.isDone():
+        elif self.env.is_done():
             # reports = []
             for agent in self.agents:
                 self.reports.append(agent.done())
@@ -533,10 +533,10 @@ class Evaluator(Base):
                 # state = self.env.getState(1).astype(int)
                 # print(state[0] + state[1] * 2, "\n")
                 await asyncio.sleep(delay)
-                if self.env.isDone():
+                if self.env.is_done():
                     print("Done:")
                     for agent in self.agents:
-                        print(agent.id, self.env.getDoneReward(agent.id))
+                        print(agent.id, self.env.get_done_reward(agent.id))
                     await asyncio.sleep(3)
             except EvaulationTerminated:
                 break
@@ -545,22 +545,22 @@ class Evaluator(Base):
 class Agent:
     def __init__(self, id, env, handler):
         self.id = id
-        self.env = env.setPlayer(self.id)
+        self.env = env.set_player(self.id)
         self.memory = None
         self.report = EnvReport()
         self.handler = handler.getAgentHandler(self.env)
 
     def step(self, isTraining=True) -> None:
-        if not self.env.isDone() and self.env.canStep():
+        if not self.env.is_done() and self.env.can_step():
             transition = Transition()
-            transition.info = self.handler.getInfo()
+            transition.info = self.handler.get_info()
             action = self.handler.getAction(isTraining)
             reward = self.env.step(action.index)
             # print(reward)
             if self.memory is not None:
                 transition.action = action
                 transition.reward = reward
-                transition.next = self.handler.getInfo()
+                transition.next = self.handler.get_info()
                 self.memory.append(transition)
             # action reward
             self.report.rewards += reward
@@ -569,7 +569,7 @@ class Agent:
         report = self.report
 
         # game episode reward
-        doneReward = self.env.getDoneReward()
+        doneReward = self.env.get_done_reward()
         # set last memory to done, as we may not be the last one to take action.
         # do nothing if last memory has been processed.
         if self.memory is not None and len(self.memory) > 0:
@@ -592,7 +592,7 @@ class HumanAgent(Agent):
         super().__init__(id, env, handler)
 
     def step(self, isTraining=False):
-        if not self.env.isDone() and self.env.canStep():
+        if not self.env.is_done() and self.env.can_step():
             while True:
                 try:
                     # row, col = map(int, input(
@@ -659,7 +659,7 @@ class RL:
                   f'Env: {Function.humanize(epoch.envs):>6} | ' +
                   f'Best: {Function.humanize(epoch.bestRewards):>6}, Avg: {Function.humanize(epoch.avgRewards):>6} | ' +
                   f'Steps: {Function.humanize(epoch.steps / epoch.duration):>6}/s | Episodes: {1 / epoch.durationPerEpisode:>6.2f}/s | ' +
-                  f' {Function.humanizeTime(epoch.duration):>6} > {Function.humanizeTime(epoch.estimateDuration):}' +
+                  f' {Function.humanize_time(epoch.duration):>6} > {Function.humanize_time(epoch.estimateDuration):}' +
                   '      ',
                   end=end)
             self.lastPrint = time.perf_counter()

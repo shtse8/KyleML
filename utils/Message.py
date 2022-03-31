@@ -20,6 +20,7 @@ class EnvReport(Message):
     def __init__(self):
         self.rewards = 0
 
+
 class MethodCallRequest(Message):
     def __init__(self, method, args):
         self.method = method

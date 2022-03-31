@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import List, Callable, TypeVar, Generic, Tuple, Any
 
 import utils.Function as Function
-from games.GameFactory import GameFactory
+from games.GameManager import GameManager
 from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
 from utils.KyleList import KyleList
@@ -310,7 +310,7 @@ class PPOHandler(AlgoHandler):
             totalLoss = 0
             for i in range(n_miniBatch):
                 startIndex = i * batchSize
-                minibatch = memory.get(startIndex, batchSize)
+                minibatch = memory.create(startIndex, batchSize)
                 # print(minibatch)
 
                 # Get Tensors

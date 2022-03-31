@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import List, Callable, TypeVar, Generic, Tuple, Any
 
 import utils.Function as Function
-from games.GameFactory import GameFactory
+from games.GameManager import GameManager
 from memories.Transition import Transition
 from utils.KyleList import KyleList
 from utils.Message import NetworkInfo, LearnReport, EnvReport
@@ -122,7 +122,7 @@ class AgentHandler:
             index = np.random.choice(len(probs), p=noise_probs)
         else:
             index = np.argmax(probs)
-        prediction = np.zeros(self.env.game.actionSpace)
+        prediction = np.zeros(self.env.core.actionSpace)
         prediction[list(acts)] = probs
         # state = self.env.getState()
         # mask = self.env.getMask(state)
@@ -190,7 +190,7 @@ class AlphaZeroHandler(AlgoHandler):
         totalLoss = 0
         for i in range(n_miniBatch):
             startIndex = i * batchSize
-            minibatch = memory.get(startIndex, batchSize)
+            minibatch = memory.create(startIndex, batchSize)
 
             # Get Tensors
             states = minibatch.select(lambda x: x.info.state).to_tensor(torch.float, self.device)

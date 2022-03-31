@@ -1,51 +1,39 @@
 import math
+import math
+import queue
+from collections.abc import Sequence
+from typing import Any
+
 import numpy as np
 import pygame
 
-from .Game import Game
-from .src.game2048 import Game2048 as Src
+from .Game import Game, Renderer, Player, P, RendererEvent, GameEvent, GameEventType
+from .src.game2048 import Game2048 as GameCore
 
 
-class Puzzle2048(Game):
-    def __init__(self, size: int = 4):
-        super().__init__()
-        self.name: str = "game2048"
-        self.size: int = size
-        self.seed = None
-        self.game = Src(self.size, self.seed)
-        # self.observationShape: tuple = (12, self.size, self.size)
-        self.observationShape: tuple = (1, self.size, self.size)
+class Puzzle2048Player(Player):
 
     @property
-    def players(self):
-        return [1]
-      
+    def score(self) -> int:
+        return self.game.core.score
+
     @property
-    def action_spaces(self):
-        return [
-            (0, -1),  # Up
-            (1, 0),  # Right
-            (0, 1),  # Down
-            (-1, 0)  # Left
-        ]
+    def can_step(self) -> bool:
+        return self.is_done
 
-    def can_step(self, player_id):
-        return True
-
-    def reset(self):
-        self.game = Src(self.size, self.seed)
-
-    def get_state(self, player_id: int):
-        state = np.zeros(self.observationShape, dtype=float)
+    @property
+    def state(self):
+        state = np.zeros(self.game.observation_shape, dtype=float)
         # state = np.zeros((1, self.size, self.size), dtype=int)
-        for _, _, cell in self.game.grid.eachCell():
+        for _, _, cell in self.game.core.grid.each_cell():
             if cell:
                 state[0][cell.x][cell.y] = math.log2(cell.value)
                 # state[0][cell.x][cell.y] = 1
                 # state[int(math.log2(cell.value))][cell.x][cell.y] = 1
         return state
 
-    def get_mask(self, player_id: int):
+    @property
+    def action_spaces_mask(self):
         state = self.game.grid.cells
         mask = np.zeros(self.action_count, dtype=bool)
         for i, vector in enumerate(self.action_spaces):
@@ -54,44 +42,59 @@ class Puzzle2048(Game):
                     break
                 for y, cell in enumerate(col):
                     if cell:
-                        if x + vector[0] >= 0 and x + vector[0] < self.size and \
-                            y + vector[1] >= 0 and y + vector[1] < self.size:
-                            next = state[x + vector[0]][y + vector[1]]
-                            if next is None or next.value == cell.value:
+                        if 0 <= x + vector[0] < self.size and \
+                                0 <= y + vector[1] < self.size:
+                            next_cell = state[x + vector[0]][y + vector[1]]
+                            if next_cell is None or next_cell.value == cell.value:
                                 mask[i] = True
                                 break
         return mask
 
-    def _step(self, player_id: int, action) -> None:
-        score = self.game.score
-        moved = self.game.move(action)
-        if not moved:
-            raise Exception("Invalid move")
-        self.reward[player_id] = self.game.score - score
-
+    @property
     def is_done(self) -> bool:
-        return self.game.isGameTerminated()
+        return self.game.core.is_game_terminated()
 
-    def render(self) -> None:
-        self.renderer = Renderer(self)
-        return self.renderer
-
-    def update(self) -> None:
-        if self.renderer is None:
-            return
-        self.renderer.update()
+    def step(self, action) -> float:
+        last_score: int = self.score
+        self.game.core.move(action)
+        return self.score - last_score
 
 
-class Renderer:
-    def __init__(self, game):
-        self.game = game
-        self.width = 500
-        self.height = 600
-        self.scoreHeight = 100
-        self.display = pygame.display.set_mode((self.width, self.height))
-        pygame.display.set_caption(self.game.name)
-        pygame.init()
-        self.tileColors: dict = {
+class Puzzle2048(Game[Puzzle2048Player]):
+
+    def __init__(self, size: int = 4):
+        super().__init__("game2048")
+        self.size: int = size
+        self.seed: str = None
+        self.core: GameCore = GameCore(self.size, self.seed)
+
+    @property
+    def player_count(self) -> int:
+        return 1
+
+    @property
+    def action_spaces(self) -> Sequence[Any]:
+        return [
+            (0, -1),  # Up
+            (1, 0),  # Right
+            (0, 1),  # Down
+            (-1, 0)  # Left
+        ]
+
+    @property
+    def observation_shape(self) -> tuple:
+        # return (12, self.size, self.size)
+        return 1, self.size, self.size
+
+    @property
+    def is_done(self) -> bool:
+        return self.core.is_game_terminated()
+
+    def _create_player(self, player_id: int) -> P:
+        return Puzzle2048Player(self, player_id)
+
+    def update_display(self):
+        tile_colors: dict = {
             1: (204, 192, 179),
             2: (238, 228, 218),
             4: (237, 224, 200),
@@ -111,42 +114,37 @@ class Renderer:
             65536: (234, 120, 33),
         }
 
-    def update(self):
-
-        events = pygame.event.get()
-        for event in events:
-            try:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_UP:
-                        self.game.step(1, 0)
-                    if event.key == pygame.K_RIGHT:
-                        self.game.step(1, 1)
-                    if event.key == pygame.K_DOWN:
-                        self.game.step(1, 2)
-                    if event.key == pygame.K_LEFT:
-                        self.game.step(1, 3)
-            except Exception as e:
-                print(str(e))
-
+        # Draw UI
         bg_rect = pygame.Rect(0, 0, self.width, self.height)
         pygame.draw.rect(self.display, (0, 0, 0), bg_rect)
 
         # state = self.getState()
         font = pygame.font.Font(pygame.font.get_default_font(), 36)
         score_rect = pygame.Rect(0, 0, self.width, self.scoreHeight)
-        text = font.render(str(self.game.game.score), True, (255, 255, 255))
+        text = font.render(str(self.__game.core.score), True, (255, 255, 255))
         text_rect = text.get_rect()
         text_rect.center = score_rect.center
 
         self.display.blit(text, text_rect)
-        for x, col in enumerate(self.game.game.grid.cells):
+        for x, col in enumerate(self.__game.core.grid.cells):
             for y, cell in enumerate(col):
-                block_size = ((self.height - self.scoreHeight) / self.game.game.size, self.width / self.game.game.size)
-                block_rect = pygame.Rect(x * block_size[1], self.scoreHeight + y * block_size[0], block_size[1], block_size[0])
+                block_size = (
+                    (self.height - self.scoreHeight) / self.__game.core.size, self.width / self.__game.core.size)
+                block_rect = pygame.Rect(x * block_size[1], self.scoreHeight + y * block_size[0], block_size[1],
+                                         block_size[0])
                 if cell is not None:
                     pygame.draw.rect(self.display, self.tileColors[cell.value], block_rect)
                     text = font.render(str(cell.value), True, (0, 0, 0))
                     text_rect = text.get_rect()
                     text_rect.center = block_rect.center
                     self.display.blit(text, text_rect)
-        pygame.display.update()
+
+    def process_event(self, event: RendererEvent) -> GameEvent:
+        if event == RendererEvent.UP:
+            return GameEvent(GameEventType.Step, 0, 0)
+        elif event == RendererEvent.RIGHT:
+            return GameEvent(GameEventType.Step, 0, 1)
+        elif event == RendererEvent.DOWN:
+            return GameEvent(GameEventType.Step, 0, 2)
+        elif event == RendererEvent.LEFT:
+            return GameEvent(GameEventType.Step, 0, 3)

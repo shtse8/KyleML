@@ -12,7 +12,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # from agents.DQNAgent import DQNAgent
 # from agents.A2CAgent import A2CAgent
 # from agents.A3CAgent import A3CAgent
-from games.GameFactory import GameFactory
+from games.GameManager import GameManager
 from agents.Agent import RL
 from agents.PPOAgent import PPOAlgo
 from agents.KyleAgent import KyleAlgo
@@ -55,7 +55,7 @@ async def main():
         # "ppo": PPOAgent
     # }
 
-    gameFactory = GameFactory(args.game)
+    gameFactory = GameManager(args.game)
     
     # if args.agent in agents:
     #     agent = agents[args.agent](game)

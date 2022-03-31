@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import List, Callable, TypeVar, Generic, Tuple, Any
 
 import utils.Function as Function
-from games.GameFactory import GameFactory
+from games.GameManager import GameManager
 from memories.Transition import Transition
 from utils.KyleList import KyleList
 from utils.Message import NetworkInfo, LearnReport, EnvReport
@@ -142,7 +142,7 @@ class AgentHandler:
             index = np.random.choice(len(probs), p=noise_probs)
         else:
             index = np.argmax(probs)
-        prediction = np.zeros(self.env.game.actionSpace)
+        prediction = np.zeros(self.env.core.actionSpace)
         prediction[list(acts)] = probs
         # state = self.env.getState()
         # mask = self.env.getMask(state)
@@ -220,7 +220,7 @@ class KyleHandler(AlgoHandler):
             totalLoss = 0
             for i in range(n_miniBatch):
                 startIndex = i * batchSize
-                minibatch = memory.get(startIndex, batchSize)
+                minibatch = memory.create(startIndex, batchSize)
 
                 # Get Tensors
                 batch_states = minibatch.select(lambda x: x.info.state).to_tensor(torch.float, self.device)
@@ -411,7 +411,7 @@ class MCTS:
             # Greedily select next move.
             #找出UCB最大的动作，并执行。
             pred_node = node
-            action, node = node.select(self._c_puct, node.playerId)
+            action, node = node.select(self._c_puct, node.player_id)
             # print(action, [(a, v.get_value(self._c_puct, node.playerId)) for a, v in pred_node._children.items()])
         # Evaluate the leaf using a network which outputs a list of
         # (action, probability) tuples p and also a score v in [-1, 1]
@@ -424,7 +424,7 @@ class MCTS:
         if node.value is None:
             # print("GetValue")
             node.value = self._handler.network.getValue(node.state.unsqueeze(0))
-        node.update_recursive(node.value, node.playerId)
+        node.update_recursive(node.value, node.player_id)
         if not node.done:
             node.expand(prob, node.mask, 1, nextStates, nextMasks, nextDones)
        

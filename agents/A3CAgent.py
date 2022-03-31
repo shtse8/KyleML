@@ -11,7 +11,7 @@ from memories.SimpleMemory import SimpleMemory
 from memories.Transition import Transition
 from optimizers.sharedadam import SharedAdam
 from utils.PredictionHandler import PredictionHandler
-from utils.errors import InvalidAction
+from utils.errors import InvalidActionError
 from .Agent import Agent, EpisodeReport
 
 
@@ -164,7 +164,7 @@ class Worker():
                         nextState, reward, done = self.env.takeAction(action)
                         self.commit(Transition(state, action, reward, nextState, done))
                         break
-                    except InvalidAction:
+                    except InvalidActionError:
                         actionMask[action] = 0
                         self.report.invalidMoves += 1
                         # print(actionMask)

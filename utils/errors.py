@@ -1,3 +1,2 @@
-
-class InvalidAction(Exception):
-   pass
+class InvalidActionError(Exception):
+    pass

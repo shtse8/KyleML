@@ -2,21 +2,14 @@ import os
 import warnings
 import sys
 import signal
-import argparse
 import asyncio
+
+from games.Game import GameEventType
 
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# from agents.DQNAgent import DQNAgent
-# from agents.A2CAgent import A2CAgent
-# from agents.A3CAgent import A3CAgent
-from games.GameFactory import GameFactory
-from agents.Agent import RL
-from agents.PPOAgent import PPOAlgo
-from agents.KyleAgent import KyleAlgo
-from agents.AlphaZeroAgent import AlphaZeroAlgo
-import torch
+from games.GameManager import GameManager
 
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -33,12 +26,21 @@ def signal_handler(sig, frame):
 async def main():
     signal.signal(signal.SIGINT, signal_handler)
 
-    game_factory = GameFactory("2048")
-    game = game_factory.get()
-    render = game.render()
-    game.reset()
-    while not game.is_done():
-        render.update()
+    game_manager = GameManager("2048")
+    player_game_container = game_manager.create()
+    player_game_container.render()
+    while True:
+        # player plays first
+        player_game_container.reset()
+        while not player_game_container.is_done:
+            player_game_container.update()
+            for event in player_game_container.get_events():
+                if event.event_type == GameEventType.Step:
+                    player_game_container.players[event.player_id].step(event.value)
+
+        # AI learns from player steps
+
+        # test AI
 
 
 if __name__ == "__main__":

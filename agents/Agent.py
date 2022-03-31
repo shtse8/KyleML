@@ -18,7 +18,7 @@ from typing import List, Callable, TypeVar, Generic, Tuple, Any
 
 import utils.Function as Function
 from games.Game import Game
-from games.GameFactory import GameFactory
+from games.GameManager import GameManager
 from memories.Transition import Transition
 from utils.KyleList import KyleList
 from utils.Message import NetworkInfo, LearnReport, EnvReport, MethodCallRequest, MethodCallResult
@@ -364,7 +364,7 @@ class Role(Enum):
     Evaluator = 2
 
 class Trainer(Base):
-    def __init__(self, algo: Algo, gameFactory: GameFactory, sync):
+    def __init__(self, algo: Algo, gameFactory: GameManager, sync):
         super().__init__(algo, gameFactory, sync)
         self.evaluators: List[EvaluatorService] = []
         self.handler = None
@@ -383,7 +383,7 @@ class Trainer(Base):
         self.sync.latestStateDict.update(data)
 
     async def start(self, episodes=1000, load=False):
-        env = self.gameFactory.get()
+        env = self.gameFactory.create()
 
         # Create Evaluators
         evaluators = []
@@ -457,7 +457,7 @@ class EvaulationTerminated(Exception):
 class Evaluator(Base):
     def __init__(self, algo: Algo, gameFactory, sync):
         super().__init__(algo, gameFactory, sync)
-        self.env = gameFactory.get()
+        self.env = gameFactory.create()
         # self.algo.device = torch.device("cpu")
         # self.algo.device = sync.getDevice()
         self.handler = self.algo.createHandler(self.env, Role.Evaluator, sync.getDevice())
@@ -606,7 +606,7 @@ class HumanAgent(Agent):
                     print(e)
                
 class RL:
-    def __init__(self, algo: Algo, gameFactory: GameFactory):
+    def __init__(self, algo: Algo, gameFactory: GameManager):
         self.algo = algo
         self.gameFactory = gameFactory
 

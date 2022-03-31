@@ -1,114 +1,164 @@
-class GameInfo:
-    def __init__(self, state, mask, done, hidden_state=None):
-        self.state = state
-        self.mask = mask
-        self.done = done
-        self.hiddenState = hidden_state
+from enum import Enum
+from queue import SimpleQueue
+from abc import abstractmethod, ABCMeta
+from typing import TypeVar, Generic, Any
+
+import pygame
+from pygame.event import Event
 
 
-class Game(object):
-    def __init__(self):
-        self.renderer = None
-        self.reward = {}
+class Player(metaclass=ABCMeta):
+    def __init__(self, game, player_id: int):
+        self.game = game
+        self.player_id = player_id
 
     @property
+    @abstractmethod
+    def can_step(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    def action_spaces_mask(self):
+        pass
+
+    @property
+    @abstractmethod
+    def score(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def is_done(self) -> bool:
+        pass
+
+    # Return reward
+    @abstractmethod
+    def step(self, action) -> float:
+        pass
+
+
+class GameEventType(Enum):
+    Step = 0
+
+
+class GameEvent:
+    def __init__(self, event_type: GameEventType, player_id: int, value: Any):
+        self.event_type = event_type
+        self.player_id = player_id
+        self.value = value
+
+
+P = TypeVar('P', bound=Player)
+
+
+class Game(Generic[P], metaclass=ABCMeta):
+    def __init__(self, name: str):
+        self.name = name
+        self._players: list[P] = None
+
+    @property
+    @abstractmethod
+    def observation_shape(self) -> tuple:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
     def action_spaces(self):
-        raise NotImplementedError()
-
-    @property
-    def players(self):
-        raise NotImplementedError()
+        pass
 
     @property
     def action_count(self) -> int:
         return len(self.action_spaces)
 
     @property
+    @abstractmethod
     def player_count(self) -> int:
-        return len(self.players)
-
-    # Game methods
-    def set_player(self, player_id: int):
-        return GamePlayer(self, player_id)
-
-    def get_player_count(self) -> int:
-        raise NotImplementedError()
-
-    def reset(self) -> None:
-        raise NotImplementedError()
-
-    def is_done(self) -> bool:
-        raise NotImplementedError()
-
-    # Player Methods
-    def can_step(self, player_id) -> bool:
-        raise NotImplementedError()
-
-    def get_info(self, player_id):
-        return GameInfo(
-            state=self.get_state(player_id),
-            mask=self.get_mask(player_id),
-            done=self.is_done())
-
-    def get_mask(self, player_id: int):
-        raise NotImplementedError()
-
-    def get_state(self, player_id: int):
-        raise NotImplementedError()
-
-    def get_done_reward(self, player_id: int) -> float:
-        return 0.
-
-    def _step(self, player_id: int, action) -> None:
-        raise NotImplementedError()
-
-    def step(self, player_id: int, action) -> tuple:
-        self._step(player_id, action)
-        self.update()
-        return self.get_reward(player_id)
-
-    def get_reward(self, player_id) -> float:
-        if player_id not in self.reward:
-            return 0
-        return self.reward[player_id]
-
-    # UI Methods
-    def render(self) -> None:
         pass
 
-    def update(self) -> None:
+    @property
+    @abstractmethod
+    def is_done(self) -> bool:
+        pass
+
+    @abstractmethod
+    def _create_player(self, player_id: int) -> P:
+        pass
+
+    @property
+    def players(self) -> list[P]:
+        if self._players is None:
+            self._players = [self._create_player(i) for i in range(self.player_count)]
+        return self._players
+
+    def update_display(self):
+        pass
+
+    def process_event(self, event):
         pass
 
 
-class GamePlayer:
-    def __init__(self, game: Game, player_id: int):
-        self.game = game
-        self.playerId = player_id
+class GetOnlySimpleQueue:
+    def __init__(self, queue: SimpleQueue):
+        self.__queue = queue
 
-    def get_info(self):
-        return self.game.get_info(self.playerId)
+    def get(self):
+        while not self.__queue.empty():
+            yield self.__queue.get_nowait()
 
-    def get_next(self):
-        return GamePlayer(self.game, 1 + self.playerId % self.game.get_player_count())
 
-    def get_state(self):
-        return self.game.get_state(self.playerId)
+class RendererEvent(Enum):
+    UP = 0
+    RIGHT = 1
+    DOWN = 2
+    LEFT = 3
 
-    def can_step(self) -> bool:
-        return self.game.can_step(self.playerId)
 
-    def get_mask(self):
-        return self.game.get_mask(self.playerId)
+class Renderer:
+    def __init__(self):
+        self.__game: Game = None
+        self.__event = SimpleQueue()
+        self.width: int = 500
+        self.height: int = 600
+        self.scoreHeight: int = 100
+        self.display = pygame.display.set_mode((self.width, self.height))
+        pygame.init()
 
-    def step(self, action) -> tuple:
-        return self.game.step(self.playerId, action)
+    @property
+    def game(self) -> Game:
+        return self.__game
 
-    def get_reward(self) -> float:
-        return self.game.get_reward(self.playerId)
+    @game.setter
+    def game(self, value: Game):
+        self.__game = value
+        # Update Caption
+        pygame.display.set_caption(self.__game.name)
 
-    def is_done(self) -> bool:
-        return self.game.is_done()
+    @property
+    def event(self) -> GetOnlySimpleQueue:
+        return GetOnlySimpleQueue(self.__event)
 
-    def get_done_reward(self) -> float:
-        return self.game.get_done_reward(self.playerId)
+    def update(self):
+        if self.__game is None:
+            return
 
+        # Handler UI Events
+        events: list[Event] = pygame.event.get()
+        for event in events:
+            try:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_UP:
+                        self.__events.put(RendererEvent.UP)
+                    if event.key == pygame.K_RIGHT:
+                        self.__events.put(RendererEvent.RIGHT)
+                    if event.key == pygame.K_DOWN:
+                        self.__events.put(RendererEvent.DOWN)
+                    if event.key == pygame.K_LEFT:
+                        self.__events.put(RendererEvent.LEFT)
+            except Exception as e:
+                print(str(e))
+
+        self.__game.update_display()
+
+        # Update UI
+        pygame.display.update()

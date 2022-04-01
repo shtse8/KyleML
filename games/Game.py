@@ -1,41 +1,11 @@
+from __future__ import annotations
+from abc import abstractmethod, ABCMeta
 from enum import Enum
 from queue import SimpleQueue
-from abc import abstractmethod, ABCMeta
-from typing import TypeVar, Generic, Any
+from typing import Any
 
 import pygame
 from pygame.event import Event
-
-
-class Player(metaclass=ABCMeta):
-    def __init__(self, game, player_id: int):
-        self.game = game
-        self.player_id = player_id
-
-    @property
-    @abstractmethod
-    def can_step(self) -> bool:
-        pass
-
-    @property
-    @abstractmethod
-    def action_spaces_mask(self):
-        pass
-
-    @property
-    @abstractmethod
-    def score(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def is_done(self) -> bool:
-        pass
-
-    # Return reward
-    @abstractmethod
-    def step(self, action) -> float:
-        pass
 
 
 class GameEventType(Enum):
@@ -49,13 +19,10 @@ class GameEvent:
         self.value = value
 
 
-P = TypeVar('P', bound=Player)
-
-
-class Game(Generic[P], metaclass=ABCMeta):
+class Game(metaclass=ABCMeta):
     def __init__(self, name: str):
         self.name = name
-        self._players: list[P] = None
+        self._core = None
 
     @property
     @abstractmethod
@@ -64,7 +31,7 @@ class Game(Generic[P], metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def action_spaces(self):
+    def action_spaces(self) -> list[any]:
         pass
 
     @property
@@ -73,8 +40,12 @@ class Game(Generic[P], metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def player_count(self) -> int:
+    def player_ids(self) -> list[int]:
         pass
+
+    @property
+    def player_count(self) -> int:
+        return len(self.player_ids)
 
     @property
     @abstractmethod
@@ -82,19 +53,37 @@ class Game(Generic[P], metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def _create_player(self, player_id: int) -> P:
+    def _create_game_core(self):
         pass
 
-    @property
-    def players(self) -> list[P]:
-        if self._players is None:
-            self._players = [self._create_player(i) for i in range(self.player_count)]
-        return self._players
+    def reset(self):
+        self._core = self._create_game_core()
 
     def update_display(self, surface: pygame.Surface):
         pass
 
     def process_event(self, event):
+        pass
+
+    @abstractmethod
+    def can_step(self, player_id: int) -> bool:
+        pass
+
+    @abstractmethod
+    def get_state(self, player_id: int):
+        pass
+
+    @abstractmethod
+    def get_action_spaces_mask(self, player_id: int):
+        pass
+
+    @abstractmethod
+    def get_score(self, player_id: int) -> float:
+        pass
+
+    # Return reward
+    @abstractmethod
+    def step(self, player_id: int, action) -> float:
         pass
 
 
@@ -160,4 +149,32 @@ class Renderer:
         self.__game.update_display(display)
         pygame.display.update(display.get_rect())
 
-        # Update UI
+
+class Player:
+    def __init__(self, game: Game, player_id: int):
+        self.__game = game
+        self.__player_id = player_id
+
+    @property
+    def can_step(self) -> bool:
+        return self.__game.can_step(self.__player_id)
+
+    @property
+    def state(self):
+        return self.__game.get_state(self.__player_id)
+
+    @property
+    def action_mask(self):
+        return self.__game.get_action_spaces_mask(self.__player_id)
+
+    @property
+    def score(self) -> float:
+        return self.__game.get_score(self.__player_id)
+
+    # Return reward
+    def step(self, action) -> float:
+        return self.__game.step(self.__player_id, action)
+
+    @staticmethod
+    def get_players(game: Game) -> list[Player]:
+        return [Player(game, i) for i in game.player_ids]

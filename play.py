@@ -4,6 +4,7 @@ import warnings
 import sys
 import signal
 import asyncio
+import time
 
 import numpy as np
 import torch
@@ -53,19 +54,24 @@ class Network(nn.Module):
 
 async def main():
     signal.signal(signal.SIGINT, signal_handler)
+    if torch.cuda.is_available():
+        print(f"CUDA {torch.version.cuda} (Devices: {torch.cuda.device_count()})")
+    if torch.backends.cudnn.enabled:
+        # torch.backends.cudnn.benchmark = True
+        print(f"CUDNN {torch.backends.cudnn.version()}")
 
     game_manager = GameManager("2048")
     player_game_container = game_manager.create()
     player_game_container.render()
 
     # network settings
-    observation_size = np.prod(player_game_container.observation_shape)
     network = Network(np.prod(player_game_container.observation_shape), player_game_container.action_count)
     while True:
+        scores = []
+        steps = []
 
         # AI Play
         network.eval()
-        scores = []
         for i in range(10):
             player_game_container.reset()
             while not player_game_container.is_done:
@@ -75,19 +81,20 @@ async def main():
                     state = player.state
                     mask = player.action_spaces_mask
                     flatten_state = list(np.array(state).flat)
-                    state_tensor = torch.tensor([flatten_state], dtype=torch.float)
-                    mask_tensor = torch.tensor([mask], dtype=torch.bool)
-                    values = network(state_tensor, mask_tensor).squeeze(0).detach().numpy()
-                    action = np.argmax(values)
-                    player_game_container.players[0].step(action)
+                    state_tensor = torch.tensor(np.array([flatten_state]), dtype=torch.float)
+                    mask_tensor = torch.tensor(np.array([mask]), dtype=torch.bool)
+                    probs = network(state_tensor, mask_tensor).squeeze(0).detach().numpy()
+                    # action = np.random.choice(len(probs), p=probs)
+                    action = np.argmax(probs)
+                    reward = player_game_container.players[0].step(action)
+                    # if i == 0:
+                    #     time.sleep(0.1)
                 except Exception as e:
                     print("Error: " + str(e))
             scores += [player_game_container.players[0].score]
 
         print("Avg Score: " + str(np.average(scores)))
-
         # player plays first
-        steps = []
         player_game_container.reset()
         while not player_game_container.is_done:
             player_game_container.update()
@@ -101,26 +108,25 @@ async def main():
                         reward = player_game_container.players[event.player_id].step(event.value)
                         steps += [(state, mask, action, reward)]
                     except Exception as e:
-                        pass
+                        print("Error:", e)
 
         # AI learns from player steps
         print("Step collected: " + str(len(steps)))
+        if len(steps) > 0:
+            network.train()
+            states = torch.tensor(np.array([list(np.array(x[0]).flat) for x in steps]), dtype=torch.float).detach()
+            masks = torch.tensor(np.array([x[1] for x in steps]), dtype=torch.bool).detach()
+            actions = torch.tensor(np.array([x[2] for x in steps]), dtype=torch.int).detach()
 
-        network.train()
-        states = torch.tensor([list(np.array(x[0]).flat) for x in steps], dtype=torch.float).detach()
-        masks = torch.tensor([x[1] for x in steps], dtype=torch.bool).detach()
-        actions = torch.tensor([x[2] for x in steps], dtype=torch.int).detach()
-        values = network(states, masks)
-        # print(values)
-        # test = values.gather(1, actions.unsqueeze(1)).squeeze(1)
-        dist = torch.distributions.Categorical(probs=values)
-        test = dist.log_prob(actions)
-        test2 = torch.ones_like(test)
-        loss = nn.MSELoss()(test, torch.ones_like(test))
-        loss.backward()
-        network.optimizer.step()
+            probs = network(states, masks)
 
-
+            dist = torch.distributions.Categorical(probs=probs)
+            prob = dist.log_prob(actions)
+            reward = torch.ones_like(prob)
+            loss = nn.MSELoss()(prob, reward)
+            print("loss =", loss.item())
+            loss.backward()
+            network.optimizer.step()
 
 
 if __name__ == "__main__":

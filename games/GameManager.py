@@ -112,7 +112,8 @@ class GameContainer:
             raise ValueError("Unknown Game " + self.__name)
 
     def update(self):
-        self.__renderer.update()
+        if self.__renderer is not None:
+            self.__renderer.update()
 
     def Run(self):
         while not self.__game.is_done:

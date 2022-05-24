@@ -255,7 +255,7 @@ async def main():
     print("Samples:", len(samples))
 
     # samples = samples[:100000]
-    split_index = math.floor(len(samples) * 0.8)
+    split_index = math.floor(len(samples) * 0.9)
     training_samples = samples[:split_index]
     eval_samples = samples[split_index:]
     train_dataset = CryptoDataset(training_samples, device)
@@ -267,14 +267,21 @@ async def main():
     print("Eval samples:", len(eval_samples))
 
     # take one sample to create the network.
-    network_path = "network.dat"
+    network_path = "network.pt"
     train_features, train_labels = next(iter(train_dataloader))
     network = Network(len(train_features[0]), 2).to(device)
-    # try:
-    #     network.load_state_dict(torch.load(network_path))
-    # except:
-    #     print("Failed to load the network.")
-    #
+    epoch = 0
+
+    try:
+        checkpoint = torch.load(network_path)
+        network.load_state_dict(checkpoint["model_state_dict"])
+        network.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        epoch = checkpoint["epoch"]
+        latest_loss = checkpoint["loss"]
+        print(f"Network loaded with {epoch} trained, latest loss {latest_loss:.4f}")
+    except:
+        print("Failed to load the network.")
+
     # # push samples to tensors
     print("[Calculating Weights]")
     # occurrences = np.bincount([x["result"] for x in training_samples])
@@ -284,42 +291,54 @@ async def main():
     print(weights)
 
     best = float('inf')
-    for epoch in range(0, 8000):
+    while True:
+        epoch += 1
         epoch_perf = PerformanceTimer().start()
 
         train_perf = PerformanceTimer().start()
-        train_loss = run("train", network, train_dataloader, device, weights)
+        train_loss, train_accuracy = run("train", network, train_dataloader, device, weights)
         train_perf.stop()
 
         eval_perf = PerformanceTimer().start()
-        eval_loss = run("eval", network, eval_dataloader, device, weights)
+        eval_loss, eval_accuracy = run("eval", network, eval_dataloader, device, weights)
         eval_perf.stop()
 
         if eval_loss < best:
             best = eval_loss
-            torch.save(network.state_dict(), network_path)
+            checkpoint = {
+                "epoch": epoch,
+                "loss": train_loss,
+                "model_state_dict": network.state_dict(),
+                "optimizer_state_dict": network.optimizer.state_dict()
+            }
+            torch.save(checkpoint, network_path)
 
         epoch_perf.stop()
 
-        writer.add_scalar("Train loss/epoch", train_loss, epoch)
-        writer.add_scalar("Eval loss/epoch", eval_loss, epoch)
-        print("[Epoch " + str(epoch) + "] - Train Loss: " + str(train_loss) +
-              ", Eval Loss: " + str(eval_loss) +
-              ", Elapsed: " + str(epoch_perf))
+        writer.add_scalar("Loss/train", train_loss, epoch)
+        writer.add_scalar("Accuracy/train", train_accuracy, epoch)
+        writer.add_scalar("Loss/eval", eval_loss, epoch)
+        writer.add_scalar("Accuracy/eval", eval_accuracy, epoch)
+        print(f"[Epoch {epoch}] "
+              f"Train Loss: {train_loss:.4f}, Acc {train_accuracy:.2%}, "
+              f"Eval Loss: {eval_loss:.4f}, Acc: {eval_accuracy:.2%}, "
+              f"Elapsed: {epoch_perf:.2f}s")
 
 
 def run(mode, network, dataloader, device, weights):
-
-    result = [{
-        "total": 0,
-        "correct": 0
-    } for i in range(0, 2)]
+    #
+    # result = [{
+    #     "total": 0,
+    #     "correct": 0
+    # } for i in range(0, 2)]
     if mode == "train":
         network.train()
     else:
         network.eval()
     current_loss = 0
     total_data = 0
+    correct_count = 0
+
     for features, labels in dataloader:
         features = features.to(device)
         labels = labels.to(device)
@@ -337,13 +356,15 @@ def run(mode, network, dataloader, device, weights):
         predicts = F.softmax(probs, dim=1).argmax(dim=1).detach()
         # check equal between targets and predicts, then zip, then count unique
         # we would like to do it in tensor to speed up
-        rows, counts = torch.stack((labels, torch.eq(labels, predicts)), dim=1).unique(dim=0, return_counts=True)
-        for (label, matched), count in zip(rows, counts):
-            stats = result[label]
-            stats["total"] += count.item()
-            if matched == 1:
-                stats["correct"] += count.item()
-            stats["correct_rate"] = stats["correct"] / stats["total"] * 100 if stats["total"] > 0 else float("nan")
+        # rows, counts = torch.stack((labels, torch.eq(labels, predicts)), dim=1).unique(dim=0, return_counts=True)
+        # for (label, matched), count in zip(rows, counts):
+        #     stats = result[label]
+        #     stats["total"] += count.item()
+        #     if matched == 1:
+        #         stats["correct"] += count.item()
+        #     stats["correct_rate"] = stats["correct"] / stats["total"] * 100 if stats["total"] > 0 else float("nan")
+
+        correct_count += torch.bincount(torch.eq(labels, predicts))[1]
 
         current_loss += loss.item() * len(features)
         total_data += len(features)
@@ -351,9 +372,9 @@ def run(mode, network, dataloader, device, weights):
     # if mode == "train":
     #     network.optimizer.step()
         # network.schedular.step()
-    for i, row in enumerate(result):
-        print(mode, i, row["correct"], row["total"], row["correct_rate"])
-    return current_loss / total_data
+    # for i, row in enumerate(result):
+    #     print(mode, i, row["correct"], row["total"], row["correct_rate"])
+    return current_loss / total_data, correct_count / total_data
 
 
 def get_state(token1, token2, row, data):

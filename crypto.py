@@ -1,6 +1,7 @@
 from binance.spot import Spot
 from datetime import datetime, timedelta
 
+import random
 import logging
 import math
 import warnings
@@ -65,13 +66,16 @@ class PerformanceTimer:
     def __str__(self):
         return str(self.__repr__())
 
+    def __format__(self, format_spec):
+        return format(self.elapsed(), format_spec)
+
 
 class CryptoDataset(Dataset):
     def __init__(self, data, device):
-        # self.features = torch.as_tensor(np.array([x["state"] for x in data]), dtype=torch.float, device=device)
+        # self.features = torch.as_tensor(np.array([x["feature"] for x in data]), dtype=torch.float, device=device)
         # self.targets = torch.as_tensor(np.array([x["result"] for x in data]), dtype=torch.long, device=device)
-        self.features = torch.as_tensor(np.array([x["state"] for x in data]), dtype=torch.float)
-        self.targets = torch.as_tensor(np.array([x["result"] for x in data]), dtype=torch.long)
+        self.features = torch.as_tensor(np.array([x["feature"] for x in data]), dtype=torch.float)
+        self.targets = torch.as_tensor(np.array([x["target"] for x in data]), dtype=torch.long)
 
     def __len__(self):
         return len(self.features)
@@ -245,8 +249,8 @@ async def main():
                         try:
                             change_rate = (row["high_price"] - row["open_price"]) / row["open_price"]
                             samples.append({
-                                "state": get_state(token1, token2, row, market_data),
-                                "result": 1 if change_rate >= 0.01 else 0
+                                "feature": get_feature(token1, token2, row, market_data),
+                                "target": 1 if change_rate >= 0.01 else 0
                             })
                         except Exception as e:
                             # print(str(e))
@@ -255,6 +259,7 @@ async def main():
     print("Samples:", len(samples))
 
     # samples = samples[:100000]
+    random.Random(880712).shuffle(samples)
     split_index = math.floor(len(samples) * 0.9)
     training_samples = samples[:split_index]
     eval_samples = samples[split_index:]
@@ -364,7 +369,7 @@ def run(mode, network, dataloader, device, weights):
         #         stats["correct"] += count.item()
         #     stats["correct_rate"] = stats["correct"] / stats["total"] * 100 if stats["total"] > 0 else float("nan")
 
-        correct_count += torch.bincount(torch.eq(labels, predicts))[1]
+        correct_count += torch.eq(labels, predicts).count_nonzero()
 
         current_loss += loss.item() * len(features)
         total_data += len(features)
@@ -377,11 +382,11 @@ def run(mode, network, dataloader, device, weights):
     return current_loss / total_data, correct_count / total_data
 
 
-def get_state(token1, token2, row, data):
+def get_feature(token1, token2, row, data):
     price_multiplier = 10000
     # state_parts = [binary(math.floor(row["open_price"] * price_multiplier), 64)]
     open_time = datetime.fromtimestamp(row["open_time"])
-    state = [
+    feature = [
         token1,
         token2,
         open_time.year,
@@ -405,17 +410,17 @@ def get_state(token1, token2, row, data):
         # state_parts.append(binary(math.floor(target_data["high_price"] * price_multiplier), 64))
         # state_parts.append(binary(math.floor(target_data["low_price"] * price_multiplier), 64))
         # state_parts.append(binary(math.floor(target_data["volume"] * price_multiplier), 64))
-        state.append(target_open_time.year)
-        state.append(target_open_time.month)
-        state.append(target_open_time.day)
-        state.append(target_open_time.hour)
-        state.append(target_open_time.minute)
-        state.append(target_data["open_price"] / row["open_price"])
-        state.append(target_data["high_price"] / row["open_price"])
-        state.append(target_data["low_price"] / row["open_price"])
-        state.append(target_data["volume"] / row["volume"])
+        feature.append(target_open_time.year)
+        feature.append(target_open_time.month)
+        feature.append(target_open_time.day)
+        feature.append(target_open_time.hour)
+        feature.append(target_open_time.minute)
+        feature.append(target_data["open_price"] / row["open_price"])
+        feature.append(target_data["high_price"] / row["open_price"])
+        feature.append(target_data["low_price"] / row["open_price"])
+        feature.append(target_data["volume"] / row["volume"])
     # return np.concatenate(state_parts)
-    return state
+    return feature
 
 
 # api key/secret are required for user data endpoints

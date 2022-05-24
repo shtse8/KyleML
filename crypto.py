@@ -1,5 +1,7 @@
 from binance.spot import Spot
 from datetime import datetime, timedelta
+
+import logging
 import math
 import warnings
 import collections
@@ -34,14 +36,13 @@ for token_id, symbol in enumerate(tokens):
 markets = [
     ("BTC", "USDT"),
     ("BTC", "BUSD"),
-    ("BTC", "USDC"),
     ("ETH", "USDT"),
     ("ETH", "BUSD"),
-    ("ETH", "USDC"),
     ("BNB", "USDT"),
     ("BNB", "BUSD"),
-    ("BNB", "USDC")
 ]
+
+
 class PerformanceTimer:
     def __init__(self):
         self.start_time = None
@@ -209,14 +210,13 @@ async def main():
                         market_id = token1 + token2
                         print("Fetching ", market_id, " market")
                         time = math.floor(dt_format.timestamp() * 1000)
-                        # init market
+                        # init market data
                         market_data = data[token_dict[token1]][token_dict[token2]] = {}
                         print(market_data)
                         while datetime.now().timestamp() > time / 1000:
                             lines = client.klines(market_id, "5m", startTime=time, limit=1000)
                             for line in lines:
                                 open_time = math.floor(line[0] / 1000)
-                                close_time_timestamp = line[6]
                                 row = {
                                     "open_time": open_time,
                                     "open_price": float(line[1]),
@@ -227,11 +227,16 @@ async def main():
                                 }
                                 market_data[open_time] = row
                             print(time, len(market_data))
-                            time = lines[-1][6] + 1 # last close time + 1s
+
+                            # last close time + 1s
+                            time = lines[-1][6] + 1
                     except Exception as e:
-                        print("Error - ", e)
+                        print("Error - ", str(e))
+                        # logging.exception("An exception was thrown!")
                 pickle.dump(data, data_file)
-        print("Data:", len(data))
+
+        data_len = sum([sum([len(market_data) for market_data in token1_market_data.values()]) for token1_market_data in data.values()])
+        print("Data:", data_len)
 
         with open('samples.dat', 'wb') as sample_file:
             for token1, token1_market_data in data.items():

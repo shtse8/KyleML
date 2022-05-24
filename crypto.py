@@ -191,7 +191,7 @@ async def main():
     print("[Creating Samples]")
     samples = []
     try:
-        with open('samples.dat', 'rb') as sample_file:
+        with open('data/samples.dat', 'rb') as sample_file:
             samples = pickle.load(sample_file)
             print("data file load successfully.")
     except:
@@ -199,11 +199,11 @@ async def main():
         data = collections.defaultdict(dict)
         dt_format = datetime.strptime("01/01/2010", '%d/%m/%Y')
         try:
-            with open('data.txt', 'rb') as data_file:
+            with open('data/data.dat', 'rb') as data_file:
                 data = pickle.load(data_file)
                 print("data file load successfully.")
         except Exception as e:
-            with open('data.txt', 'wb') as data_file:
+            with open('data/data.dat', 'wb') as data_file:
                 client = Spot()
                 for token1, token2 in markets:
                     try:
@@ -238,7 +238,7 @@ async def main():
         data_len = sum([sum([len(market_data) for market_data in token1_market_data.values()]) for token1_market_data in data.values()])
         print("Data:", data_len)
 
-        with open('samples.dat', 'wb') as sample_file:
+        with open('data/samples.dat', 'wb') as sample_file:
             for token1, token1_market_data in data.items():
                 for token2, market_data in token1_market_data.items():
                     for row in market_data.values():
@@ -267,7 +267,7 @@ async def main():
     print("Eval samples:", len(eval_samples))
 
     # take one sample to create the network.
-    network_path = "network.pt"
+    network_path = "data/network.pt"
     train_features, train_labels = next(iter(train_dataloader))
     network = Network(len(train_features[0]), 2).to(device)
     epoch = 0

@@ -6,3 +6,5 @@ weights/
 .vs/
 .mypy_cache/
 env/
+auths/
+runs/

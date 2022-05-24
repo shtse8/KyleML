@@ -359,15 +359,23 @@ def run(mode, network, dataloader, device, weights):
 def get_state(token1, token2, row, data):
     price_multiplier = 10000
     # state_parts = [binary(math.floor(row["open_price"] * price_multiplier), 64)]
-    state = [token1, token2]
+    open_time = datetime.fromtimestamp(row["open_time"])
+    state = [
+        token1,
+        token2,
+        open_time.year,
+        open_time.month,
+        open_time.day,
+        open_time.hour,
+        open_time.minute
+    ]
     for i in range(25):
-        open_time = datetime.fromtimestamp(row["open_time"]) - timedelta(minutes=(1 + i) * 5)
-        open_time_timestamp = open_time.timestamp()
-        if open_time_timestamp not in data:
-            raise LookupError(open_time)
-        target_data = data[open_time_timestamp]
+        target_open_time = datetime.fromtimestamp(row["open_time"]) - timedelta(minutes=(1 + i) * 5)
+        target_open_time_timestamp = target_open_time.timestamp()
+        if target_open_time_timestamp not in data:
+            raise LookupError(target_open_time)
+        target_data = data[target_open_time_timestamp]
 
-        target_open_time = datetime.fromtimestamp(target_data["open_time"])
         # state_parts.append(binary(target_open_time.month, 4))
         # state_parts.append(binary(target_open_time.day, 8))
         # state_parts.append(binary(target_open_time.hour, 4))

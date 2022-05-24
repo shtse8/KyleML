@@ -2,6 +2,7 @@ from binance.spot import Spot
 from datetime import datetime, timedelta
 import math
 import warnings
+import collections
 import sys
 import signal
 import asyncio
@@ -16,16 +17,31 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import Dataset, DataLoader
 from tensorboard import program
 
-tb = program.TensorBoard()
-tb.configure(argv=[None, '--logdir', "runs"])
-url = tb.launch()
-print("tensorboard url:", url)
-
-writer = SummaryWriter()
-
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+tokens = [
+    "BUSD",
+    "USDT",
+    "USDC"
+    "BTC",
+    "ETH",
+    "BNB",
+]
+token_dict = {}
+for token_id, symbol in enumerate(tokens):
+    token_dict[symbol] = token_id
 
+markets = [
+    ("BTC", "USDT"),
+    ("BTC", "BUSD"),
+    ("BTC", "USDC"),
+    ("ETH", "USDT"),
+    ("ETH", "BUSD"),
+    ("ETH", "USDC"),
+    ("BNB", "USDT"),
+    ("BNB", "BUSD"),
+    ("BNB", "USDC")
+]
 class PerformanceTimer:
     def __init__(self):
         self.start_time = None
@@ -45,11 +61,16 @@ class PerformanceTimer:
     def __repr__(self):
         return self.elapsed()
 
+    def __str__(self):
+        return str(self.__repr__())
+
 
 class CryptoDataset(Dataset):
     def __init__(self, data, device):
-        self.features = torch.as_tensor(np.array([x["state"] for x in data]), dtype=torch.float, device=device)
-        self.targets = torch.as_tensor(np.array([x["result"] for x in data]), dtype=torch.long, device=device)
+        # self.features = torch.as_tensor(np.array([x["state"] for x in data]), dtype=torch.float, device=device)
+        # self.targets = torch.as_tensor(np.array([x["result"] for x in data]), dtype=torch.long, device=device)
+        self.features = torch.as_tensor(np.array([x["state"] for x in data]), dtype=torch.float)
+        self.targets = torch.as_tensor(np.array([x["result"] for x in data]), dtype=torch.long)
 
     def __len__(self):
         return len(self.features)
@@ -59,9 +80,15 @@ class CryptoDataset(Dataset):
 
 
 class CryptoDataLoader:
-    def __init__(self, dataset, batch_size, pin_memory):
+    def __init__(self, dataset, batch_size, pin_memory=False, shuffle=False, num_workers=0):
         self.dataset = dataset
         self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.pin_memory = pin_memory
+        if pin_memory and torch.cuda.is_available():
+            self.pin_memory_device = torch.device("cuda")
+        else:
+            raise RuntimeError
 
     def __iter__(self):
         return CryptoDataLoaderIterator(self)
@@ -71,16 +98,19 @@ class CryptoDataLoaderIterator:
     def __init__(self, loader):
         self.loader = loader
         self.index = 0
-        self.len = len(loader.dataset.features)
+        self.len = len(loader.dataset)
         self.batch_size = loader.batch_size
+        self.indices = torch.randperm(self.len) if self.loader.shuffle else torch.arange(self.len)
 
     def __next__(self):
         if self.index >= self.len:
             raise StopIteration
         start_index = self.index
         self.index = min(self.index + self.batch_size, self.len)
-        return self.loader.dataset.features[start_index: self.index], \
-               self.loader.dataset.targets[start_index:self.index]
+        data = self.loader.dataset[self.indices[start_index: self.index]]
+        if self.loader.pin_memory:
+            data = [sample.pin_memory(self.loader.pin_memory_device) for sample in data]
+        return data
 
 
 def binary(num, bits):
@@ -124,12 +154,12 @@ class Network(nn.Module):
         hidden_notes = 1024
         self.layers = nn.Sequential(
             nn.Linear(in_nodes, hidden_notes),
-            nn.ELU(),
+            nn.ReLU(),
             nn.Linear(hidden_notes, hidden_notes),
-            nn.ELU(),
+            nn.ReLU(),
             nn.Linear(hidden_notes, out_nodes)
         )
-        self.optimizer = optim.Adam(self.parameters(), lr=3e-6)
+        self.optimizer = optim.Adam(self.parameters(), lr=3e-8)
         # self.schedular = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.9)
 
     def forward(self, x):
@@ -146,39 +176,16 @@ async def main():
         # torch.backends.cudnn.benchmark = True
         print(f"CUDNN {torch.backends.cudnn.version()}")
 
-    client = Spot()
+    tb = program.TensorBoard()
+    tb.configure(argv=[None, '--logdir', "runs"])
+    url = tb.launch()
+    print("tensorboard url:", url)
+
+    writer = SummaryWriter()
 
     # Get server timestamp
     # print(client.time())
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # loading data
-    data = {}
-    dt_format = datetime.strptime("01/01/2010", '%d/%m/%Y')
-    try:
-        with open('data.txt', 'rb') as data_file:
-            data = pickle.load(data_file)
-            print("data file load successfully.")
-    except:
-        with open('data.txt', 'wb') as data_file:
-            time = math.floor(dt_format.timestamp() * 1000)
-            while datetime.now().timestamp() > time / 1000:
-                lines = client.klines("BTCUSDT", "5m", startTime=time, limit=1000)
-                for line in lines:
-                    open_time = math.floor(line[0] / 1000)
-                    close_time_timestamp = line[6]
-                    row = {
-                        "open_time": open_time,
-                        "open_price": float(line[1]),
-                        "high_price": float(line[2]),
-                        "low_price": float(line[3]),
-                        "close_price": float(line[4]),
-                        "volume": float(line[5])
-                    }
-                    time = close_time_timestamp
-                    data[open_time] = row
-            pickle.dump(data, data_file)
-    print("Data:", len(data))
-
     # samples
     print("[Creating Samples]")
     samples = []
@@ -187,27 +194,69 @@ async def main():
             samples = pickle.load(sample_file)
             print("data file load successfully.")
     except:
+        # loading data
+        data = collections.defaultdict(dict)
+        dt_format = datetime.strptime("01/01/2010", '%d/%m/%Y')
+        try:
+            with open('data.txt', 'rb') as data_file:
+                data = pickle.load(data_file)
+                print("data file load successfully.")
+        except Exception as e:
+            with open('data.txt', 'wb') as data_file:
+                client = Spot()
+                for token1, token2 in markets:
+                    try:
+                        market_id = token1 + token2
+                        print("Fetching ", market_id, " market")
+                        time = math.floor(dt_format.timestamp() * 1000)
+                        # init market
+                        market_data = data[token_dict[token1]][token_dict[token2]] = {}
+                        print(market_data)
+                        while datetime.now().timestamp() > time / 1000:
+                            lines = client.klines(market_id, "5m", startTime=time, limit=1000)
+                            for line in lines:
+                                open_time = math.floor(line[0] / 1000)
+                                close_time_timestamp = line[6]
+                                row = {
+                                    "open_time": open_time,
+                                    "open_price": float(line[1]),
+                                    "high_price": float(line[2]),
+                                    "low_price": float(line[3]),
+                                    "close_price": float(line[4]),
+                                    "volume": float(line[5])
+                                }
+                                market_data[open_time] = row
+                            print(time, len(market_data))
+                            time = lines[-1][6] + 1 # last close time + 1s
+                    except Exception as e:
+                        print("Error - ", e)
+                pickle.dump(data, data_file)
+        print("Data:", len(data))
+
         with open('samples.dat', 'wb') as sample_file:
-            for row in data.values():
-                try:
-                    change_rate = (row["high_price"] - row["open_price"]) / row["open_price"]
-                    samples.append({
-                        "state": get_state(row, data),
-                        "result": 1 if change_rate >= 0.01 else 0
-                    })
-                except Exception as e:
-                    # print(str(e))
-                    pass
+            for token1, token1_market_data in data.items():
+                for token2, market_data in token1_market_data.items():
+                    for row in market_data.values():
+                        try:
+                            change_rate = (row["high_price"] - row["open_price"]) / row["open_price"]
+                            samples.append({
+                                "state": get_state(token1, token2, row, market_data),
+                                "result": 1 if change_rate >= 0.01 else 0
+                            })
+                        except Exception as e:
+                            # print(str(e))
+                            pass
             pickle.dump(samples, sample_file)
     print("Samples:", len(samples))
 
+    # samples = samples[:100000]
     split_index = math.floor(len(samples) * 0.8)
     training_samples = samples[:split_index]
     eval_samples = samples[split_index:]
     train_dataset = CryptoDataset(training_samples, device)
-    train_dataloader = CryptoDataLoader(train_dataset, batch_size=1000, pin_memory=True)
+    train_dataloader = CryptoDataLoader(train_dataset, batch_size=1000, pin_memory=True, shuffle=True, num_workers=0)
     test_dataset = CryptoDataset(eval_samples, device)
-    eval_dataloader = CryptoDataLoader(test_dataset, batch_size=1000, pin_memory=True)
+    eval_dataloader = CryptoDataLoader(test_dataset, batch_size=1000, pin_memory=True, num_workers=0)
 
     print("Training samples:", len(training_samples))
     print("Eval samples:", len(eval_samples))
@@ -251,10 +300,15 @@ async def main():
         writer.add_scalar("Eval loss/epoch", eval_loss, epoch)
         print("[Epoch " + str(epoch) + "] - Train Loss: " + str(train_loss) +
               ", Eval Loss: " + str(eval_loss) +
-              ", Elapsed: " + epoch_perf)
+              ", Elapsed: " + str(epoch_perf))
 
 
 def run(mode, network, dataloader, device, weights):
+
+    result = [{
+        "total": 0,
+        "correct": 0
+    } for i in range(0, 2)]
     if mode == "train":
         network.train()
     else:
@@ -273,34 +327,12 @@ def run(mode, network, dataloader, device, weights):
 
         if mode == "train":
             loss.backward()
+            network.optimizer.step()
 
-        current_loss += loss.item() * len(features)
-        total_data += len(features)
-
-    if mode == "train":
-        network.optimizer.step()
-        # network.schedular.step()
-
-    return current_loss / total_data
-
-
-def eval_network(network, test_dataloader, device):
-    # evaluate
-    # print("[Evaluating]")
-    perf_start = perf_counter()
-    result = [{
-        "total": 0,
-        "correct": 0
-    } for i in range(0, 2)]
-    network.eval()
-    for test_features, test_labels in test_dataloader:
-        test_features = test_features.to(device)
-        test_labels = test_labels.to(device)
-        predicts = F.softmax(network(test_features), dim=1).argmax(dim=1).detach()
+        predicts = F.softmax(probs, dim=1).argmax(dim=1).detach()
         # check equal between targets and predicts, then zip, then count unique
         # we would like to do it in tensor to speed up
-        rows, counts = torch.stack((test_labels, torch.eq(test_labels, predicts)), dim=1).unique(dim=0,
-                                                                                                 return_counts=True)
+        rows, counts = torch.stack((labels, torch.eq(labels, predicts)), dim=1).unique(dim=0, return_counts=True)
         for (label, matched), count in zip(rows, counts):
             stats = result[label]
             stats["total"] += count.item()
@@ -308,13 +340,21 @@ def eval_network(network, test_dataloader, device):
                 stats["correct"] += count.item()
             stats["correct_rate"] = stats["correct"] / stats["total"] * 100 if stats["total"] > 0 else float("nan")
 
-    return np.average([x["correct_rate"] for x in result])
+        current_loss += loss.item() * len(features)
+        total_data += len(features)
+
+    # if mode == "train":
+    #     network.optimizer.step()
+        # network.schedular.step()
+    for i, row in enumerate(result):
+        print(mode, i, row["correct"], row["total"], row["correct_rate"])
+    return current_loss / total_data
 
 
-def get_state(row, data):
+def get_state(token1, token2, row, data):
     price_multiplier = 10000
     # state_parts = [binary(math.floor(row["open_price"] * price_multiplier), 64)]
-    state = []
+    state = [token1, token2]
     for i in range(25):
         open_time = datetime.fromtimestamp(row["open_time"]) - timedelta(minutes=(1 + i) * 5)
         open_time_timestamp = open_time.timestamp()

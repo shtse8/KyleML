@@ -114,7 +114,7 @@ class CryptoDataLoaderIterator:
         self.index = min(self.index + self.batch_size, self.len)
         data = self.loader.dataset[self.indices[start_index: self.index]]
         if self.loader.pin_memory:
-            data = [sample.pin_memory(self.loader.pin_memory_device) for sample in data]
+            data = tuple([sample.pin_memory(self.loader.pin_memory_device) for sample in data])
         return data
 
 
@@ -156,7 +156,7 @@ class Network(nn.Module):
 
     def __init__(self, in_nodes: int, out_nodes: int):
         super(Network, self).__init__()
-        hidden_notes = 1024
+        hidden_notes = 128
         self.layers = nn.Sequential(
             nn.Linear(in_nodes, hidden_notes),
             nn.ReLU(),
@@ -164,7 +164,8 @@ class Network(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_notes, out_nodes)
         )
-        self.optimizer = optim.Adam(self.parameters(), lr=3e-8)
+        self.optimizer = optim.Adam(self.parameters(), lr=3e-7)
+        # self.optimizer = optim.SGD(self.parameters(), lr=1e-4, momentum=0.9)
         # self.schedular = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.9)
 
     def forward(self, x):
@@ -264,9 +265,9 @@ async def main():
     training_samples = samples[:split_index]
     eval_samples = samples[split_index:]
     train_dataset = CryptoDataset(training_samples, device)
-    train_dataloader = CryptoDataLoader(train_dataset, batch_size=1000, pin_memory=True, shuffle=True, num_workers=0)
+    train_dataloader = CryptoDataLoader(train_dataset, batch_size=256, pin_memory=True, shuffle=True, num_workers=0)
     test_dataset = CryptoDataset(eval_samples, device)
-    eval_dataloader = CryptoDataLoader(test_dataset, batch_size=1000, pin_memory=True, num_workers=0)
+    eval_dataloader = CryptoDataLoader(test_dataset, batch_size=256, pin_memory=True, num_workers=0)
 
     print("Training samples:", len(training_samples))
     print("Eval samples:", len(eval_samples))
@@ -290,9 +291,9 @@ async def main():
     # # push samples to tensors
     print("[Calculating Weights]")
     # occurrences = np.bincount([x["result"] for x in training_samples])
-    occurrences = train_dataset.targets.unique(dim=0, return_counts=True)
+    occurrences = train_dataset.targets.bincount()
     # occurrences.resize(5)
-    weights = train_dataset.targets.size(dim=0) / (occurrences[1].size(dim=0) * occurrences[1]).to(device)
+    weights = train_dataset.targets.size(dim=0) / (occurrences.size(dim=0) * occurrences).to(device)
     print(weights)
 
     best = float('inf')
@@ -352,34 +353,38 @@ def run(mode, network, dataloader, device, weights):
         if mode == "eval":
             probs = probs.detach()
 
-        loss = nn.CrossEntropyLoss(weight=weights)(probs, labels)
+        loss = nn.CrossEntropyLoss(weight=weights, reduction="sum")(probs, labels)
 
         if mode == "train":
             loss.backward()
+            nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
             network.optimizer.step()
 
-        predicts = F.softmax(probs, dim=1).argmax(dim=1).detach()
-        # check equal between targets and predicts, then zip, then count unique
-        # we would like to do it in tensor to speed up
-        # rows, counts = torch.stack((labels, torch.eq(labels, predicts)), dim=1).unique(dim=0, return_counts=True)
-        # for (label, matched), count in zip(rows, counts):
-        #     stats = result[label]
-        #     stats["total"] += count.item()
-        #     if matched == 1:
-        #         stats["correct"] += count.item()
-        #     stats["correct_rate"] = stats["correct"] / stats["total"] * 100 if stats["total"] > 0 else float("nan")
+        with torch.no_grad():
+            predicts = F.softmax(probs, dim=1).argmax(dim=1)
+            # check equal between targets and predicts, then zip, then count unique
+            # we would like to do it in tensor to speed up
+            # rows, counts = torch.stack((labels, torch.eq(labels, predicts)), dim=1).unique(dim=0, return_counts=True)
+            # for (label, matched), count in zip(rows, counts):
+            #     stats = result[label]
+            #     stats["total"] += count.item()
+            #     if matched == 1:
+            #         stats["correct"] += count.item()
+            #     stats["correct_rate"] = stats["correct"] / stats["total"] * 100 if stats["total"] > 0 else float("nan")
 
-        correct_count += torch.eq(labels, predicts).count_nonzero()
+            correct_count += torch.eq(labels, predicts).count_nonzero()
 
-        current_loss += loss.item() * len(features)
-        total_data += len(features)
+            current_loss += loss
+            total_data += len(features)
 
     # if mode == "train":
     #     network.optimizer.step()
         # network.schedular.step()
     # for i, row in enumerate(result):
     #     print(mode, i, row["correct"], row["total"], row["correct_rate"])
-    return current_loss / total_data, correct_count / total_data
+    average_loss = current_loss / total_data
+    accuracy = correct_count / total_data
+    return average_loss, accuracy
 
 
 def get_feature(token1, token2, row, data):

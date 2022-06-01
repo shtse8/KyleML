@@ -193,7 +193,7 @@ class Network(nn.Module):
         hidden_nodes = 128
         self.layers = nn.Sequential(
             nn.Linear(in_nodes, hidden_nodes),
-            nn.BatchNorm1d(hidden_nodes),
+            # nn.BatchNorm1d(hidden_nodes),
             nn.ELU(),
             nn.Linear(hidden_nodes, out_nodes)
         )
@@ -249,12 +249,15 @@ def process_sample(data):
 def get_data():
     data = collections.defaultdict(dict)
     start_time_datetime = datetime.strptime("01/01/2010", '%d/%m/%Y')
-    try:
-        with open('data/data.dat', 'rb') as data_file:
+
+    with open('data/data.dat', 'a+b') as data_file:
+        try:
+            data_file.seek(0)
             data = pickle.load(data_file)
+            if data is None:
+                raise Exception("No samples fetched.")
             print("data file load successfully.")
-    except Exception as e:
-        with open('data/data.dat', 'wb') as data_file:
+        except Exception as e:
             client = Spot()
             for token1, token2 in markets:
                 try:
@@ -265,7 +268,6 @@ def get_data():
                     market_data = data[token_dict[token1]][token_dict[token2]] = {}
                     while datetime.now().timestamp() > time / 1000:
                         lines = client.klines(market_id, "5m", startTime=time, limit=1000)
-                        print(lines)
                         for line in lines:
                             open_time = math.floor(line[0] / 1000)
                             row = {
@@ -284,10 +286,11 @@ def get_data():
                 except Exception as e:
                     print("Error - ", str(e))
                     # logging.exception("An exception was thrown!")
+            data_file.seek(0)
             pickle.dump(data, data_file)
+            data_file.truncate()
 
     return data
-
 
 
 def get_samples():
@@ -298,7 +301,7 @@ def get_samples():
         try:
             sample_file.seek(0)
             samples = pickle.load(sample_file)
-            if len(samples) <= 0:
+            if samples is None:
                 raise Exception("No samples fetched.")
             print("data file load successfully.")
         except Exception as e:

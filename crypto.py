@@ -192,7 +192,7 @@ class Network(nn.Module):
         super(Network, self).__init__()
         hidden_nodes = 128
         self.layers = nn.Sequential(
-            nn.BatchNorm1d(in_nodes),
+            # nn.BatchNorm1d(in_nodes),
             nn.Linear(in_nodes, hidden_nodes),
             nn.ELU(),
             nn.BatchNorm1d(hidden_nodes),
@@ -352,7 +352,7 @@ async def main():
     network = Network(in_features, 2).to(device)
     epoch = 0
 
-    optimizer = optim.AdamW(network.parameters(), lr=1e-4)
+    optimizer = optim.AdamW(network.parameters(), lr=1e-5)
     # optimizer = optim.SGD(network.parameters(), lr=1e-4, momentum=0.9)
     # schedular = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
     schedular = optim.lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True)

@@ -192,9 +192,10 @@ class Network(nn.Module):
         super(Network, self).__init__()
         hidden_nodes = 128
         self.layers = nn.Sequential(
+            nn.BatchNorm1d(in_nodes),
             nn.Linear(in_nodes, hidden_nodes),
-            # nn.BatchNorm1d(hidden_nodes),
             nn.ELU(),
+            nn.BatchNorm1d(hidden_nodes),
             nn.Linear(hidden_nodes, out_nodes)
         )
 
@@ -219,14 +220,14 @@ def get_data_loaders(samples, device, threshold=0.8, batch_size=64, num_workers=
     labels_weights = train_dataset.targets.size(dim=0) / (occurrences.size(dim=0) * occurrences)
     weights = labels_weights[train_dataset.targets]
     sampler = WeightedRandomSampler(weights, len(weights))
-    train_dataloader = DataLoader(train_dataset,
+    train_dataloader = CryptoDataLoader(train_dataset,
                                   batch_size=batch_size,
                                   pin_memory=pin_memory,
                                   shuffle=False,
                                   sampler=sampler,
                                   num_workers=num_workers)
     test_dataset = CryptoDataset(eval_samples, device)
-    eval_dataloader = DataLoader(test_dataset,
+    eval_dataloader = CryptoDataLoader(test_dataset,
                                  batch_size=batch_size,
                                  pin_memory=pin_memory,
                                  num_workers=num_workers)
@@ -475,8 +476,8 @@ def run(mode, network, dataloader, optimizer, schedular, device, weights=None):
     average_loss = current_loss / total_data
     accuracy = correct_count / total_data
 
-    if mode == "train":
-        schedular.step(average_loss)
+    # if mode == "train":
+    #     schedular.step(average_loss)
 
     return average_loss, accuracy
 

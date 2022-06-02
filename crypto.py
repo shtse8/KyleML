@@ -79,7 +79,7 @@ class DataFrame:
             data_close_time.minute,
             self.quote_asset_volume,
             self.number_of_trades
-        ])
+        ], dtype=np.float)
 
     def to_feature_tensor(self, dtype: torch.dtype = None, device: torch.device = None):
         return torch.as_tensor(self.to_feature(), dtype=dtype, device=device)
@@ -99,8 +99,13 @@ class DataFrames:
         self.end_time: int = 0
 
     def add(self, frame: DataFrame):
-        if self.start_time is not None and (frame.open_time - self.start_time) % self.interval != 0:
-            raise ValueError("the open time is not fit for this frame set.")
+        if self.start_time != 0 and (frame.open_time - self.start_time) % self.interval != 0:
+            warnings.warn(f"the open time is not fit for this frame set. "
+                          f"{frame.open_time} - {self.start_time} = "
+                          f"{frame.open_time - self.start_time}", UserWarning)
+        #     raise ValueError(f"the open time is not fit for this frame set. "
+        #                      f"{frame.open_time} - {self.start_time} = "
+        #                      f"{frame.open_time - self.start_time}")
 
         self.frame_dict[frame.open_time] = frame
 
@@ -226,7 +231,6 @@ class BinanceMarketAgent(MarketAgent):
                                   number_of_trades)
                 data_frames.add(frame)
             print(time, len(data_frames))
-            break
 
             # last close time + 1s
             time = lines[-1][6] + 1
@@ -249,7 +253,7 @@ class Market:
             raise FileNotFoundError
 
         with open(self.cache_path, 'rb') as file:
-            data = dill.load(file)
+            data = pickle.load(file)
             if data is None:
                 raise ValueError
             return data
@@ -265,7 +269,7 @@ class Market:
         if update:
             with open(self.cache_path, 'wb') as file:
                 data = self.agent.get_frames(self.token1, self.token2)
-                dill.dump(data, file)
+                pickle.dump(data, file)
 
         return data
 
@@ -350,10 +354,12 @@ class CryptoDataset(Dataset):
         for i in range(25):
             running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
             # running_frame_open_time = running_frame_open_datetime.timestamp()
-            feature += self.data_frames[running_frame_open_datetime].to_feature()
+            feature = np.concatenate([feature, self.data_frames[running_frame_open_datetime].to_feature()])
         return feature
 
     def get_label(self, frame: DataFrame):
+        if frame.open_price == 0:
+            return 0
         change_rate = (frame.high_price - frame.open_price) / frame.open_price
         return 1 if change_rate >= 0.01 else 0
 

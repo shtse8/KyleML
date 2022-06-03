@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod, ABC
+from collections.abc import Iterable
 from enum import Enum, auto
 
 # from typing import Self
@@ -58,32 +59,6 @@ class DataFrame:
         self.quote_asset_volume = quote_asset_volume
         self.number_of_trades = number_of_trades
 
-    def to_feature(self):
-        data_open_time = datetime.fromtimestamp(self.open_time)
-        data_close_time = datetime.fromtimestamp(self.close_time)
-        return np.array([
-            data_open_time.year,
-            data_open_time.month,
-            data_open_time.day,
-            data_open_time.hour,
-            data_open_time.minute,
-            self.open_price,
-            self.high_price,
-            self.low_price,
-            self.close_price,
-            self.volume,
-            data_close_time.year,
-            data_close_time.month,
-            data_close_time.day,
-            data_close_time.hour,
-            data_close_time.minute,
-            self.quote_asset_volume,
-            self.number_of_trades
-        ], dtype=np.float)
-
-    def to_feature_tensor(self, dtype: torch.dtype = None, device: torch.device = None):
-        return torch.as_tensor(self.to_feature(), dtype=dtype, device=device)
-
     # def __repr__(self):
     #     return f"{type(self).__name__}({str(self)})"
 
@@ -123,30 +98,43 @@ class DataFrames:
         if (timestamp - self.start_time) % self.interval != 0:
             raise Exception("Timestamp is not match for this data frames.")
 
-    def get_frame(self, index: int) -> DataFrame:
-        if index < 0 or index >= len(self):
-            raise IndexError("The index (%d) is out of range." % index)
-
-        open_time = self.start_time + index * self.interval
-        return self.from_timestamp(open_time)
-
     def __len__(self) -> int:
         if self.end_time < self.start_time:
             return 0
         return (self.end_time - self.start_time) // self.interval + 1
 
+    def splice(self, start_index: int, end_index: int = 0) -> DataFrames:
+        new_data_frames = DataFrames()
+        end_index = max(len(self), end_index)
+        for i in range(start_index, end_index):
+            new_data_frames.add(self[i])
+        return new_data_frames
+
     def __getitem__(self, key) -> DataFrame | DataFrames:
+        # return multiple frames
         if isinstance(key, slice):
             # Get the start, stop, and step from the slice
             new_data_frames = DataFrames()
             for i in range(*key.indices(len(self))):
                 new_data_frames.add(self[i])
             return new_data_frames
+        # return multiple frames
+        elif isinstance(key, list):
+            new_data_frames = DataFrames()
+            for i in key:
+                new_data_frames.add(self[i])
+            return new_data_frames
+        # return single frame
         elif isinstance(key, int):
             # elif isinstance(key, int | float):
             if key < 0:  # Handle negative indices
                 key += len(self)
-            return self.get_frame(key)  # Get the data from elsewhere
+            if key < 0 or key >= len(self):
+                raise IndexError("The index (%d) is out of range." % key)
+
+            open_time = self.start_time + key * self.interval
+            return self.from_timestamp(open_time)
+        # return single frame
         elif isinstance(key, datetime):
             return self.from_timestamp(int(key.timestamp()))  # Get the data from elsewhere
         else:
@@ -340,47 +328,98 @@ class PerformanceTimer:
     def __str__(self):
         return f"{self.elapsed():.4}s"
 
+    def __format__(self, format_spec):
+        return format(self.elapsed(), format_spec)
 
-class CryptoDataset(Dataset):
+
+class MarketDataset(Dataset):
     def __init__(self, data_frames: DataFrames, device: torch.device = None):
         self.data_frames = data_frames
         self.device = device
+        # print("creating frame features")
+        # self.frame_features = np.array([self.get_frame_feature(x) for x in self.data_frames], dtype=np.float32)
+        print("creating features")
+        self.features = np.array([self.get_feature(x) for x in self.data_frames], dtype=np.float32)
+        print("creating targets")
+        self.targets = np.array([self.get_label(x) for x in self.data_frames], dtype=np.int64)
+
+    def get_frame_feature(self, frame: DataFrame):
+        data_open_time = datetime.fromtimestamp(frame.open_time)
+        data_close_time = datetime.fromtimestamp(frame.close_time)
+        return np.array([
+            data_open_time.year,
+            data_open_time.month,
+            data_open_time.day,
+            data_open_time.hour,
+            data_open_time.minute,
+            frame.open_price,
+            frame.high_price,
+            frame.low_price,
+            frame.close_price,
+            frame.volume,
+            data_close_time.year,
+            data_close_time.month,
+            data_close_time.day,
+            data_close_time.hour,
+            data_close_time.minute,
+            frame.quote_asset_volume,
+            frame.number_of_trades
+        ])
 
     def get_feature(self, frame: DataFrame):
         # Converts the current data frame to a running frame at start
         running_frame_at_start = DataFrame(frame.open_time, frame.open_price)
-        feature = running_frame_at_start.to_feature()
+        features = [self.get_frame_feature(running_frame_at_start)]
         frame_open_datetime = datetime.fromtimestamp(frame.open_time)
         for i in range(25):
             running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
             # running_frame_open_time = running_frame_open_datetime.timestamp()
-            feature = np.concatenate([feature, self.data_frames[running_frame_open_datetime].to_feature()])
-        return feature
+            features.append(self.get_frame_feature(self.data_frames[running_frame_open_datetime]))
+        return np.asarray(features, dtype=np.single).flatten()
 
     def get_label(self, frame: DataFrame):
         if frame.open_price == 0:
             return 0
         change_rate = (frame.high_price - frame.open_price) / frame.open_price
-        return 1 if change_rate >= 0.01 else 0
+        return np.array(1 if change_rate >= 0.01 else 0, dtype=np.int64)
 
     def get_weights(self):
-        targets = torch.as_tensor(np.array([self.get_label(x) for x in self.data_frames]),
-                                  dtype=torch.long,
-                                  device=self.device)
-        occurrences = targets.bincount()
+        targets = np.array([self.get_label(x) for x in self.data_frames])
+        occurrences = np.bincount(self.targets)
         # occurrences.resize(5)
-        weights = targets.size(dim=0) / (occurrences.size(dim=0) * occurrences)
-        return weights
+        weights = len(self.targets) / (len(occurrences) * occurrences)
+        return np.asarray(weights, dtype=np.single)
+
+    def get_in_nodes(self):
+        train_feature = self.get_feature(self.data_frames[0])
+        in_nodes = len(train_feature)
+        print("estimated in nodes: ", in_nodes)
+        return in_nodes
+
+    def get_out_nodes(self):
+        out_nodes = max([self.get_label(x) for x in self.data_frames]) + 1
+        print("estimated out nodes: ", out_nodes)
+        return out_nodes
 
     def __len__(self):
         return len(self.data_frames)
 
     def __getitem__(self, index):
-        frame = self.data_frames[index]
-        return self.get_feature(frame), self.get_label(frame)
+        return self.features[index], self.targets[index]
+        # if isinstance(index, slice):
+        #     return np.array([self[x] for x in range(*index.indices(len(self)))])
+        # # return multiple frames
+        # elif isinstance(index, list):
+        #     return np.array([self[x] for x in index])
+        # # return single frame
+        # elif isinstance(index, int):
+        #     frame = self.data_frames[index]
+        #     return self.get_feature(frame), self.get_label(frame)
+        # else:
+        #     raise TypeError("Invalid argument type.")
 
 
-class CryptoDataLoader:
+class KyleDataLoader:
     def __init__(self,
                  dataset,
                  batch_size,
@@ -405,10 +444,10 @@ class CryptoDataLoader:
                 raise RuntimeError
 
     def __iter__(self):
-        return CryptoDataLoaderIterator(self)
+        return KyleDataLoaderIterator(self)
 
 
-class CryptoDataLoaderIterator:
+class KyleDataLoaderIterator:
     def __init__(self, loader):
         # self.index = 0
         # self.len = len(loader.dataset)
@@ -437,10 +476,13 @@ class CryptoDataLoaderIterator:
         # indices = self.indices[start_index: self.index]
         indices = [next(self.index_iter) for _ in range(0, self.batch_size)]
         data = self.loader.dataset[indices]
+        # zip(*data) is to turn list of tuple to multiple list
+        # to tensor if data is not tensor
+        data = type(data)([torch.as_tensor(np.asarray(x)) for x in zip(*data)])
         if self.loader.drop_last and len(data) < self.loader.batch_size:
             raise StopIteration
         if self.loader.pin_memory:
-            data = tuple([sample.pin_memory(self.loader.pin_memory_device) for sample in data])
+            data = type(data)([x.pin_memory(self.loader.pin_memory_device) for x in data])
         return data
 
 
@@ -626,15 +668,7 @@ class Trainer:
             self.load_network()
         except Exception as e:
             print("Failed to load the network.")
-
-            # take one sample to create the network.
-            train_feature, _ = train_dataset[0]
-            in_nodes = len(train_feature)
-            print("estimated in nodes: ", in_nodes)
-            loader = DataLoader(train_dataset, batch_size=len(train_dataset))
-            out_nodes = max([x[1] for x in next(iter(loader))]) - 1
-            print("estimated out nodes: ", out_nodes)
-            self.create_network(in_nodes, out_nodes)
+            self.create_network(train_dataset.get_in_nodes(), train_dataset.get_out_nodes())
 
     def create_network(self, in_nodes, out_nodes):
         torch.manual_seed(self._config.seed)
@@ -667,10 +701,10 @@ class Trainer:
                       data_frames: DataFrames,
                       threshold: float = 0.8) -> (Dataset, Dataset):
         split_index = math.floor(len(data_frames) * threshold)
-        training_samples = data_frames[:split_index]
-        eval_samples = data_frames[split_index:]
-        train_dataset = CryptoDataset(training_samples)
-        eval_dataset = CryptoDataset(eval_samples)
+        training_samples = data_frames.splice(0, split_index)
+        eval_samples = data_frames.splice(split_index)
+        train_dataset = MarketDataset(training_samples)
+        eval_dataset = MarketDataset(eval_samples)
         return train_dataset, eval_dataset
 
     def _get_data_loaders(self,
@@ -678,20 +712,20 @@ class Trainer:
                           eval_dataset: Dataset,
                           batch_size: int = 64,
                           num_workers: int = 0,
-                          pin_memory: bool = False) -> (CryptoDataLoader, CryptoDataLoader):
+                          pin_memory: bool = False) -> (DataLoader, DataLoader):
         # samples = samples[:100000]
         # random.Random(seed).shuffle(samples)
         if pin_memory:
             device = torch.device("cpu")
-        train_dataloader = CryptoDataLoader(train_dataset,
-                                            batch_size=batch_size,
-                                            pin_memory=pin_memory,
-                                            shuffle=True,
-                                            num_workers=num_workers)
-        eval_dataloader = CryptoDataLoader(eval_dataset,
-                                           batch_size=batch_size,
-                                           pin_memory=pin_memory,
-                                           num_workers=num_workers)
+        train_dataloader = DataLoader(train_dataset,
+                                      batch_size=batch_size,
+                                      pin_memory=pin_memory,
+                                      shuffle=True,
+                                      num_workers=num_workers)
+        eval_dataloader = DataLoader(eval_dataset,
+                                     batch_size=batch_size,
+                                     pin_memory=pin_memory,
+                                     num_workers=num_workers)
 
         return train_dataloader, eval_dataloader
 
@@ -725,7 +759,7 @@ class Trainer:
 
         print("[Calculating Weights]")
         # weights = train_dataloader.dataset.get_weights().to(device)
-        weights = train_dataset.get_weights()
+        weights = torch.as_tensor(train_dataset.get_weights(), device=self._device)
         print(weights)
 
         self._init_network(train_dataset)
@@ -755,7 +789,7 @@ class Trainer:
                   f"Eval Loss: {eval_loss:.4f}, Acc: {eval_accuracy:.2%}, "
                   f"Elapsed: {epoch_perf:.2f}s")
 
-    def run_epoch(self, mode: RunMode, dataloader: CryptoDataLoader, weights=None):
+    def run_epoch(self, mode: RunMode, dataloader: DataLoader, weights=None):
         is_train = mode == RunMode.Train
         # dataloader = self._train_dataloader if is_train else self._eval_dataloader
 

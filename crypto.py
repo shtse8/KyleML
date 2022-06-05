@@ -96,13 +96,13 @@ class DataFrames:
         if self.end_time < self.start_time:
             return 0
         return (self.end_time - self.start_time) // self.interval + 1
-
-    def splice(self, start_index: int, end_index: int = 0) -> DataFrames:
-        new_data_frames = DataFrames()
-        end_index = max(len(self), end_index)
-        for i in range(start_index, end_index):
-            new_data_frames.add(self[i])
-        return new_data_frames
+    #
+    # def splice(self, start_index: int, end_index: int = 0) -> DataFrames:
+    #     new_data_frames = DataFrames()
+    #     end_index = max(len(self), end_index)
+    #     for i in range(start_index, end_index):
+    #         new_data_frames.add(self[i])
+    #     return new_data_frames
 
     def __getitem__(self, key) -> DataFrame | DataFrames:
         # return multiple frames
@@ -134,25 +134,12 @@ class DataFrames:
         else:
             raise TypeError("Invalid argument type.")
 
-    def __iter__(self) -> DataFrameIterator:
-        return DataFrameIterator(self)
+    def __iter__(self) -> Iterator[DataFrame]:
+        yield from iter([self[i] for i in range(len(self))])
 
     def from_timestamp(self, timestamp: int) -> DataFrame:
         self.ensure_valid_timestamp(timestamp)
         return self.frame_dict[timestamp] if timestamp in self.frame_dict else DataFrame(timestamp)
-
-
-class DataFrameIterator(Iterator):
-    def __init__(self, data_frames: DataFrames):
-        self.data_frames = data_frames
-        self.index = 0
-
-    def __next__(self):
-        if self.index >= len(self.data_frames):
-            raise StopIteration
-        frame = self.data_frames[self.index]
-        self.index += 1
-        return frame
 
 
 class Token:
@@ -453,32 +440,6 @@ class MarketDataset(Dataset):
         return self.features[index], self.labels[index]
 
 
-# def binary(num, bits):
-#     return ((num & (1 << np.arange(bits))[::-1]) > 0).astype(int)
-#
-#
-# def batches(input_list, batch_size):
-#     # try:
-#     idx = 0
-#     while idx < len(input_list):
-#         yield input_list[idx: min(idx + batch_size, len(input_list))]
-#         idx += batch_size
-#     # except:
-#     #     result = []
-#     #     iterator = iter(input_list)
-#     #     while (x := next(iterator, None)) is not None:
-#     #         result.append(x)
-#     #         if len(result) >= batch_size:
-#     #             yield result
-#     #             result = []
-#     #     yield result
-
-
-# def binary(x, bits):
-#     mask = 2**torch.arange(bits).to(x.device, x.dtype)
-#     return x.unsqueeze(-1).bitwise_and(mask).ne(0).byte()
-
-
 class SwitchNorm1d(nn.Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.997, using_moving_average=True):
         super(SwitchNorm1d, self).__init__()
@@ -565,45 +526,6 @@ class Network(nn.Module):
         x = self.layers(x)
         # x = F.softmax(x, dim=-1)
         return x
-
-
-# def process_sample(data):
-#     for token1, token1_market_data in data.items():
-#         for token2, market_data in token1_market_data.items():
-#             for row in market_data.values():
-#                 try:
-#                     yield get_sample(token1, token2, row, market_data)
-#                 except Exception as e:
-#                     pass
-
-
-#
-# def get_samples():
-#     # samples
-#     print("[Creating Samples]")
-#     samples = []
-#     with open('data/samples.dat', 'a+b') as sample_file:
-#         try:
-#             sample_file.seek(0)
-#             samples = pickle.load(sample_file)
-#             if samples is None:
-#                 raise Exception("No samples fetched.")
-#             print("data file load successfully.")
-#         except Exception as e:
-#             print("Failed to load samples: " + str(e))
-#             # loading data
-#             data = get_data()
-#             data_len = sum([sum([len(market_data) for market_data in x.values()]) for x in data.values()])
-#             print("Data:", data_len)
-#             samples = list(process_sample(data))
-#             sample_file.seek(0)
-#             pickle.dump(samples, sample_file)
-#             sample_file.truncate()
-#
-#     print("Samples:", len(samples))
-#     if len(samples) <= 0:
-#         raise Exception("No samples loaded.")
-#     return samples
 
 class RunMode(Enum):
     Train = auto()
@@ -842,49 +764,6 @@ def main():
     # Get server timestamp
     # print(client.time())
 
-
-#
-# def get_one_feature(data):
-#     data_open_time = datetime.fromtimestamp(data["open_time"])
-#     return [
-#         data_open_time.year,
-#         data_open_time.month,
-#         data_open_time.day,
-#         data_open_time.hour,
-#         data_open_time.minute,
-#         data["open_price"],
-#         data["high_price"],
-#         data["low_price"],
-#         data["volume"]
-#     ]
-#
-#
-# def get_sample(token1, token2, data, market_data):
-#     feature = [
-#         token1,
-#         token2
-#     ]
-#     feature += get_one_feature(data)
-#     for i in range(25):
-#         target_open_time = datetime.fromtimestamp(data["open_time"]) - timedelta(minutes=(1 + i) * 5)
-#         target_open_time_timestamp = target_open_time.timestamp()
-#         if target_open_time_timestamp not in market_data:
-#             raise LookupError(target_open_time)
-#         target_data = market_data[target_open_time_timestamp]
-#         feature += get_one_feature(target_data)
-#
-#     change_rate = (data["high_price"] - data["open_price"]) / data["open_price"]
-#     target = 1 if change_rate >= 0.01 else 0
-#
-#     return feature, target
-
-# def get_data(date):
-
-# class DataManager:
-#     def __init__(self):
-#         data = {}
-#
-#     def _
 
 # api key/secret are required for user data endpoints
 # client = Spot(key=binance_key, secret=binance_secret)

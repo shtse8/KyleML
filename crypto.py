@@ -337,16 +337,18 @@ class MarketDataset(Dataset):
         self.data_frames = data_frames
         self.device = device
         # print("creating frame features")
-        # self.frame_features = np.array([self.get_frame_feature(x) for x in self.data_frames], dtype=np.float32)
-        print("creating features")
+        # caching frames
+        self.frame_features = {}
         self.features = np.array([self.get_feature(x) for x in self.data_frames], dtype=np.float32)
-        print("creating targets")
         self.targets = np.array([self.get_label(x) for x in self.data_frames], dtype=np.int64)
 
     def get_frame_feature(self, frame: DataFrame):
+        if frame.open_time in self.frame_features:
+            return self.frame_features[frame.open_time]
+
         data_open_time = datetime.fromtimestamp(frame.open_time)
         data_close_time = datetime.fromtimestamp(frame.close_time)
-        return np.array([
+        self.frame_features[frame.open_time] = np.array([
             data_open_time.year,
             data_open_time.month,
             data_open_time.day,
@@ -365,6 +367,7 @@ class MarketDataset(Dataset):
             frame.quote_asset_volume,
             frame.number_of_trades
         ])
+        return self.frame_features[frame.open_time]
 
     def get_feature(self, frame: DataFrame):
         # Converts the current data frame to a running frame at start
@@ -384,15 +387,15 @@ class MarketDataset(Dataset):
         return np.array(1 if change_rate >= 0.01 else 0, dtype=np.int64)
 
     def get_weights(self):
-        targets = np.array([self.get_label(x) for x in self.data_frames])
+        # targets = np.array([self.get_label(x) for x in self.data_frames])
         occurrences = np.bincount(self.targets)
         # occurrences.resize(5)
         weights = len(self.targets) / (len(occurrences) * occurrences)
         return np.asarray(weights, dtype=np.single)
 
     def get_in_nodes(self):
-        train_feature = self.get_feature(self.data_frames[0])
-        in_nodes = len(train_feature)
+        # train_feature = self.get_feature(self.data_frames[0])
+        in_nodes = len(self.features[0])
         print("estimated in nodes: ", in_nodes)
         return in_nodes
 
@@ -478,7 +481,8 @@ class KyleDataLoaderIterator:
         data = self.loader.dataset[indices]
         # zip(*data) is to turn list of tuple to multiple list
         # to tensor if data is not tensor
-        data = type(data)([torch.as_tensor(np.asarray(x)) for x in zip(*data)])
+        # data = type(data)([torch.as_tensor(np.asarray(x)) for x in zip(*data)])
+        data = type(data)([torch.as_tensor(x) for x in data])
         if self.loader.drop_last and len(data) < self.loader.batch_size:
             raise StopIteration
         if self.loader.pin_memory:
@@ -717,12 +721,12 @@ class Trainer:
         # random.Random(seed).shuffle(samples)
         if pin_memory:
             device = torch.device("cpu")
-        train_dataloader = DataLoader(train_dataset,
+        train_dataloader = KyleDataLoader(train_dataset,
                                       batch_size=batch_size,
                                       pin_memory=pin_memory,
                                       shuffle=True,
                                       num_workers=num_workers)
-        eval_dataloader = DataLoader(eval_dataset,
+        eval_dataloader = KyleDataLoader(eval_dataset,
                                      batch_size=batch_size,
                                      pin_memory=pin_memory,
                                      num_workers=num_workers)

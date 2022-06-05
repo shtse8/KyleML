@@ -1,40 +1,33 @@
 from __future__ import annotations
 
+import asyncio
+import math
+import pickle
+import signal
+import sys
+import warnings
 from abc import abstractmethod, ABC
-from collections.abc import Iterable
+from datetime import datetime, timedelta
 from enum import Enum, auto
-
-# from typing import Self
-
 # from binance import AsyncClient
 from os.path import exists
+from time import perf_counter
 from typing import Iterator, Sequence
 
-from binance.spot import Spot
-from datetime import datetime, timedelta
-import dill
-import random
-import logging
-import math
-import warnings
-import collections
-import sys
-import signal
-import asyncio
 import numpy as np
 import torch
-import pickle
-from torch import nn
 import torch.nn.functional as F
 import torch.optim as optim
-from time import perf_counter
-
-from torch.optim import Optimizer
-# from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data.sampler import WeightedRandomSampler, RandomSampler, SequentialSampler
-from torch.utils.data import Dataset, DataLoader
+from binance.spot import Spot
 from tensorboard import program
 from tensorboardX import SummaryWriter
+from torch import nn
+from torch.optim import Optimizer
+from torch.utils.data import Dataset, DataLoader
+# from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data.sampler import WeightedRandomSampler, SequentialSampler
+
+# from typing import Self
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -248,7 +241,7 @@ class Market:
             return data
 
     def get_data(self, update: bool = False) -> DataFrames:
-        data: DataFrames = None
+        data = None
         try:
             if not update:
                 data = self._load_data()
@@ -406,7 +399,7 @@ class DataFramesSamples(Samples):
         running_frame_at_start = DataFrame(frame.open_time, frame.open_price)
         features = [self.get_cached_frame_feature(running_frame_at_start)]
         frame_open_datetime = datetime.fromtimestamp(frame.open_time)
-        for i in range(25):
+        for i in range(100):
             running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
             # running_frame_open_time = running_frame_open_datetime.timestamp()
             features.append(self.get_cached_frame_feature(self._data_frames[running_frame_open_datetime]))
@@ -446,8 +439,6 @@ class MarketDataset(Dataset):
     def __init__(self, samples: Samples, device: torch.device = None):
         self.samples = samples
         self.device = device
-        # print("creating frame features")
-        # caching frames
         self.features = torch.as_tensor(np.asarray(samples.features),
                                         device=device,
                                         dtype=torch.float)
@@ -460,75 +451,6 @@ class MarketDataset(Dataset):
 
     def __getitem__(self, index):
         return self.features[index], self.labels[index]
-
-
-class KyleDataLoader:
-    def __init__(self,
-                 dataset,
-                 batch_size,
-                 pin_memory=False,
-                 shuffle=False,
-                 num_workers=0,
-                 sampler=None,
-                 generator=None,
-                 drop_last=False):
-        self.dataset = dataset
-        self.drop_last = drop_last
-        self.batch_size = batch_size
-        self.sampler = sampler
-        self.generator = generator
-        self.shuffle = shuffle
-        self.pin_memory = pin_memory
-        self.num_workers = num_workers
-        if pin_memory:
-            if torch.cuda.is_available():
-                self.pin_memory_device = torch.device("cuda")
-            else:
-                raise RuntimeError
-
-    def __iter__(self):
-        return KyleDataLoaderIterator(self)
-
-
-class KyleDataLoaderIterator:
-    def __init__(self, loader):
-        # self.index = 0
-        # self.len = len(loader.dataset)
-        self.loader = loader
-        self.batch_size = self.loader.batch_size
-        if self.loader.sampler is not None:
-            self.indices = self.loader.sampler
-        elif self.loader.shuffle:
-            self.indices = RandomSampler(self.loader.dataset, generator=self.loader.generator)
-        else:
-            self.indices = SequentialSampler(self.loader.dataset)
-        # elif self.loader.shuffle:
-        #     self.indices = torch.randperm(self.len)
-        # else:
-        #     self.indices = torch.arange(self.len)
-        self.index_iter = iter(self.indices)
-        self.drop_last = self.loader.drop_last
-
-    def __next__(self):
-        # if self.index >= self.len:
-        #     raise StopIteration
-        # if self.loader.drop_last and self.len - self.index < self.loader.batch_size:
-        #     raise StopIteration
-        # start_index = self.index
-        # self.index = min(self.index + self.batch_size, self.len)
-        # indices = self.indices[start_index: self.index]
-        indices = [next(self.index_iter) for _ in range(0, self.batch_size)]
-        if self.loader.drop_last and len(indices) < self.loader.batch_size:
-            raise StopIteration
-
-        data = self.loader.dataset[indices]
-        # zip(*data) is to turn list of tuple to multiple list
-        # to tensor if data is not tensor
-        # data = type(data)([torch.as_tensor(np.asarray(x)) for x in zip(*data)])
-        data = type(data)([torch.as_tensor(x) for x in data])
-        if self.loader.pin_memory:
-            data = type(data)([x.pin_memory(self.loader.pin_memory_device) for x in data])
-        return data
 
 
 # def binary(num, bits):
@@ -625,18 +547,18 @@ class Network(nn.Module):
 
     def __init__(self, in_nodes: int, out_nodes: int):
         super(Network, self).__init__()
-        hidden_nodes = 256
+        hidden_nodes = 512
         self.layers = nn.Sequential(
-            nn.Linear(in_nodes, 256),
+            nn.Linear(in_nodes, 512),
             nn.ELU(),
-            nn.BatchNorm1d(256),
+            nn.BatchNorm1d(512),
             # nn.Linear(256, 128),
             # nn.ELU(),
             # SwitchNorm1d(128),
             # nn.Linear(128, 64),
             # nn.ELU(),
             # SwitchNorm1d(64),
-            nn.Linear(256, out_nodes)
+            nn.Linear(512, out_nodes)
         )
 
     def forward(self, x):
@@ -711,7 +633,7 @@ class Trainer:
     def create_network(self, in_nodes, out_nodes):
         torch.manual_seed(self._config.seed)
         self._network = Network(in_nodes, out_nodes).to(self._device)
-        self._optimizer = optim.AdamW(self._network.parameters(), lr=1e-6)
+        self._optimizer = optim.AdamW(self._network.parameters(), lr=1e-4)
         # optimizer = optim.SGD(network.parameters(), lr=1e-4, momentum=0.9)
         # schedular = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
         self._schedular = optim.lr_scheduler.ReduceLROnPlateau(self._optimizer, verbose=True)
@@ -735,67 +657,14 @@ class Trainer:
         }
         torch.save(checkpoint, self._config.network_path)
 
-    def get_max_batch_size(self, dataset: Dataset):
-        batch_size = 32
-        while True:
-            try:
-                print(f"Testing batch_size = {batch_size}")
-                dataloader = KyleDataLoader(dataset,
-                                            batch_size=batch_size,
-                                            pin_memory=True,
-                                            shuffle=True,
-                                            drop_last=True,
-                                            num_workers=0)
-                features, _ = next(iter(dataloader))
-                features = features.to(self._device)
-                _ = self._network(features)
-                if batch_size * 2 > len(dataset):
-                    break
-                batch_size = batch_size * 2
-            except Exception as e:
-                print(f"{type(e)} {e}")
-                batch_size = batch_size // 2
-                break
-
-        print(f"the max batch_size = {batch_size}")
-        return batch_size
-
     def split_samples(self,
                       data_frames: DataFrames,
-                      threshold: float = 0.8) -> (Dataset, Dataset):
+                      threshold: float = 0.8) -> (Samples, Samples):
         samples = DataFramesSamples(data_frames)
         split_index = math.floor(len(samples) * threshold)
         training_samples = samples[:split_index]
         eval_samples = samples[split_index:]
         return training_samples, eval_samples
-
-    def _get_data_loaders(self,
-                          train_dataset: Dataset,
-                          eval_dataset: Dataset,
-                          batch_size: int = 32,
-                          num_workers: int = 0,
-                          pin_memory: bool = False) -> (DataLoader, DataLoader):
-        # samples = samples[:100000]
-        # random.Random(seed).shuffle(samples)
-        if pin_memory:
-            device = torch.device("cpu")
-        train_batch_size = eval_batch_size = batch_size
-        if batch_size == 0:
-            train_batch_size = self.get_max_batch_size(train_dataset)
-            eval_batch_size = self.get_max_batch_size(eval_dataset)
-        train_dataloader = KyleDataLoader(train_dataset,
-                                          batch_size=train_batch_size,
-                                          pin_memory=pin_memory,
-                                          shuffle=True,
-                                          drop_last=True,
-                                          num_workers=num_workers)
-        eval_dataloader = KyleDataLoader(eval_dataset,
-                                         batch_size=eval_batch_size,
-                                         pin_memory=pin_memory,
-                                         drop_last=True,
-                                         num_workers=num_workers)
-
-        return train_dataloader, eval_dataloader
 
     @staticmethod
     def check():
@@ -815,6 +684,8 @@ class Trainer:
     def run(self):
 
         market = self._crypto.markets[0]
+
+        # prepare samples
         train_samples, eval_samples = self.split_samples(market.data_frames)
         print("Training samples:", len(train_samples))
         print("Eval samples:", len(eval_samples))
@@ -828,6 +699,7 @@ class Trainer:
             print("Failed to load the network.")
             self.create_network(analyzer.get_in_nodes(), analyzer.get_out_nodes())
 
+        # Create pytorch dataset
         train_dataset = MarketDataset(train_samples)
         eval_dataset = MarketDataset(eval_samples)
 
@@ -839,17 +711,18 @@ class Trainer:
         sampler = WeightedRandomSampler(weights[train_dataset.labels], len(train_dataset.labels))
         # sampler = RandomSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset,
-                                          batch_size=32,
-                                          pin_memory=True,
-                                          sampler=sampler,
-                                          drop_last=True,
-                                          num_workers=0)
+                                      sampler=sampler,
+                                      batch_size=128,
+                                      drop_last=True,
+                                      pin_memory=True,
+                                      num_workers=0)
 
+        sampler = SequentialSampler(eval_dataset)
         eval_dataloader = DataLoader(eval_dataset,
-                                         batch_size=32,
-                                         pin_memory=True,
-                                         drop_last=True,
-                                         num_workers=0)
+                                     sampler=sampler,
+                                     batch_size=128,
+                                     pin_memory=True,
+                                     num_workers=0)
 
         while True:
             # print("lr", optimizer.param_groups[0]['lr'])
@@ -895,6 +768,9 @@ class Trainer:
         self._network.train(is_train)
         with torch.set_grad_enabled(is_train):
             for features, labels in dataloader:
+                if is_train:
+                    self._optimizer.zero_grad(set_to_none=True)
+
                 features = features.to(self._device)
                 labels = labels.to(self._device)
                 with torch.cuda.amp.autocast(enabled=False):

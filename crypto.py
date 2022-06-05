@@ -12,7 +12,7 @@ from enum import Enum, auto
 # from binance import AsyncClient
 from os.path import exists
 from time import perf_counter
-from typing import Iterator, Sequence
+from typing import Iterator, Sequence, IO, Optional, Callable, NoReturn
 
 import numpy as np
 import torch
@@ -96,6 +96,7 @@ class DataFrames:
         if self.end_time < self.start_time:
             return 0
         return (self.end_time - self.start_time) // self.interval + 1
+
     #
     # def splice(self, start_index: int, end_index: int = 0) -> DataFrames:
     #     new_data_frames = DataFrames()
@@ -208,6 +209,46 @@ class BinanceMarketAgent(MarketAgent):
         return data_frames
 
 
+class Cache:
+    def __init__(self,
+                 file_path: str,
+                 load_fn: Callable[[IO], any] = pickle.load,
+                 save_fn: Callable[[any, IO], None] = pickle.dump):
+        self.file_path = file_path
+        self.load_fn = load_fn
+        self.save_fn = save_fn
+
+    def load(self) -> any:
+        if not exists(self.file_path):
+            raise FileNotFoundError
+
+        with open(self.file_path, 'rb') as file:
+            data = self.load_fn(file)
+            if data is None:
+                raise ValueError
+            return data
+
+    def update(self, data: any, save_fn: Callable[[any, IO], None] = pickle.dump) -> None:
+        with open(self.file_path, 'wb') as file:
+            save_fn(data, file)
+
+    def load_or_update(self,
+                       on_failed: Callable[[], any],
+                       force_update: bool = False) -> any:
+        data = None
+        try:
+            if not force_update:
+                data = self.load()
+        except (FileNotFoundError, ValueError, EOFError) as _:
+            force_update = True
+
+        if force_update:
+            data = on_failed()
+            self.update(data)
+
+        return data
+
+
 class Market:
     _data_frames: DataFrames = None
 
@@ -215,37 +256,13 @@ class Market:
         self.token1 = token1
         self.token2 = token2
         self.agent = agent
-        self.cache_path = f'data/market.{self.token1.symbol}{self.token2.symbol}.pickle'
-
-    def _load_data(self):
-        if not exists(self.cache_path):
-            raise FileNotFoundError
-
-        with open(self.cache_path, 'rb') as file:
-            data = pickle.load(file)
-            if data is None:
-                raise ValueError
-            return data
-
-    def get_data(self, update: bool = False) -> DataFrames:
-        data = None
-        try:
-            if not update:
-                data = self._load_data()
-        except (FileNotFoundError, ValueError, EOFError) as _:
-            update = True
-
-        if update:
-            with open(self.cache_path, 'wb') as file:
-                data = self.agent.get_frames(self.token1, self.token2)
-                pickle.dump(data, file)
-
-        return data
+        self.cache = Cache(f'data/market.{self.token1.symbol}{self.token2.symbol}.pickle')
 
     @property
-    def data_frames(self):
+    def data_frames(self, force_update: bool = False) -> DataFrames:
         if self._data_frames is None:
-            self._data_frames = self.get_data()
+            self._data_frames = self.cache.load_or_update(lambda: self.agent.get_frames(self.token1, self.token2),
+                                                          force_update=force_update)
         return self._data_frames
 
 
@@ -496,7 +513,7 @@ class SwitchNorm1d(nn.Module):
         return x * self.weight + self.bias
 
 
-def signal_handler(sig, frame):
+def signal_handler(sig, frame) -> NoReturn:
     print()
     print()
     print()
@@ -527,6 +544,7 @@ class Network(nn.Module):
         # x = F.softmax(x, dim=-1)
         return x
 
+
 class RunMode(Enum):
     Train = auto()
     Eval = auto()
@@ -547,6 +565,9 @@ class Trainer:
         self._crypto = crypto
         self._config = config
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._cache = Cache(self._config.network_path,
+                            load_fn=lambda f: torch.load(f, map_location=self._device),
+                            save_fn=lambda d, f: torch.save(f, d))
 
     def init(self):
         self.check()
@@ -562,7 +583,7 @@ class Trainer:
         self._epoch = 0
 
     def load_network(self):
-        checkpoint = torch.load(self._config.network_path, map_location=self._device)
+        checkpoint = self._cache.load()
         self._network.load_state_dict(checkpoint["model_state_dict"])
         self._optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         epoch = checkpoint["epoch"]
@@ -570,19 +591,18 @@ class Trainer:
         self._best_loss = latest_loss
         print(f"Network loaded with {epoch} trained, latest loss {latest_loss:.4f}")
 
-    def save_network(self, loss):
+    def save_network(self):
         checkpoint = {
             "epoch": self._epoch,
             "loss": self._latest_loss,
             "model_state_dict": self._network.state_dict(),
             "optimizer_state_dict": self._optimizer.state_dict()
         }
-        torch.save(checkpoint, self._config.network_path)
+        self._cache.update(checkpoint)
 
-    def split_samples(self,
-                      data_frames: DataFrames,
-                      threshold: float = 0.8) -> (Samples, Samples):
-        samples = DataFramesSamples(data_frames)
+    def get_samples(self, threshold: float = 0.8) -> (Samples, Samples):
+        market = self._crypto.markets[0]
+        samples = DataFramesSamples(market.data_frames)
         split_index = math.floor(len(samples) * threshold)
         training_samples = samples[:split_index]
         eval_samples = samples[split_index:]
@@ -605,10 +625,9 @@ class Trainer:
 
     def run(self):
 
-        market = self._crypto.markets[0]
-
         # prepare samples
-        train_samples, eval_samples = self.split_samples(market.data_frames)
+        sample_cache = Cache("data/samples.dat")
+        train_samples, eval_samples = sample_cache.load_or_update(self.get_samples)
         print("Training samples:", len(train_samples))
         print("Eval samples:", len(eval_samples))
 
@@ -661,7 +680,7 @@ class Trainer:
 
             if eval_loss < self._best_loss:
                 self._best_loss = eval_loss
-                self.save_network(eval_loss)
+                self.save_network()
 
             self._writer.add_scalar("Loss/train", train_loss, self._epoch)
             self._writer.add_scalar("Accuracy/train", train_accuracy, self._epoch)

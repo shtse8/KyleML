@@ -8,6 +8,7 @@ from enum import Enum, auto
 
 # from binance import AsyncClient
 from os.path import exists
+from typing import Iterator, Sequence
 
 from binance.spot import Spot
 from datetime import datetime, timedelta
@@ -62,7 +63,7 @@ class DataFrame:
     # def __repr__(self):
     #     return f"{type(self).__name__}({str(self)})"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.open_time}, {self.open_price:.4}, {self.high_price:.4}, {self.low_price:.4}, {self.close_price:.4}, {self.volume:.4}, {self.close_time}, {self.quote_asset_volume}, {self.number_of_trades}"
 
 
@@ -140,7 +141,7 @@ class DataFrames:
         else:
             raise TypeError("Invalid argument type.")
 
-    def __iter__(self):
+    def __iter__(self) -> DataFrameIterator:
         return DataFrameIterator(self)
 
     def from_timestamp(self, timestamp: int) -> DataFrame:
@@ -148,7 +149,7 @@ class DataFrames:
         return self.frame_dict[timestamp] if timestamp in self.frame_dict else DataFrame(timestamp)
 
 
-class DataFrameIterator:
+class DataFrameIterator(Iterator):
     def __init__(self, data_frames: DataFrames):
         self.data_frames = data_frames
         self.index = 0
@@ -261,6 +262,7 @@ class Market:
 
         return data
 
+    @property
     def data_frames(self):
         if self._data_frames is None:
             self._data_frames = self.get_data()
@@ -332,23 +334,48 @@ class PerformanceTimer:
         return format(self.elapsed(), format_spec)
 
 
-class MarketDataset(Dataset):
-    def __init__(self, data_frames: DataFrames, device: torch.device = None):
-        self.data_frames = data_frames
-        self.device = device
-        # print("creating frame features")
-        # caching frames
-        self.frame_features = {}
-        self.features = np.array([self.get_feature(x) for x in self.data_frames], dtype=np.float32)
-        self.targets = np.array([self.get_label(x) for x in self.data_frames], dtype=np.int64)
+class Samples:
+    def __init__(self, features: Sequence = None, labels: Sequence = None):
+        self._features = features if features is not None else []
+        self._labels = labels if labels is not None else []
+        if len(self._features) != len(self._labels):
+            raise Exception(f"features and labels must have same number of elements. "
+                            f"num_features={len(self.features)}, "
+                            f"num_labels={len(self._labels)}")
+
+    @property
+    def features(self):
+        return self._features
+
+    @property
+    def labels(self) -> Sequence[int]:
+        return self._labels
+
+    def __len__(self):
+        return len(self._features)
+
+    def __getitem__(self, item) -> (Sequence[float], Sequence[int]) | Samples:
+        if isinstance(item, int):
+            return self._features[item], self._labels[item]
+        else:
+            return Samples(self._features[item], self._labels[item])
+
+    def __iter__(self):
+        yield from iter([self[x] for x in range(len(self))])
+
+
+class DataFramesSamples(Samples):
+    def __init__(self, data_frames: DataFrames):
+        self._data_frames = data_frames
+        self._frame_features = {}
+        super().__init__(
+            features=[self.get_feature(x) for x in data_frames],
+            labels=[self.get_label(x) for x in data_frames])
 
     def get_frame_feature(self, frame: DataFrame):
-        if frame.open_time in self.frame_features:
-            return self.frame_features[frame.open_time]
-
         data_open_time = datetime.fromtimestamp(frame.open_time)
         data_close_time = datetime.fromtimestamp(frame.close_time)
-        self.frame_features[frame.open_time] = np.array([
+        return [
             data_open_time.year,
             data_open_time.month,
             data_open_time.day,
@@ -366,60 +393,73 @@ class MarketDataset(Dataset):
             data_close_time.minute,
             frame.quote_asset_volume,
             frame.number_of_trades
-        ])
-        return self.frame_features[frame.open_time]
+        ]
+
+    def get_cached_frame_feature(self, frame: DataFrame):
+        if frame.open_time in self._frame_features:
+            return self._frame_features[frame.open_time]
+        self._frame_features[frame.open_time] = self.get_frame_feature(frame)
+        return self._frame_features[frame.open_time]
 
     def get_feature(self, frame: DataFrame):
         # Converts the current data frame to a running frame at start
         running_frame_at_start = DataFrame(frame.open_time, frame.open_price)
-        features = [self.get_frame_feature(running_frame_at_start)]
+        features = [self.get_cached_frame_feature(running_frame_at_start)]
         frame_open_datetime = datetime.fromtimestamp(frame.open_time)
         for i in range(25):
             running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
             # running_frame_open_time = running_frame_open_datetime.timestamp()
-            features.append(self.get_frame_feature(self.data_frames[running_frame_open_datetime]))
-        return np.asarray(features, dtype=np.single).flatten()
+            features.append(self.get_cached_frame_feature(self._data_frames[running_frame_open_datetime]))
+        return np.asarray(features).flatten()
 
     def get_label(self, frame: DataFrame):
         if frame.open_price == 0:
             return 0
         change_rate = (frame.high_price - frame.open_price) / frame.open_price
-        return np.array(1 if change_rate >= 0.01 else 0, dtype=np.int64)
+        return 1 if change_rate >= 0.01 else 0
 
-    def get_weights(self):
-        # targets = np.array([self.get_label(x) for x in self.data_frames])
-        occurrences = np.bincount(self.targets)
-        # occurrences.resize(5)
-        weights = len(self.targets) / (len(occurrences) * occurrences)
-        return np.asarray(weights, dtype=np.single)
+
+class SampleAnalyzer:
+    def __init__(self, samples: Samples):
+        self.samples = samples
 
     def get_in_nodes(self):
         # train_feature = self.get_feature(self.data_frames[0])
-        in_nodes = len(self.features[0])
+        in_nodes = len(self.samples[0][0])
         print("estimated in nodes: ", in_nodes)
         return in_nodes
 
     def get_out_nodes(self):
-        out_nodes = max([self.get_label(x) for x in self.data_frames]) + 1
+        out_nodes = max(self.samples.labels) + 1
         print("estimated out nodes: ", out_nodes)
         return out_nodes
 
+    def get_weights(self):
+        # targets = np.array([self.get_label(x) for x in self.data_frames])
+        occurrences = np.bincount(self.samples.labels)
+        # occurrences.resize(5)
+        weights = len(self.samples.labels) / (len(occurrences) * occurrences)
+        return weights
+
+
+class MarketDataset(Dataset):
+    def __init__(self, samples: Samples, device: torch.device = None):
+        self.samples = samples
+        self.device = device
+        # print("creating frame features")
+        # caching frames
+        self.features = torch.as_tensor(np.asarray(samples.features),
+                                        device=device,
+                                        dtype=torch.float)
+        self.labels = torch.as_tensor(np.asarray(samples.labels),
+                                      device=device,
+                                      dtype=torch.long)
+
     def __len__(self):
-        return len(self.data_frames)
+        return len(self.features)
 
     def __getitem__(self, index):
-        return self.features[index], self.targets[index]
-        # if isinstance(index, slice):
-        #     return np.array([self[x] for x in range(*index.indices(len(self)))])
-        # # return multiple frames
-        # elif isinstance(index, list):
-        #     return np.array([self[x] for x in index])
-        # # return single frame
-        # elif isinstance(index, int):
-        #     frame = self.data_frames[index]
-        #     return self.get_feature(frame), self.get_label(frame)
-        # else:
-        #     raise TypeError("Invalid argument type.")
+        return self.features[index], self.labels[index]
 
 
 class KyleDataLoader:
@@ -478,13 +518,14 @@ class KyleDataLoaderIterator:
         # self.index = min(self.index + self.batch_size, self.len)
         # indices = self.indices[start_index: self.index]
         indices = [next(self.index_iter) for _ in range(0, self.batch_size)]
+        if self.loader.drop_last and len(indices) < self.loader.batch_size:
+            raise StopIteration
+
         data = self.loader.dataset[indices]
         # zip(*data) is to turn list of tuple to multiple list
         # to tensor if data is not tensor
         # data = type(data)([torch.as_tensor(np.asarray(x)) for x in zip(*data)])
         data = type(data)([torch.as_tensor(x) for x in data])
-        if self.loader.drop_last and len(data) < self.loader.batch_size:
-            raise StopIteration
         if self.loader.pin_memory:
             data = type(data)([x.pin_memory(self.loader.pin_memory_device) for x in data])
         return data
@@ -588,7 +629,7 @@ class Network(nn.Module):
         self.layers = nn.Sequential(
             nn.Linear(in_nodes, 256),
             nn.ELU(),
-            SwitchNorm1d(256),
+            nn.BatchNorm1d(256),
             # nn.Linear(256, 128),
             # nn.ELU(),
             # SwitchNorm1d(128),
@@ -667,13 +708,6 @@ class Trainer:
         self.check()
         self.launch_tensor_board()
 
-    def _init_network(self, train_dataset):
-        try:
-            self.load_network()
-        except Exception as e:
-            print("Failed to load the network.")
-            self.create_network(train_dataset.get_in_nodes(), train_dataset.get_out_nodes())
-
     def create_network(self, in_nodes, out_nodes):
         torch.manual_seed(self._config.seed)
         self._network = Network(in_nodes, out_nodes).to(self._device)
@@ -701,35 +735,65 @@ class Trainer:
         }
         torch.save(checkpoint, self._config.network_path)
 
-    def split_dataset(self,
+    def get_max_batch_size(self, dataset: Dataset):
+        batch_size = 32
+        while True:
+            try:
+                print(f"Testing batch_size = {batch_size}")
+                dataloader = KyleDataLoader(dataset,
+                                            batch_size=batch_size,
+                                            pin_memory=True,
+                                            shuffle=True,
+                                            drop_last=True,
+                                            num_workers=0)
+                features, _ = next(iter(dataloader))
+                features = features.to(self._device)
+                _ = self._network(features)
+                if batch_size * 2 > len(dataset):
+                    break
+                batch_size = batch_size * 2
+            except Exception as e:
+                print(f"{type(e)} {e}")
+                batch_size = batch_size // 2
+                break
+
+        print(f"the max batch_size = {batch_size}")
+        return batch_size
+
+    def split_samples(self,
                       data_frames: DataFrames,
                       threshold: float = 0.8) -> (Dataset, Dataset):
-        split_index = math.floor(len(data_frames) * threshold)
-        training_samples = data_frames.splice(0, split_index)
-        eval_samples = data_frames.splice(split_index)
-        train_dataset = MarketDataset(training_samples)
-        eval_dataset = MarketDataset(eval_samples)
-        return train_dataset, eval_dataset
+        samples = DataFramesSamples(data_frames)
+        split_index = math.floor(len(samples) * threshold)
+        training_samples = samples[:split_index]
+        eval_samples = samples[split_index:]
+        return training_samples, eval_samples
 
     def _get_data_loaders(self,
                           train_dataset: Dataset,
                           eval_dataset: Dataset,
-                          batch_size: int = 64,
+                          batch_size: int = 32,
                           num_workers: int = 0,
                           pin_memory: bool = False) -> (DataLoader, DataLoader):
         # samples = samples[:100000]
         # random.Random(seed).shuffle(samples)
         if pin_memory:
             device = torch.device("cpu")
+        train_batch_size = eval_batch_size = batch_size
+        if batch_size == 0:
+            train_batch_size = self.get_max_batch_size(train_dataset)
+            eval_batch_size = self.get_max_batch_size(eval_dataset)
         train_dataloader = KyleDataLoader(train_dataset,
-                                      batch_size=batch_size,
-                                      pin_memory=pin_memory,
-                                      shuffle=True,
-                                      num_workers=num_workers)
+                                          batch_size=train_batch_size,
+                                          pin_memory=pin_memory,
+                                          shuffle=True,
+                                          drop_last=True,
+                                          num_workers=num_workers)
         eval_dataloader = KyleDataLoader(eval_dataset,
-                                     batch_size=batch_size,
-                                     pin_memory=pin_memory,
-                                     num_workers=num_workers)
+                                         batch_size=eval_batch_size,
+                                         pin_memory=pin_memory,
+                                         drop_last=True,
+                                         num_workers=num_workers)
 
         return train_dataloader, eval_dataloader
 
@@ -751,32 +815,52 @@ class Trainer:
     def run(self):
 
         market = self._crypto.markets[0]
-        data_frames = market.data_frames()
-        train_dataset, eval_dataset = self.split_dataset(data_frames)
-        print("Training samples:", len(train_dataset))
-        print("Eval samples:", len(eval_dataset))
+        train_samples, eval_samples = self.split_samples(market.data_frames)
+        print("Training samples:", len(train_samples))
+        print("Eval samples:", len(eval_samples))
 
-        train_dataloader, eval_dataloader = self._get_data_loaders(train_dataset,
-                                                                   eval_dataset,
-                                                                   batch_size=2048,
-                                                                   pin_memory=False)
+        analyzer = SampleAnalyzer(train_samples)
+
+        # init network
+        try:
+            self.load_network()
+        except Exception as e:
+            print("Failed to load the network.")
+            self.create_network(analyzer.get_in_nodes(), analyzer.get_out_nodes())
+
+        train_dataset = MarketDataset(train_samples)
+        eval_dataset = MarketDataset(eval_samples)
 
         print("[Calculating Weights]")
         # weights = train_dataloader.dataset.get_weights().to(device)
-        weights = torch.as_tensor(train_dataset.get_weights(), device=self._device)
+        weights = torch.as_tensor(analyzer.get_weights(), device=self._device, dtype=torch.float)
         print(weights)
 
-        self._init_network(train_dataset)
+        sampler = WeightedRandomSampler(weights[train_dataset.labels], len(train_dataset.labels))
+        # sampler = RandomSampler(train_dataset)
+        train_dataloader = DataLoader(train_dataset,
+                                          batch_size=32,
+                                          pin_memory=True,
+                                          sampler=sampler,
+                                          drop_last=True,
+                                          num_workers=0)
+
+        eval_dataloader = DataLoader(eval_dataset,
+                                         batch_size=32,
+                                         pin_memory=True,
+                                         drop_last=True,
+                                         num_workers=0)
+
         while True:
             # print("lr", optimizer.param_groups[0]['lr'])
             self._epoch += 1
             epoch_perf = PerformanceTimer().start()
             train_perf = PerformanceTimer().start()
-            train_loss, train_accuracy = self.run_epoch(RunMode.Train, train_dataloader, weights)
+            train_loss, train_accuracy = self.run_epoch(RunMode.Train, train_dataloader)
             train_perf.stop()
 
             eval_perf = PerformanceTimer().start()
-            eval_loss, eval_accuracy = self.run_epoch(RunMode.Eval, eval_dataloader, weights)
+            eval_loss, eval_accuracy = self.run_epoch(RunMode.Eval, eval_dataloader)
             eval_perf.stop()
             epoch_perf.stop()
 
@@ -807,7 +891,7 @@ class Trainer:
         correct_count = 0
 
         scaler = torch.cuda.amp.GradScaler()
-
+        steps = 0
         self._network.train(is_train)
         with torch.set_grad_enabled(is_train):
             for features, labels in dataloader:
@@ -851,6 +935,10 @@ class Trainer:
 
                     current_loss += loss
                     total_data += len(features)
+
+                steps += 1
+                if steps >= 1000:
+                    break
 
         # for i, row in enumerate(result):
         #     print(mode, i, row["correct"], row["total"], row["correct_rate"])

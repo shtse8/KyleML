@@ -658,7 +658,8 @@ class Trainer:
                                       pin_memory=True,
                                       num_workers=0)
 
-        sampler = SequentialSampler(eval_dataset)
+        # sampler = SequentialSampler(eval_dataset)
+        sampler = WeightedRandomSampler(weights[eval_dataset.labels], len(eval_dataset.labels))
         eval_dataloader = DataLoader(eval_dataset,
                                      sampler=sampler,
                                      batch_size=128,

@@ -7,6 +7,7 @@ import signal
 import sys
 import warnings
 from abc import abstractmethod, ABC
+from collections import namedtuple
 from datetime import datetime, timedelta
 from enum import Enum, auto
 # from binance import AsyncClient
@@ -35,13 +36,13 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 class DataFrame:
     def __init__(self,
                  open_time: int,
-                 open_price: float = 0,
-                 high_price: float = 0,
-                 low_price: float = 0,
-                 close_price: float = 0,
-                 volume: float = 0,
+                 open_price: float = 0.,
+                 high_price: float = 0.,
+                 low_price: float = 0.,
+                 close_price: float = 0.,
+                 volume: float = 0.,
                  close_time: int = 0,
-                 quote_asset_volume: float = 0,
+                 quote_asset_volume: float = 0.,
                  number_of_trades: int = 0):
         self.open_time = open_time
         self.open_price = open_price
@@ -57,7 +58,15 @@ class DataFrame:
     #     return f"{type(self).__name__}({str(self)})"
 
     def __str__(self) -> str:
-        return f"{self.open_time}, {self.open_price:.4}, {self.high_price:.4}, {self.low_price:.4}, {self.close_price:.4}, {self.volume:.4}, {self.close_time}, {self.quote_asset_volume}, {self.number_of_trades}"
+        return f"{self.open_time}, " \
+               f"{self.open_price:.4}, " \
+               f"{self.high_price:.4}, " \
+               f"{self.low_price:.4}, " \
+               f"{self.close_price:.4}, " \
+               f"{self.volume:.4}, " \
+               f"{self.close_time}, " \
+               f"{self.quote_asset_volume:.4}, " \
+               f"{self.number_of_trades}"
 
 
 class DataFrames:
@@ -114,7 +123,7 @@ class DataFrames:
                 new_data_frames.add(self[i])
             return new_data_frames
         # return multiple frames
-        elif isinstance(key, list):
+        elif isinstance(key, Sequence):
             new_data_frames = DataFrames()
             for i in key:
                 new_data_frames.add(self[i])
@@ -137,6 +146,9 @@ class DataFrames:
 
     def __iter__(self) -> Iterator[DataFrame]:
         yield from iter([self[i] for i in range(len(self))])
+
+    def has_timestamp(self, timestamp: int):
+        return timestamp in self.frame_dict
 
     def from_timestamp(self, timestamp: int) -> DataFrame:
         self.ensure_valid_timestamp(timestamp)
@@ -331,8 +343,11 @@ class PerformanceTimer:
         return format(self.elapsed(), format_spec)
 
 
+Sample = namedtuple('Sample', ['feature', 'label'])
+
+
 class Samples:
-    def __init__(self, features: Sequence = None, labels: Sequence = None):
+    def __init__(self, features: Sequence[Sequence[float]] = None, labels: Sequence[int] = None):
         self._features = features if features is not None else []
         self._labels = labels if labels is not None else []
         if len(self._features) != len(self._labels):
@@ -351,25 +366,45 @@ class Samples:
     def __len__(self):
         return len(self._features)
 
-    def __getitem__(self, item) -> (Sequence[float], Sequence[int]) | Samples:
+    def __getitem__(self, item) -> Sample | Samples:
         if isinstance(item, int):
-            return self._features[item], self._labels[item]
+            return Sample(self._features[item], self._labels[item])
         else:
             return Samples(self._features[item], self._labels[item])
 
     def __iter__(self):
         yield from iter([self[x] for x in range(len(self))])
 
+    @staticmethod
+    def from_converter(converter: Converter) -> Samples:
 
-class DataFramesSamples(Samples):
+        print(f"from_converter")
+        return Samples.from_sample_sequence(converter.get_samples())
+
+    @staticmethod
+    def from_data_frames(data_frames: DataFrames) -> Samples:
+        print(f"from_data_frames")
+        converter = DataFrameSampleConverter(data_frames)
+        return Samples.from_converter(converter)
+
+    @staticmethod
+    def from_sample_sequence(samples: [Sample]):
+        print(f"samples = {len(samples)}")
+        return Samples([x.feature for x in samples], [x.label for x in samples])
+
+
+class Converter:
+    @abstractmethod
+    def get_samples(self) -> Iterator[Sample]:
+        raise NotImplementedError
+
+
+class DataFrameSampleConverter(Converter):
     def __init__(self, data_frames: DataFrames):
         self._data_frames = data_frames
         self._frame_features = {}
-        super().__init__(
-            features=[self.get_feature(x) for x in data_frames],
-            labels=[self.get_label(x) for x in data_frames])
 
-    def get_frame_feature(self, frame: DataFrame):
+    def _get_frame_feature(self, frame: DataFrame) -> [float]:
         data_open_time = datetime.fromtimestamp(frame.open_time)
         data_close_time = datetime.fromtimestamp(frame.close_time)
         return [
@@ -392,44 +427,65 @@ class DataFramesSamples(Samples):
             frame.number_of_trades
         ]
 
-    def get_cached_frame_feature(self, frame: DataFrame):
+    def _get_cached_frame_feature(self, frame: DataFrame) -> [float]:
         if frame.open_time in self._frame_features:
             return self._frame_features[frame.open_time]
-        self._frame_features[frame.open_time] = self.get_frame_feature(frame)
+        self._frame_features[frame.open_time] = self._get_frame_feature(frame)
         return self._frame_features[frame.open_time]
 
-    def get_feature(self, frame: DataFrame):
+    def _get_feature(self, frame: DataFrame) -> [float]:
         # Converts the current data frame to a running frame at start
-        running_frame_at_start = DataFrame(frame.open_time, frame.open_price)
-        features = [self.get_cached_frame_feature(running_frame_at_start)]
-        frame_open_datetime = datetime.fromtimestamp(frame.open_time)
-        for i in range(100):
-            running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
-            # running_frame_open_time = running_frame_open_datetime.timestamp()
-            features.append(self.get_cached_frame_feature(self._data_frames[running_frame_open_datetime]))
+        features = [self._get_cached_frame_feature(frame)]
+        # frame_open_datetime = datetime.fromtimestamp(frame.open_time)
+        # for i in range(100):
+        #     running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
+        #     # running_frame_open_time = running_frame_open_datetime.timestamp()
+        #     features.append(self.get_cached_frame_feature(self._data_frames[running_frame_open_datetime]))
         return np.asarray(features).flatten()
+        # return features
 
-    def get_label(self, frame: DataFrame):
-        if frame.open_price == 0:
+    def _get_label(self, frame: DataFrame) -> int:
+        if frame.close_price == 0:
             return 0
-        change_rate = (frame.high_price - frame.open_price) / frame.open_price
+        frame_open_datetime = datetime.fromtimestamp(frame.open_time)
+        next_frame_open_datetime = frame_open_datetime + timedelta(minutes=5)
+        next_frame_open_time = int(next_frame_open_datetime.timestamp())
+        if not self._data_frames.has_timestamp(next_frame_open_time):
+            raise IndexError(next_frame_open_time)
+        next_frame = self._data_frames.from_timestamp(next_frame_open_time)
+        change_rate = (next_frame.high_price - frame.close_price) / frame.close_price
         return 1 if change_rate >= 0.01 else 0
+
+    def get_samples(self):
+        samples = []
+        for frame in self._data_frames:
+            try:
+                feature = self._get_frame_feature(frame)
+                label = self._get_label(frame)
+                samples.append(Sample(feature, label))
+            except IndexError as e:
+                pass
+        return samples
+
+    def get_labels(self):
+        return [self._get_label(x) for x in self._data_frames]
 
 
 class SampleAnalyzer:
     def __init__(self, samples: Samples):
         self.samples = samples
 
-    def get_in_nodes(self):
+    def get_in_shape(self):
         # train_feature = self.get_feature(self.data_frames[0])
-        in_nodes = len(self.samples[0][0])
-        print("estimated in nodes: ", in_nodes)
-        return in_nodes
+        # print(self.samples[0].feature)
+        in_shape = np.asarray(self.samples[0].feature).shape
+        print("estimated in shape: ", in_shape)
+        return in_shape
 
-    def get_out_nodes(self):
-        out_nodes = max(self.samples.labels) + 1
-        print("estimated out nodes: ", out_nodes)
-        return out_nodes
+    def get_out_size(self):
+        out_size = max(self.samples.labels) + 1
+        print("estimated out nodes: ", out_size)
+        return out_size
 
     def get_weights(self):
         # targets = np.array([self.get_label(x) for x in self.data_frames])
@@ -523,26 +579,41 @@ def signal_handler(sig, frame) -> NoReturn:
 
 class Network(nn.Module):
 
-    def __init__(self, in_nodes: int, out_nodes: int):
+    def __init__(self, in_shape: int, out_size: int):
         super(Network, self).__init__()
-        hidden_nodes = 512
-        self.layers = nn.Sequential(
-            nn.Linear(in_nodes, 512),
+        hidden_size = 512
+
+        self.gru_layers = nn.GRU(hidden_size, hidden_size, batch_first=True, num_layers=1)
+
+        self.body_layers = nn.Sequential(
+            nn.Linear(in_shape[0], hidden_size),
             nn.ELU(),
-            nn.BatchNorm1d(512),
+            nn.BatchNorm1d(hidden_size),
             # nn.Linear(256, 128),
             # nn.ELU(),
             # SwitchNorm1d(128),
             # nn.Linear(128, 64),
             # nn.ELU(),
             # SwitchNorm1d(64),
-            nn.Linear(512, out_nodes)
         )
 
-    def forward(self, x):
-        x = self.layers(x)
+        self.head_layers = nn.Sequential(
+            nn.Linear(hidden_size, out_size)
+        )
+
+    def get_init_hidden_state(self):
+        # (num_layers * num_directions, hidden_size)
+        num_directions = 2 if self.gru_layers.bidirectional else 1
+        device = next(self.parameters()).device
+        return torch.zeros((self.gru_layers.num_layers * num_directions, self.gru_layers.hidden_size), device=device)
+
+    def forward(self, x, h=None):
+        # if h is None:
+        #     h = self.get_init_hidden_state()
+        # x, h = self.gru_layers(x, h)
+        x = self.body_layers(x)
         # x = F.softmax(x, dim=-1)
-        return x
+        return self.head_layers(x), h
 
 
 class RunMode(Enum):
@@ -602,7 +673,7 @@ class Trainer:
 
     def get_samples(self, threshold: float = 0.8) -> (Samples, Samples):
         market = self._crypto.markets[0]
-        samples = DataFramesSamples(market.data_frames)
+        samples = Samples.from_data_frames(market.data_frames)
         split_index = math.floor(len(samples) * threshold)
         training_samples = samples[:split_index]
         eval_samples = samples[split_index:]
@@ -638,7 +709,7 @@ class Trainer:
             self.load_network()
         except Exception as e:
             print("Failed to load the network.")
-            self.create_network(analyzer.get_in_nodes(), analyzer.get_out_nodes())
+            self.create_network(analyzer.get_in_shape(), analyzer.get_out_size())
 
         # Create pytorch dataset
         train_dataset = MarketDataset(train_samples)
@@ -707,6 +778,7 @@ class Trainer:
 
         scaler = torch.cuda.amp.GradScaler()
         steps = 0
+        hidden = None
         self._network.train(is_train)
         with torch.set_grad_enabled(is_train):
             for features, labels in dataloader:
@@ -716,8 +788,8 @@ class Trainer:
                 features = features.to(self._device)
                 labels = labels.to(self._device)
                 with torch.cuda.amp.autocast(enabled=False):
-                    probs = self._network(features)
-                    loss = nn.CrossEntropyLoss(weight=weights, reduction="sum")(probs, labels)
+                    values, hidden = self._network(features, hidden)
+                    loss = nn.CrossEntropyLoss(weight=weights, reduction="sum")(values, labels)
 
                 if is_train:
                     scaler.scale(loss).backward()
@@ -738,7 +810,7 @@ class Trainer:
 
                 # Calculate Accuracy
                 with torch.no_grad():
-                    predicts = F.softmax(probs, dim=1).argmax(dim=1)
+                    predicts = F.softmax(values, dim=1).argmax(dim=1)
                     # check equal between targets and predicts, then zip, then count unique
                     # we would like to do it in tensor to speed up
                     # rows, counts = torch.stack((labels, torch.eq(labels, predicts)), dim=1).unique(dim=0, return_counts=True)

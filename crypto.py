@@ -586,11 +586,25 @@ def signal_handler(sig, frame) -> NoReturn:
     sys.exit(0)
 
 
-class Network(nn.Module):
+class FCNetwork(nn.Module):
+    def __init__(self, in_shape: tuple, out_size: int):
+        super(FCNetwork, self).__init__()
+        hidden_size = 256
+        self.body_layers = nn.Sequential(
+            nn.Linear(np.prod(in_shape), hidden_size),
+            nn.ELU(),
+            nn.BatchNorm1d(hidden_size),
+            nn.Linear(hidden_size, out_size)
+        )
 
+    def forward(self, x: torch.Tensor, h: torch.Tensor = None):
+        return self.body_layers(x.flatten(1)), h
+
+
+class Network(nn.Module):
     def __init__(self, in_shape: int, out_size: int):
         super(Network, self).__init__()
-        hidden_size = 512
+        hidden_size = 256
 
         self.gru_layers = nn.GRU(in_shape[-1], hidden_size, batch_first=True, num_layers=1)
 
@@ -598,38 +612,17 @@ class Network(nn.Module):
             nn.Linear(hidden_size, hidden_size),
             nn.ELU(),
             nn.BatchNorm1d(hidden_size),
-            # nn.Linear(256, 128),
-            # nn.ELU(),
-            # SwitchNorm1d(128),
-            # nn.Linear(128, 64),
-            # nn.ELU(),
-            # SwitchNorm1d(64),
-        )
-
-        self.head_layers = nn.Sequential(
             nn.Linear(hidden_size, out_size)
         )
 
-    def get_init_hidden_state(self, batch_size: int):
-        # (num_layers * num_directions, hidden_size)
-        num_directions = 2 if self.gru_layers.bidirectional else 1
-        device = next(self.parameters()).device
-        return torch.zeros((self.gru_layers.num_layers * num_directions, batch_size, self.gru_layers.hidden_size),
-                           device=device)
+        self.bn1 = nn.BatchNorm1d(hidden_size)
 
     def forward(self, x: torch.Tensor, h: torch.Tensor = None):
-        if h is None:
-            h = self.get_init_hidden_state(x.size(0))
-        # print("input size =", x.size())
-        # print("hidden in size =", h.size())
         x, h = self.gru_layers(x, h)
-        # print("output size =", x.size())
-        # print("hidden out size =", h.size())
         x = x[:, -1, :]
-        # print("output size =", x.size())
-        x = self.body_layers(x)
-        # x = F.softmax(x, dim=-1)
-        return self.head_layers(x), h
+        x = nn.functional.elu(x)
+        x = self.bn1(x)
+        return self.body_layers(x), h
 
 
 class RunMode(Enum):

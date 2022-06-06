@@ -106,6 +106,14 @@ class DataFrames:
             return 0
         return (self.end_time - self.start_time) // self.interval + 1
 
+    def __contains__(self, item) -> bool:
+        if isinstance(item, int):
+            return 0 <= item < 100
+        elif isinstance(item, datetime):
+            return self.has_timestamp(int(item.timestamp()))
+        else:
+            raise TypeError("Invalid argument type.")
+
     #
     # def splice(self, start_index: int, end_index: int = 0) -> DataFrames:
     #     new_data_frames = DataFrames()
@@ -436,13 +444,14 @@ class DataFrameSampleConverter(Converter):
     def _get_feature(self, frame: DataFrame) -> [float]:
         # Converts the current data frame to a running frame at start
         features = [self._get_cached_frame_feature(frame)]
-        # frame_open_datetime = datetime.fromtimestamp(frame.open_time)
-        # for i in range(100):
-        #     running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
-        #     # running_frame_open_time = running_frame_open_datetime.timestamp()
-        #     features.append(self.get_cached_frame_feature(self._data_frames[running_frame_open_datetime]))
-        return np.asarray(features).flatten()
-        # return features
+        frame_open_datetime = datetime.fromtimestamp(frame.open_time)
+        for i in range(25):
+            running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
+            # running_frame_open_time = running_frame_open_datetime.timestamp()
+            # if running_frame_open_datetime in self._data_frames:
+            features.append(self._get_cached_frame_feature(self._data_frames[running_frame_open_datetime]))
+        # return np.asarray(features).flatten()
+        return features[::-1]
 
     def _get_label(self, frame: DataFrame) -> int:
         if frame.close_price == 0:
@@ -460,7 +469,7 @@ class DataFrameSampleConverter(Converter):
         samples = []
         for frame in self._data_frames:
             try:
-                feature = self._get_frame_feature(frame)
+                feature = self._get_feature(frame)
                 label = self._get_label(frame)
                 samples.append(Sample(feature, label))
             except IndexError as e:
@@ -583,10 +592,10 @@ class Network(nn.Module):
         super(Network, self).__init__()
         hidden_size = 512
 
-        self.gru_layers = nn.GRU(hidden_size, hidden_size, batch_first=True, num_layers=1)
+        self.gru_layers = nn.GRU(in_shape[-1], hidden_size, batch_first=True, num_layers=1)
 
         self.body_layers = nn.Sequential(
-            nn.Linear(in_shape[0], hidden_size),
+            nn.Linear(hidden_size, hidden_size),
             nn.ELU(),
             nn.BatchNorm1d(hidden_size),
             # nn.Linear(256, 128),
@@ -601,16 +610,23 @@ class Network(nn.Module):
             nn.Linear(hidden_size, out_size)
         )
 
-    def get_init_hidden_state(self):
+    def get_init_hidden_state(self, batch_size: int):
         # (num_layers * num_directions, hidden_size)
         num_directions = 2 if self.gru_layers.bidirectional else 1
         device = next(self.parameters()).device
-        return torch.zeros((self.gru_layers.num_layers * num_directions, self.gru_layers.hidden_size), device=device)
+        return torch.zeros((self.gru_layers.num_layers * num_directions, batch_size, self.gru_layers.hidden_size),
+                           device=device)
 
-    def forward(self, x, h=None):
-        # if h is None:
-        #     h = self.get_init_hidden_state()
-        # x, h = self.gru_layers(x, h)
+    def forward(self, x: torch.Tensor, h: torch.Tensor = None):
+        if h is None:
+            h = self.get_init_hidden_state(x.size(0))
+        # print("input size =", x.size())
+        # print("hidden in size =", h.size())
+        x, h = self.gru_layers(x, h)
+        # print("output size =", x.size())
+        # print("hidden out size =", h.size())
+        x = x[:, -1, :]
+        # print("output size =", x.size())
         x = self.body_layers(x)
         # x = F.softmax(x, dim=-1)
         return self.head_layers(x), h
@@ -778,7 +794,6 @@ class Trainer:
 
         scaler = torch.cuda.amp.GradScaler()
         steps = 0
-        hidden = None
         self._network.train(is_train)
         with torch.set_grad_enabled(is_train):
             for features, labels in dataloader:
@@ -788,7 +803,8 @@ class Trainer:
                 features = features.to(self._device)
                 labels = labels.to(self._device)
                 with torch.cuda.amp.autocast(enabled=False):
-                    values, hidden = self._network(features, hidden)
+                    # hidden = self._network.get_init_hidden_state(features.size(0))
+                    values, _ = self._network(features)
                     loss = nn.CrossEntropyLoss(weight=weights, reduction="sum")(values, labels)
 
                 if is_train:

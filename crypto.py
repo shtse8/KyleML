@@ -85,7 +85,7 @@ class DataFrames:
         #                      f"{frame.open_time} - {self.start_time} = "
         #                      f"{frame.open_time - self.start_time}")
 
-        time = (frame.open_time // self.interval) * self.interval
+        time = self._get_adjust_time(frame)
         self.frame_dict[time] = frame
 
         # update start time and end time
@@ -115,13 +115,17 @@ class DataFrames:
         else:
             raise TypeError("Invalid argument type.")
 
-    #
-    # def splice(self, start_index: int, end_index: int = 0) -> DataFrames:
-    #     new_data_frames = DataFrames()
-    #     end_index = max(len(self), end_index)
-    #     for i in range(start_index, end_index):
-    #         new_data_frames.add(self[i])
-    #     return new_data_frames
+    def _get_adjust_time(self, frame: DataFrame):
+        return (frame.open_time // self.interval) * self.interval
+
+    def get_offset(self, frame: DataFrame, offset):
+        return self.from_timestamp(((frame.open_time // self.interval) + offset) * self.interval)
+
+    def get_next(self, frame: DataFrame):
+        return self.get_offset(frame, 1)
+
+    def get_previous(self, frame: DataFrame):
+        return self.get_offset(frame, -1)
 
     def __getitem__(self, key) -> DataFrame | DataFrames:
         # return multiple frames
@@ -441,26 +445,12 @@ class DataFrameSampleConverter(Converter):
         return self._frame_features[frame.open_time]
 
     def _get_feature(self, frame: DataFrame) -> [float]:
-        # Converts the current data frame to a running frame at start
-        features = [self._get_cached_frame_feature(frame)]
-        frame_open_datetime = datetime.fromtimestamp(frame.open_time)
-        for i in range(100):
-            running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
-            # running_frame_open_time = running_frame_open_datetime.timestamp()
-            # if running_frame_open_datetime in self._data_frames:
-            features.append(self._get_cached_frame_feature(self._data_frames[running_frame_open_datetime]))
-        # return np.asarray(features).flatten()
-        return features[::-1]
+        return [self._data_frames.get_offset(frame, offset=-i) for i in reversed(range(100))]
 
     def _get_label(self, frame: DataFrame) -> int:
         if frame.close_price == 0:
             return 0
-        frame_open_datetime = datetime.fromtimestamp(frame.open_time)
-        next_frame_open_datetime = frame_open_datetime + timedelta(minutes=5)
-        next_frame_open_time = int(next_frame_open_datetime.timestamp())
-        if not self._data_frames.has_timestamp(next_frame_open_time):
-            raise IndexError(next_frame_open_time)
-        next_frame = self._data_frames.from_timestamp(next_frame_open_time)
+        next_frame = self._data_frames.get_next(frame)
         change_rate = (next_frame.high_price - frame.close_price) / frame.close_price
         return 1 if change_rate >= 0.01 else 0
 

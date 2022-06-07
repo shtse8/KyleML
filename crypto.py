@@ -54,8 +54,8 @@ class DataFrame:
         self.quote_asset_volume = quote_asset_volume
         self.number_of_trades = number_of_trades
 
-    # def __repr__(self):
-    #     return f"{type(self).__name__}({str(self)})"
+    def __repr__(self):
+        return f"{type(self).__name__}({str(self)})"
 
     def __str__(self) -> str:
         return f"{self.open_time}, " \
@@ -119,6 +119,8 @@ class DataFrames:
         return (frame.open_time // self.interval) * self.interval
 
     def get_offset(self, frame: DataFrame, offset):
+        if offset == 0:
+            return frame
         return self.from_timestamp(((frame.open_time // self.interval) + offset) * self.interval)
 
     def get_next(self, frame: DataFrame):
@@ -443,7 +445,8 @@ class DataFrameSampleConverter(Converter):
         return self._frame_features[frame.open_time]
 
     def _get_feature(self, frame: DataFrame) -> [float]:
-        return [self._data_frames.get_offset(frame, offset=-i) for i in reversed(range(100))]
+        return [self._get_cached_frame_feature(self._data_frames.get_offset(frame, offset=-i)) for i in
+                reversed(range(100))]
 
     def _get_label(self, frame: DataFrame) -> int:
         if frame.close_price == 0:

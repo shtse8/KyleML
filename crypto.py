@@ -13,7 +13,7 @@ from enum import Enum, auto
 # from binance import AsyncClient
 from os.path import exists
 from time import perf_counter
-from typing import Iterator, Sequence, IO, Optional, Callable, NoReturn
+from typing import Iterator, Sequence, IO, Optional, Callable, NoReturn, Sized
 
 import numpy as np
 import torch
@@ -361,47 +361,33 @@ class PerformanceTimer:
 Sample = namedtuple('Sample', ['feature', 'label'])
 
 
-class Samples:
-    def __init__(self, features: Sequence[Sequence[float]] = None, labels: Sequence[int] = None):
-        self._features = features if features is not None else []
-        self._labels = labels if labels is not None else []
-        if len(self._features) != len(self._labels):
-            raise Exception(f"features and labels must have same number of elements. "
-                            f"num_features={len(self.features)}, "
-                            f"num_labels={len(self._labels)}")
+class Samples(list[Sample]):
+    def __init__(self, *args, **kwargs):
+        super(Samples, self).__init__(*args, **kwargs)
 
     @property
     def features(self):
-        return self._features
+        return [x.feature for x in self]
 
     @property
     def labels(self) -> Sequence[int]:
-        return self._labels
-
-    def __len__(self):
-        return len(self._features)
+        return [x.label for x in self]
 
     def __getitem__(self, item) -> Sample | Samples:
+        result = super(Samples, self).__getitem__(item)
         if isinstance(item, int):
-            return Sample(self._features[item], self._labels[item])
+            return result
         else:
-            return Samples(self._features[item], self._labels[item])
-
-    def __iter__(self):
-        yield from iter([self[x] for x in range(len(self))])
+            return Samples(result)
 
     @staticmethod
     def from_converter(converter: Converter) -> Samples:
-        return Samples.from_sample_sequence(converter.get_samples())
+        return Samples(converter.get_samples())
 
     @staticmethod
     def from_data_frames(data_frames: DataFrames) -> Samples:
         converter = DataFrameSampleConverter(data_frames)
         return Samples.from_converter(converter)
-
-    @staticmethod
-    def from_sample_sequence(samples: [Sample]):
-        return Samples([x.feature for x in samples], [x.label for x in samples])
 
 
 class Converter:
@@ -813,6 +799,18 @@ class Trainer:
                   f"Train Loss: {train_loss:.4f}, Acc {train_accuracy:.2%}, "
                   f"Eval Loss: {eval_loss:.4f}, Acc: {eval_accuracy:.2%}, "
                   f"Elapsed: {epoch_perf:.2f}s")
+
+    # def evaluate2(self, dataset):
+    #     sampler = SequentialSampler(dataset)
+    #     dataloader = DataLoader(dataset,
+    #                             sampler=sampler,
+    #                             batch_size=128,
+    #                             drop_last=True,
+    #                             pin_memory=True,
+    #                             num_workers=0)
+    #
+    #     self._network.eval()
+    #     with torch.no_grad():
 
     def run_epoch(self, mode: RunMode, dataloader: DataLoader, weights=None):
         is_train = mode == RunMode.Train

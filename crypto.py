@@ -392,13 +392,11 @@ class Samples:
 
     @staticmethod
     def from_data_frames(data_frames: DataFrames) -> Samples:
-        print(f"from_data_frames")
         converter = DataFrameSampleConverter(data_frames)
         return Samples.from_converter(converter)
 
     @staticmethod
     def from_sample_sequence(samples: [Sample]):
-        print(f"samples = {len(samples)}")
         return Samples([x.feature for x in samples], [x.label for x in samples])
 
 

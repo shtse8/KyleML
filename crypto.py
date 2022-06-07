@@ -390,8 +390,6 @@ class Samples:
 
     @staticmethod
     def from_converter(converter: Converter) -> Samples:
-
-        print(f"from_converter")
         return Samples.from_sample_sequence(converter.get_samples())
 
     @staticmethod

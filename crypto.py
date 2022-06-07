@@ -77,25 +77,26 @@ class DataFrames:
         self.end_time: int = 0
 
     def add(self, frame: DataFrame):
-        if self.start_time != 0 and (frame.open_time - self.start_time) % self.interval != 0:
-            warnings.warn(f"the open time is not fit for this frame set. "
-                          f"{frame.open_time} - {self.start_time} = "
-                          f"{frame.open_time - self.start_time}", UserWarning)
+        # if self.start_time != 0 and (frame.open_time - self.start_time) % self.interval != 0:
+        #     warnings.warn(f"the open time is not fit for this frame set. "
+        #                   f"{frame.open_time} - {self.start_time} = "
+        #                   f"{frame.open_time - self.start_time}", UserWarning)
         #     raise ValueError(f"the open time is not fit for this frame set. "
         #                      f"{frame.open_time} - {self.start_time} = "
         #                      f"{frame.open_time - self.start_time}")
 
-        self.frame_dict[frame.open_time] = frame
+        time = (frame.open_time // self.interval) * self.interval
+        self.frame_dict[time] = frame
 
         # update start time and end time
         if self.start_time == 0:
-            self.start_time = frame.open_time
-            self.end_time = frame.open_time
+            self.start_time = time
+            self.end_time = time
         else:
-            if frame.open_time < self.start_time:
-                self.start_time = frame.open_time
-            if frame.open_time > self.end_time:
-                self.end_time = frame.open_time
+            if time < self.start_time:
+                self.start_time = time
+            if time > self.end_time:
+                self.end_time = time
 
     def ensure_valid_timestamp(self, timestamp: int):
         if (timestamp - self.start_time) % self.interval != 0:

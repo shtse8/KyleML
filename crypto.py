@@ -445,7 +445,7 @@ class DataFrameSampleConverter(Converter):
         # Converts the current data frame to a running frame at start
         features = [self._get_cached_frame_feature(frame)]
         frame_open_datetime = datetime.fromtimestamp(frame.open_time)
-        for i in range(25):
+        for i in range(100):
             running_frame_open_datetime = frame_open_datetime - timedelta(minutes=(1 + i) * 5)
             # running_frame_open_time = running_frame_open_datetime.timestamp()
             # if running_frame_open_datetime in self._data_frames:
@@ -601,28 +601,80 @@ class FCNetwork(nn.Module):
         return self.body_layers(x.flatten(1)), h
 
 
+class LinearEx(nn.Module):
+    def __init__(self, in_size, out_size):
+        super(LinearEx, self).__init__()
+        self.layer = nn.Linear(in_size, out_size)
+
+    def forward(self, x):
+        size_length = len(x.size())
+        # (N, C)
+        if size_length == 2:
+            return self.layer(x)
+        # (N, L, C)
+        elif size_length == 3:
+            batch_size, seq_len, _ = x.size()
+            x = x.view(batch_size * seq_len, -1)
+            x = self.layer(x)
+            x = x.view(batch_size, seq_len, -1)
+            return x
+        else:
+            raise ValueError(f"Invalid input size, expected (N, C) or (N, L, C), but got {x.size()}")
+
+
+class BatchNorm1dEx(nn.Module):
+    def __init__(self, num_features):
+        super(BatchNorm1dEx, self).__init__()
+        self.layer = nn.BatchNorm1d(num_features)
+
+    def forward(self, x):
+        size_length = len(x.size())
+        # (N, C)
+        if size_length == 2:
+            return self.layer(x)
+        # (N, L, C)
+        elif size_length == 3:
+            # (N, L, C) => (N, C, L)
+            x = x.permute(0, 2, 1)
+
+            # nn.BatchNorm1d only support (N, C, L)
+            # https://pytorch.org/docs/stable/generated/torch.nn.BatchNorm1d.html
+            x = self.layer(x)
+
+            # (N, C, L) => (N, L, C)
+            x = x.permute(0, 2, 1)
+            return x
+        else:
+            raise ValueError(f"Invalid input size, expected (N, C) or (N, L, C), but got {x.size()}")
+
+
 class Network(nn.Module):
-    def __init__(self, in_shape: int, out_size: int):
+    def __init__(self, in_shape: tuple, out_size: int):
         super(Network, self).__init__()
+        seq_len, input_size = in_shape
         hidden_size = 256
-
-        self.gru_layers = nn.GRU(in_shape[-1], hidden_size, batch_first=True, num_layers=1)
-
+        # math.floor(math.pow(2, math.floor(math.log2(max(input_size, out_size)))))
         self.body_layers = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
+            LinearEx(input_size, hidden_size),
             nn.ELU(),
-            nn.BatchNorm1d(hidden_size),
-            nn.Linear(hidden_size, out_size)
+            BatchNorm1dEx(hidden_size)
         )
+        self.gru_layers = nn.GRU(hidden_size, hidden_size, batch_first=True, num_layers=1)
 
-        self.bn1 = nn.BatchNorm1d(hidden_size)
+        self.head = nn.Linear(hidden_size, out_size)
+        # self.bn1 = nn.BatchNorm1d(hidden_size)
 
     def forward(self, x: torch.Tensor, h: torch.Tensor = None):
+        # (N, L, C)
+        x = self.body_layers(x)
         x, h = self.gru_layers(x, h)
+
+        # get last sequence values
+        # (N, L, C) => (N, C)
         x = x[:, -1, :]
-        x = nn.functional.elu(x)
-        x = self.bn1(x)
-        return self.body_layers(x), h
+
+        x = self.head(x)
+        return x, h
 
 
 class RunMode(Enum):

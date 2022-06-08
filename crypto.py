@@ -362,9 +362,17 @@ Sample = namedtuple('Sample', ['feature', 'label'])
 
 
 class Samples:
-    def __init__(self, features: Sequence[Sequence[float]] = None, labels: Sequence[int] = None):
-        self._features = np.asarray(features if features is not None else [], dtype=np.float)
-        self._labels = np.asarray(labels if labels is not None else [], dtype=np.long)
+    def __init__(self, *args):
+        if len(args) == 1:
+            samples, = args
+            features = [x.feature for x in samples]
+            labels = [x.label for x in samples]
+        elif len(args) == 2:
+            features, labels = args
+        else:
+            raise TypeError("Expected Sample Sequence or Features-Labels Sequence")
+        self._features = np.asarray(features, np.float)
+        self._labels = np.asarray(labels, np.long)
         if len(self._features) != len(self._labels):
             raise Exception(f"features and labels must have same number of elements. "
                             f"num_features={len(self.features)}, "
@@ -388,20 +396,17 @@ class Samples:
             return Samples(self._features[item], self._labels[item])
 
     def __iter__(self):
-        yield from iter([self[x] for x in range(len(self))])
+        for i in range(len(self)):
+            yield self[i]
 
     @staticmethod
     def from_converter(converter: Converter) -> Samples:
-        return Samples.from_sample_sequence(converter.get_samples())
+        return Samples(list(converter.get_samples()))
 
     @staticmethod
     def from_data_frames(data_frames: DataFrames) -> Samples:
         converter = DataFrameSampleConverter(data_frames)
         return Samples.from_converter(converter)
-
-    @staticmethod
-    def from_sample_sequence(samples: [Sample]):
-        return Samples([x.feature for x in samples], [x.label for x in samples])
 
 
 class Converter:
@@ -456,15 +461,13 @@ class DataFrameSampleConverter(Converter):
         return 1 if change_rate >= 0.01 else 0
 
     def get_samples(self):
-        samples = []
         for frame in self._data_frames:
             try:
                 feature = self._get_feature(frame)
                 label = self._get_label(frame)
-                samples.append(Sample(feature, label))
+                yield Sample(feature, label)
             except IndexError as e:
                 pass
-        return samples
 
     def get_labels(self):
         return [self._get_label(x) for x in self._data_frames]
@@ -813,7 +816,7 @@ class Trainer:
             eval_loss, eval_accuracy = self.run_epoch(RunMode.Eval, eval_dataloader)
             eval_perf.stop()
 
-            roi = 1 # self.evaluate2(eval_dataset)
+            roi = 1  # self.evaluate2(eval_dataset)
             epoch_perf.stop()
 
             if eval_loss < self._best_loss:

@@ -85,7 +85,7 @@ class DataFrames:
         #                      f"{frame.open_time} - {self.start_time} = "
         #                      f"{frame.open_time - self.start_time}")
 
-        time = self._get_adjust_time(frame.open_time)
+        time = self.get_adjust_time(frame.open_time)
         self.frame_dict[time] = frame
 
         # update start time and end time
@@ -115,7 +115,7 @@ class DataFrames:
         else:
             raise TypeError("Invalid argument type.")
 
-    def _get_adjust_time(self, time: int):
+    def get_adjust_time(self, time: int):
         return (time // self.interval) * self.interval
 
     def get_offset(self, frame: DataFrame, offset):
@@ -166,7 +166,7 @@ class DataFrames:
         return timestamp in self.frame_dict
 
     def from_timestamp(self, timestamp: int) -> DataFrame:
-        timestamp = self._get_adjust_time(timestamp)
+        timestamp = self.get_adjust_time(timestamp)
         return self.frame_dict[timestamp] if timestamp in self.frame_dict else DataFrame(timestamp)
 
 
@@ -411,7 +411,7 @@ class Samples:
 
 class Converter:
     @abstractmethod
-    def get_samples(self) -> Iterator[Sample]:
+    def get_samples(self, frames: DataFrames) -> Iterator[Sample]:
         raise NotImplementedError
 
 
@@ -419,8 +419,18 @@ class DataFrameSampleConverter(Converter):
     def __init__(self, data_frames: DataFrames):
         self._data_frames = data_frames
         self._frame_features = {}
+        sample_cache = Cache(f"data/converter_cache.dat")
+        self.sample_cache = sample_cache.load_or_update(self._process)
 
-    def _get_frame_feature(self, frame: DataFrame) -> [float]:
+    def _process(self):
+        print("Processing samples...")
+        frame_dict = {}
+        for frame in self._data_frames:
+            time = self._data_frames.get_adjust_time(frame.open_time)
+            frame_dict[time] = Sample(self._get_feature(frame), self._get_label(frame))
+        return frame_dict
+
+    def get_frame_feature(self, frame: DataFrame) -> [float]:
         data_open_time = datetime.fromtimestamp(frame.open_time)
         data_close_time = datetime.fromtimestamp(frame.close_time)
         return [
@@ -446,7 +456,7 @@ class DataFrameSampleConverter(Converter):
     def _get_cached_frame_feature(self, frame: DataFrame) -> [float]:
         if frame.open_time in self._frame_features:
             return self._frame_features[frame.open_time]
-        self._frame_features[frame.open_time] = self._get_frame_feature(frame)
+        self._frame_features[frame.open_time] = self.get_frame_feature(frame)
         return self._frame_features[frame.open_time]
 
     def _get_feature(self, frame: DataFrame) -> [float]:
@@ -460,14 +470,16 @@ class DataFrameSampleConverter(Converter):
         change_rate = (next_frame.high_price - frame.close_price) / frame.close_price
         return 1 if change_rate >= 0.01 else 0
 
-    def get_samples(self):
-        for frame in self._data_frames:
-            try:
-                feature = self._get_feature(frame)
-                label = self._get_label(frame)
-                yield Sample(feature, label)
-            except IndexError as e:
-                pass
+    def get_sample(self, frame: DataFrame):
+        time = self._data_frames.get_adjust_time(frame.open_time)
+        if time not in self.sample_cache:
+            raise IndexError(f"couldn't find {time}")
+        return self.sample_cache[time]
+
+    def get_samples(self, frames: DataFrames = None):
+        if frames is None:
+            frames = self._data_frames
+        return [self.sample_cache[self._data_frames.get_adjust_time(x.open_time)] for x in frames]
 
     def get_labels(self):
         return [self._get_label(x) for x in self._data_frames]
@@ -676,7 +688,7 @@ class RunMode(Enum):
     Eval = auto()
 
 
-class Trainer:
+class MarketAI:
     _writer: SummaryWriter = None
     _network: nn.Module = None
     _optimizer: Optimizer = None
@@ -687,6 +699,9 @@ class Trainer:
     _train_dataloader = None
     _eval_dataloader = None
     _data_frames: DataFrames = None
+    _converter: DataFrameSampleConverter = None
+    _train_frames: DataFrames = None
+    _eval_frames: DataFrames = None
 
     def __init__(self, crypto: Crypto, config: Config):
         self._crypto = crypto
@@ -760,63 +775,32 @@ class Trainer:
 
         market = self._crypto.markets[0]
         self._data_frames = market.data_frames
-
-        # prepare samples
-        sample_cache = Cache("data/samples.dat")
-        train_samples, eval_samples = sample_cache.load_or_update(self.get_samples)
-        print("Training samples:", len(train_samples))
-        print("Eval samples:", len(eval_samples))
-
-        analyzer = SampleAnalyzer(train_samples)
-
+        split_index = math.floor(len(self._data_frames) * 0.8)
+        self._train_frames = self._data_frames[:split_index]
+        self._eval_frames = self._data_frames[split_index:]
+        self._converter = DataFrameSampleConverter(self._data_frames)
         # init network
         try:
             self.load_network()
         except Exception as e:
             print("Failed to load the network.")
-            self.create_network(analyzer.get_in_shape(), analyzer.get_out_size())
+            sample = self._converter.get_sample(self._data_frames[0])
+            self.create_network(Helper.get_in_shape(sample), 2)
 
-        # Create pytorch dataset
-        print("[Prepare Dataset]")
-        train_dataset = MarketDataset(train_samples)
-        eval_dataset = MarketDataset(eval_samples)
-
-        print("[Calculating Weights]")
-        # weights = train_dataloader.dataset.get_weights().to(device)
-        # weights = self.get_weights(train_dataset)
-        weights = torch.as_tensor(analyzer.get_weights(), device=self._device, dtype=torch.float)
-        print(weights)
-
-        sampler = WeightedRandomSampler(weights[train_dataset.labels], len(train_dataset.labels))
-        # sampler = RandomSampler(train_dataset)
-        train_dataloader = DataLoader(train_dataset,
-                                      sampler=sampler,
-                                      batch_size=128,
-                                      drop_last=True,
-                                      pin_memory=True,
-                                      num_workers=0)
-
-        # sampler = SequentialSampler(eval_dataset)
-        sampler = WeightedRandomSampler(weights[eval_dataset.labels], len(eval_dataset.labels))
-        eval_dataloader = DataLoader(eval_dataset,
-                                     sampler=sampler,
-                                     batch_size=128,
-                                     pin_memory=True,
-                                     num_workers=0)
+        print("Creating Trainer")
+        trainer = Trainer(self._train_frames, self._converter, self._network, self._optimizer, self._device)
+        print("Creating Evaluator")
+        evaluator = Evaluator(self._eval_frames, self._converter, self._network, self._device)
+        print("Creating ROIEvaluator")
+        roi_evaluator = ROIEvaluator(self._eval_frames, self._converter, self._network, self._device)
 
         while True:
             # print("lr", optimizer.param_groups[0]['lr'])
             self._epoch += 1
             epoch_perf = PerformanceTimer().start()
-            train_perf = PerformanceTimer().start()
-            train_loss, train_accuracy = self.run_epoch(RunMode.Train, train_dataloader)
-            train_perf.stop()
-
-            eval_perf = PerformanceTimer().start()
-            eval_loss, eval_accuracy = self.run_epoch(RunMode.Eval, eval_dataloader)
-            eval_perf.stop()
-
-            roi = 1  # self.evaluate2(eval_dataset)
+            train_loss, train_accuracy = trainer.run()
+            eval_loss, eval_accuracy = evaluator.run()
+            roi = roi_evaluator.run()
             epoch_perf.stop()
 
             if eval_loss < self._best_loss:
@@ -834,34 +818,57 @@ class Trainer:
                   f"Eval Roi: {roi:.2%}, "
                   f"Elapsed: {epoch_perf:.2f}s")
 
-    def evaluate2(self, dataset):
-        sampler = SequentialSampler(dataset)
-        dataloader = DataLoader(dataset,
-                                sampler=sampler,
-                                pin_memory=True,
-                                num_workers=0)
 
+class Helper:
+    @staticmethod
+    def get_weights(dataset):
+        # targets = np.array([self.get_label(x) for x in self.data_frames])
+        occurrences = dataset.labels.cuda().bincount()
+        # occurrences.resize(5)
+        weights = len(dataset.labels) / (len(occurrences) * occurrences)
+        return weights
+
+    @staticmethod
+    def get_weights(samples):
+        occurrences = np.bincount(samples.labels)
+        weights = len(samples.labels) / (len(occurrences) * occurrences)
+        return weights
+
+    @staticmethod
+    def get_in_shape(sample: Sample):
+        in_shape = np.asarray(sample.feature).shape
+        print("estimated in shape: ", in_shape)
+        return in_shape
+
+
+class Runner:
+    @abstractmethod
+    def run(self):
+        raise NotImplementedError
+
+
+class ROIEvaluator(Runner):
+    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module, device: torch.device):
+        self.frames = frames
+        self.convertor = converter
+        self.network = network
+        self.device = device
+
+    def run(self):
         roi = 1
-        self._network.eval()
+        self.network.eval()
         with torch.no_grad():
             hidden = None
-            for features, _ in dataloader:
-                features = features.to(self._device)
-                # only pick last seq
-                # features = features[:, -1, :]
-
-                feature_numpy = features[0][-1].cpu().numpy()
-                timestamp = datetime.strptime(
-                    f"{int(feature_numpy[2]):02d}/{int(feature_numpy[1]):02d}/{int(feature_numpy[0])} {int(feature_numpy[3]):02d}:{int(feature_numpy[4]):02d}",
-                    '%d/%m/%Y %H:%M').timestamp()
-                frame = self._data_frames.from_timestamp(timestamp)
+            for frame in self.frames:
+                feature = self.convertor.get_frame_feature(frame)
+                features = torch.as_tensor(np.array([[feature]]), dtype=torch.float, device=self.device)
                 if frame.close_price == 0:
                     continue
-                next_frame = self._data_frames.get_next(frame)
+                next_frame = self.frames.get_next(frame)
                 if next_frame.close_price == 0:
                     continue
 
-                values, hidden = self._network(features, hidden)
+                values, hidden = self.network(features, hidden)
                 predicts = F.softmax(values, dim=1).argmax(dim=1)
                 result = predicts[0].item()
                 if result == 1:
@@ -872,81 +879,100 @@ class Trainer:
 
         return roi
 
-    def run_epoch(self, mode: RunMode, dataloader: DataLoader, weights=None):
-        is_train = mode == RunMode.Train
-        # dataloader = self._train_dataloader if is_train else self._eval_dataloader
 
-        #
-        # result = [{
-        #     "total": 0,
-        #     "correct": 0
-        # } for i in range(0, 2)]
+class Evaluator(Runner):
+    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module, device: torch.device, steps: int = 1000):
+        self.frames = frames
+        self.convertor = converter
+        self.network = network
+        self.device = device
+        self.steps = steps
+        self.samples = Samples(converter.get_samples(frames))
+        print(f"{type(self).__name__} samples:", len(self.samples))
+
+        self.dataset = MarketDataset(self.samples)
+        self.weights = Helper.get_weights(self.samples)
+        self.batch_size = 128
+        sampler = WeightedRandomSampler(self.weights[self.dataset.labels], self.steps * self.batch_size)
+        # sampler = RandomSampler(train_dataset)
+        self.loader = DataLoader(self.dataset,
+                                 sampler=sampler,
+                                 batch_size=self.batch_size,
+                                 pin_memory=True,
+                                 num_workers=0)
+
+    def run(self):
         current_loss = 0
         total_data = 0
         correct_count = 0
+        self.network.eval()
+        iterator = iter(self.loader)
+        with torch.no_grad():
+            for step in range(self.steps):
+                features, labels = next(iterator)
+                features = features.to(self.device)
+                labels = labels.to(self.device)
+                values, _ = self.network(features)
+                loss = nn.CrossEntropyLoss(weight=None, reduction="sum")(values, labels)
+                predicts = F.softmax(values, dim=1).argmax(dim=1)
+                correct_count += torch.eq(labels, predicts).count_nonzero()
+                current_loss += loss
+                total_data += len(features)
 
-        scaler = torch.cuda.amp.GradScaler()
-        steps = 0
-        self._network.train(is_train)
-        with torch.set_grad_enabled(is_train):
-            for features, labels in dataloader:
-                if is_train:
-                    self._optimizer.zero_grad(set_to_none=True)
-
-                features = features.to(self._device)
-                labels = labels.to(self._device)
-                with torch.cuda.amp.autocast(enabled=False):
-                    # hidden = self._network.get_init_hidden_state(features.size(0))
-                    values, _ = self._network(features)
-                    loss = nn.CrossEntropyLoss(weight=weights, reduction="sum")(values, labels)
-
-                if is_train:
-                    scaler.scale(loss).backward()
-
-                    # Unscales the gradients of optimizer's assigned params in-place
-                    # scaler.unscale_(optimizer)
-
-                    # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
-                    # nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
-
-                    # optimizer's gradients are already unscaled, so scaler.step does not unscale them,
-                    # although it still skips optimizer.step() if the gradients contain infs or NaNs.
-                    # network.optimizer.step()
-                    scaler.step(self._optimizer)
-
-                    # Updates the scale for next iteration.
-                    scaler.update()
-
-                # Calculate Accuracy
-                with torch.no_grad():
-                    predicts = F.softmax(values, dim=1).argmax(dim=1)
-                    # check equal between targets and predicts, then zip, then count unique
-                    # we would like to do it in tensor to speed up
-                    # rows, counts = torch.stack((labels, torch.eq(labels, predicts)), dim=1).unique(dim=0, return_counts=True)
-                    # for (label, matched), count in zip(rows, counts):
-                    #     stats = result[label]
-                    #     stats["total"] += count.item()
-                    #     if matched == 1:
-                    #         stats["correct"] += count.item()
-                    #     stats["correct_rate"] = stats["correct"] / stats["total"] * 100 if stats["total"] > 0 else float("nan")
-
-                    correct_count += torch.eq(labels, predicts).count_nonzero()
-
-                    current_loss += loss
-                    total_data += len(features)
-
-                steps += 1
-                if steps >= 1000:
-                    break
-
-        # for i, row in enumerate(result):
-        #     print(mode, i, row["correct"], row["total"], row["correct_rate"])
         average_loss = current_loss / total_data
         accuracy = correct_count / total_data
+        return average_loss, accuracy
 
-        # if mode == "train":
-        #     schedular.step(average_loss)
 
+class Trainer(Runner):
+    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module, optimizer, device: torch.device, steps: int = 1000):
+        self.frames = frames
+        self.convertor = converter
+        self.network = network
+        self.optimizer = optimizer
+        self.device = device
+        self.steps = steps
+        self.samples = Samples(converter.get_samples(frames))
+        print(f"{type(self).__name__} samples:", len(self.samples))
+        self.dataset = MarketDataset(self.samples)
+        self.weights = Helper.get_weights(self.samples)
+        self.batch_size = 128
+        sampler = WeightedRandomSampler(self.weights[self.dataset.labels], self.batch_size * self.steps)
+        # sampler = RandomSampler(train_dataset)
+        self.loader = DataLoader(self.dataset,
+                                 sampler=sampler,
+                                 batch_size=self.batch_size,
+                                 drop_last=True,
+                                 pin_memory=True,
+                                 num_workers=0)
+
+    def run(self):
+        current_loss = 0
+        total_data = 0
+        correct_count = 0
+        self.network.train()
+        iterator = iter(self.loader)
+        for step in range(self.steps):
+            features, labels = next(iterator)
+            self.optimizer.zero_grad(set_to_none=True)
+
+            features = features.to(self.device)
+            labels = labels.to(self.device)
+            values, _ = self.network(features)
+            loss = nn.CrossEntropyLoss(weight=None, reduction="sum")(values, labels)
+            loss.backward()
+            # nn.utils.clip_grad.clip_grad_norm_(network.parameters(), 0.5)
+            self.optimizer.step()
+
+            # Calculate Accuracy
+            with torch.no_grad():
+                predicts = F.softmax(values, dim=1).argmax(dim=1)
+                correct_count += torch.eq(labels, predicts).count_nonzero()
+                current_loss += loss
+                total_data += len(features)
+
+        average_loss = current_loss / total_data
+        accuracy = correct_count / total_data
         return average_loss, accuracy
 
 
@@ -956,7 +982,7 @@ def main():
     config = Config()
 
     crypto = Crypto(config)
-    trainer = Trainer(crypto, config)
+    trainer = MarketAI(crypto, config)
 
     trainer.init()
 

@@ -85,7 +85,7 @@ class DataFrames:
         #                      f"{frame.open_time} - {self.start_time} = "
         #                      f"{frame.open_time - self.start_time}")
 
-        time = self._get_adjust_time(frame)
+        time = self._get_adjust_time(frame.open_time)
         self.frame_dict[time] = frame
 
         # update start time and end time
@@ -115,8 +115,8 @@ class DataFrames:
         else:
             raise TypeError("Invalid argument type.")
 
-    def _get_adjust_time(self, frame: DataFrame):
-        return (frame.open_time // self.interval) * self.interval
+    def _get_adjust_time(self, time: int):
+        return (time // self.interval) * self.interval
 
     def get_offset(self, frame: DataFrame, offset):
         if offset == 0:
@@ -166,7 +166,7 @@ class DataFrames:
         return timestamp in self.frame_dict
 
     def from_timestamp(self, timestamp: int) -> DataFrame:
-        self.ensure_valid_timestamp(timestamp)
+        timestamp = self._get_adjust_time(timestamp)
         return self.frame_dict[timestamp] if timestamp in self.frame_dict else DataFrame(timestamp)
 
 
@@ -310,7 +310,7 @@ class Config:
         # ("BNB", "USDT"),
         # ("BNB", "BUSD"),
     ]
-    seed: int = 880605
+    seed: int = 880712
     network_path: str = "data/network.pt"
 
 
@@ -361,33 +361,47 @@ class PerformanceTimer:
 Sample = namedtuple('Sample', ['feature', 'label'])
 
 
-class Samples(list[Sample]):
-    def __init__(self, *args, **kwargs):
-        super(Samples, self).__init__(*args, **kwargs)
+class Samples:
+    def __init__(self, features: Sequence[Sequence[float]] = None, labels: Sequence[int] = None):
+        self._features = np.asarray(features if features is not None else [], dtype=np.float)
+        self._labels = np.asarray(labels if labels is not None else [], dtype=np.long)
+        if len(self._features) != len(self._labels):
+            raise Exception(f"features and labels must have same number of elements. "
+                            f"num_features={len(self.features)}, "
+                            f"num_labels={len(self._labels)}")
 
     @property
     def features(self):
-        return [x.feature for x in self]
+        return self._features
 
     @property
     def labels(self) -> Sequence[int]:
-        return [x.label for x in self]
+        return self._labels
+
+    def __len__(self):
+        return len(self._features)
 
     def __getitem__(self, item) -> Sample | Samples:
-        result = super(Samples, self).__getitem__(item)
         if isinstance(item, int):
-            return result
+            return Sample(self._features[item], self._labels[item])
         else:
-            return Samples(result)
+            return Samples(self._features[item], self._labels[item])
+
+    def __iter__(self):
+        yield from iter([self[x] for x in range(len(self))])
 
     @staticmethod
     def from_converter(converter: Converter) -> Samples:
-        return Samples(converter.get_samples())
+        return Samples.from_sample_sequence(converter.get_samples())
 
     @staticmethod
     def from_data_frames(data_frames: DataFrames) -> Samples:
         converter = DataFrameSampleConverter(data_frames)
         return Samples.from_converter(converter)
+
+    @staticmethod
+    def from_sample_sequence(samples: [Sample]):
+        return Samples([x.feature for x in samples], [x.label for x in samples])
 
 
 class Converter:
@@ -645,9 +659,10 @@ class Network(nn.Module):
         x = self.body_layers(x)
         x, h = self.gru_layers(x, h)
 
-        # get last sequence values
-        # (N, L, C) => (N, C)
-        x = x[:, -1, :]
+        if x.dim() == 3:
+            # get last sequence values
+            # (N, L, C) => (N, C)
+            x = x[:, -1, :]
 
         x = self.head(x)
         return x, h
@@ -668,6 +683,7 @@ class Trainer:
     _best_loss = float("inf")
     _train_dataloader = None
     _eval_dataloader = None
+    _data_frames: DataFrames = None
 
     def __init__(self, crypto: Crypto, config: Config):
         self._crypto = crypto
@@ -709,8 +725,7 @@ class Trainer:
         self._cache.update(checkpoint)
 
     def get_samples(self, threshold: float = 0.8) -> (Samples, Samples):
-        market = self._crypto.markets[0]
-        samples = Samples.from_data_frames(market.data_frames)
+        samples = Samples.from_data_frames(self._data_frames)
         split_index = math.floor(len(samples) * threshold)
         training_samples = samples[:split_index]
         eval_samples = samples[split_index:]
@@ -731,7 +746,17 @@ class Trainer:
         print("tensorboard url:", url)
         self._writer = SummaryWriter()
 
+    # def get_weights(self, dataset):
+    #     # targets = np.array([self.get_label(x) for x in self.data_frames])
+    #     occurrences = dataset.labels.to(self._device).bincount()
+    #     # occurrences.resize(5)
+    #     weights = len(dataset.labels) / (len(occurrences) * occurrences)
+    #     return weights
+
     def run(self):
+
+        market = self._crypto.markets[0]
+        self._data_frames = market.data_frames
 
         # prepare samples
         sample_cache = Cache("data/samples.dat")
@@ -749,11 +774,13 @@ class Trainer:
             self.create_network(analyzer.get_in_shape(), analyzer.get_out_size())
 
         # Create pytorch dataset
+        print("[Prepare Dataset]")
         train_dataset = MarketDataset(train_samples)
         eval_dataset = MarketDataset(eval_samples)
 
         print("[Calculating Weights]")
         # weights = train_dataloader.dataset.get_weights().to(device)
+        # weights = self.get_weights(train_dataset)
         weights = torch.as_tensor(analyzer.get_weights(), device=self._device, dtype=torch.float)
         print(weights)
 
@@ -785,6 +812,8 @@ class Trainer:
             eval_perf = PerformanceTimer().start()
             eval_loss, eval_accuracy = self.run_epoch(RunMode.Eval, eval_dataloader)
             eval_perf.stop()
+
+            roi = 1 # self.evaluate2(eval_dataset)
             epoch_perf.stop()
 
             if eval_loss < self._best_loss:
@@ -795,22 +824,50 @@ class Trainer:
             self._writer.add_scalar("Accuracy/train", train_accuracy, self._epoch)
             self._writer.add_scalar("Loss/eval", eval_loss, self._epoch)
             self._writer.add_scalar("Accuracy/eval", eval_accuracy, self._epoch)
+            self._writer.add_scalar("Roi/eval", roi, self._epoch)
             print(f"[Epoch {self._epoch}] "
                   f"Train Loss: {train_loss:.4f}, Acc {train_accuracy:.2%}, "
                   f"Eval Loss: {eval_loss:.4f}, Acc: {eval_accuracy:.2%}, "
+                  f"Eval Roi: {roi:.2%}, "
                   f"Elapsed: {epoch_perf:.2f}s")
 
-    # def evaluate2(self, dataset):
-    #     sampler = SequentialSampler(dataset)
-    #     dataloader = DataLoader(dataset,
-    #                             sampler=sampler,
-    #                             batch_size=128,
-    #                             drop_last=True,
-    #                             pin_memory=True,
-    #                             num_workers=0)
-    #
-    #     self._network.eval()
-    #     with torch.no_grad():
+    def evaluate2(self, dataset):
+        sampler = SequentialSampler(dataset)
+        dataloader = DataLoader(dataset,
+                                sampler=sampler,
+                                pin_memory=True,
+                                num_workers=0)
+
+        roi = 1
+        self._network.eval()
+        with torch.no_grad():
+            hidden = None
+            for features, _ in dataloader:
+                features = features.to(self._device)
+                # only pick last seq
+                # features = features[:, -1, :]
+
+                feature_numpy = features[0][-1].cpu().numpy()
+                timestamp = datetime.strptime(
+                    f"{int(feature_numpy[2]):02d}/{int(feature_numpy[1]):02d}/{int(feature_numpy[0])} {int(feature_numpy[3]):02d}:{int(feature_numpy[4]):02d}",
+                    '%d/%m/%Y %H:%M').timestamp()
+                frame = self._data_frames.from_timestamp(timestamp)
+                if frame.close_price == 0:
+                    continue
+                next_frame = self._data_frames.get_next(frame)
+                if next_frame.close_price == 0:
+                    continue
+
+                values, hidden = self._network(features, hidden)
+                predicts = F.softmax(values, dim=1).argmax(dim=1)
+                result = predicts[0].item()
+                if result == 1:
+                    if next_frame.high_price / frame.close_price >= 1.01:
+                        roi *= 1.01
+                    else:
+                        roi *= next_frame.close_price / frame.close_price
+
+        return roi
 
     def run_epoch(self, mode: RunMode, dataloader: DataLoader, weights=None):
         is_train = mode == RunMode.Train

@@ -272,7 +272,7 @@ class KyleHandler(AlgoHandler):
 
             # Chip grad with norm
             # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
-            # nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
+            # nn.utils.py.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
 
             self.network.optimizer.step()
 

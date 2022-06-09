@@ -37,7 +37,7 @@ from utils.PredictionHandler import PredictionHandler
 from utils.multiprocessing import Proxy
 from .Agent import Base, EvaluatorService, SyncContext, Action, Config, Role, AlgoHandler, Algo, TensorWrapper
 
-# from utils.Distributions import Categorical
+# from utils.py.Distributions import Categorical
 
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(suppress=True)
@@ -390,7 +390,7 @@ class PPOHandler(AlgoHandler):
             # https://github.com/openai/baselines/blob/9b68103b737ac46bc201dfb3121cfa5df2127e53/baselines/ppo2/model.py#L107
             # https://github.com/pytorch/pytorch/blob/master/torch/nn/utils/clip_grad.py
             nn.utils.clip_grad.clip_grad_norm_(self.network.parameters(), 0.5)
-            # nn.utils.clip_grad.clip_grad_norm_(self.icm.parameters(), 0.5)
+            # nn.utils.py.clip_grad.clip_grad_norm_(self.icm.parameters(), 0.5)
 
             self.network.optimizer.step()
             # self.icm.optimizer.step()

@@ -59,21 +59,6 @@ class SwitchNorm1d(nn.Module):
         return x * self.weight + self.bias
 
 
-class FCNetwork(nn.Module):
-    def __init__(self, in_shape: tuple, out_size: int):
-        super(FCNetwork, self).__init__()
-        hidden_size = 256
-        self.body_layers = nn.Sequential(
-            nn.Linear(np.prod(in_shape), hidden_size),
-            nn.ELU(),
-            nn.BatchNorm1d(hidden_size),
-            nn.Linear(hidden_size, out_size)
-        )
-
-    def forward(self, x: torch.Tensor, h: torch.Tensor = None):
-        return self.body_layers(x.flatten(1)), h
-
-
 class LinearEx(nn.Module):
     def __init__(self, in_size, out_size):
         super(LinearEx, self).__init__()

@@ -30,7 +30,6 @@ from crypto.utils import Cache, PerformanceTimer, register_signals
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
-
 class Config:
     tokens: [str] = [
         "BUSD",
@@ -48,7 +47,7 @@ class Config:
         # ("BNB", "USDT"),
         # ("BNB", "BUSD"),
     ]
-    seed: int = 880712
+    seed: int = None  # 880712
     network_path: str = "data/network.pt"
 
 
@@ -68,8 +67,6 @@ class Crypto:
         if symbol not in self.tokens:
             raise IndexError("Unknown token symbol")
         return self.tokens[symbol]
-
-
 
 
 class SampleAnalyzer:
@@ -114,12 +111,28 @@ class MarketDataset(Dataset):
         return self.features[index], self.labels[index]
 
 
+class FCNetwork(nn.Module):
+    def __init__(self, in_shape: tuple, out_size: int):
+        super(FCNetwork, self).__init__()
+        hidden_size = 256
+        # hidden_size = math.floor(math.pow(2, math.floor(math.log2(max(input_size, out_size)))))
+        self.body_layers = nn.Sequential(
+            nn.Linear(np.prod(in_shape), hidden_size),
+            nn.ELU(),
+            nn.BatchNorm1d(hidden_size),
+            nn.Linear(hidden_size, out_size)
+        )
+
+    def forward(self, x: torch.Tensor, h: torch.Tensor = None):
+        return self.body_layers(x.flatten(1)), h
+
+
 class Network(nn.Module):
     def __init__(self, in_shape: tuple, out_size: int):
         super(Network, self).__init__()
         seq_len, input_size = in_shape
         hidden_size = 64
-        # math.floor(math.pow(2, math.floor(math.log2(max(input_size, out_size)))))
+        # hidden_size = math.floor(math.pow(2, math.floor(math.log2(max(input_size, out_size)))))
         self.body_layers = nn.Sequential(
             LinearEx(input_size, hidden_size),
             nn.ReLU(),
@@ -172,7 +185,8 @@ class MarketAI:
         self.launch_tensor_board()
 
     def create_network(self, in_nodes, out_nodes):
-        torch.manual_seed(self._config.seed)
+        if self._config.seed is not None:
+            torch.manual_seed(self._config.seed)
         self._network = Network(in_nodes, out_nodes).to(self._device)
         self._optimizer = optim.AdamW(self._network.parameters(), lr=1e-4)
         # optimizer = optim.SGD(network.parameters(), lr=1e-4, momentum=0.9)
@@ -305,7 +319,8 @@ class Runner:
 
 
 class ROIEvaluator(Runner):
-    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module, device: torch.device):
+    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module,
+                 device: torch.device):
         self.frames = frames
         self.convertor = converter
         self.network = network
@@ -338,7 +353,8 @@ class ROIEvaluator(Runner):
 
 
 class Evaluator(Runner):
-    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module, device: torch.device, steps: int = 1000):
+    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module,
+                 device: torch.device, steps: int = 1000):
         self.frames = frames
         self.convertor = converter
         self.network = network
@@ -382,7 +398,8 @@ class Evaluator(Runner):
 
 
 class Trainer(Runner):
-    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module, optimizer, device: torch.device, steps: int = 1000):
+    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module, optimizer,
+                 device: torch.device, steps: int = 1000):
         self.frames = frames
         self.convertor = converter
         self.network = network
@@ -393,6 +410,7 @@ class Trainer(Runner):
         print(f"{type(self).__name__} samples:", len(self.samples))
         self.dataset = MarketDataset(self.samples)
         self.weights = Helper.get_weights(self.samples)
+        print(self.weights)
         self.batch_size = 128
         sampler = WeightedRandomSampler(self.weights[self.dataset.labels], self.batch_size * self.steps)
         # sampler = RandomSampler(train_dataset)
@@ -435,38 +453,11 @@ class Trainer(Runner):
 
 def main():
     register_signals()
-
     config = Config()
-
     crypto = Crypto(config)
     trainer = MarketAI(crypto, config)
-
     trainer.init()
-
     trainer.run()
-
-    # Get server timestamp
-    # print(client.time())
-
-
-# api key/secret are required for user data endpoints
-# client = Spot(key=binance_key, secret=binance_secret)
-
-# Get account and balance information
-# print(client.account())
-
-# Post a new order
-# params = {
-#     'symbol': 'BTCUSDT',
-#     'side': 'SELL',
-#     'type': 'LIMIT',
-#     'timeInForce': 'GTC',
-#     'quantity': 0.002,
-#     'price': 9500
-# }
-#
-# response = client.new_order(**params)
-# print(response)
 
 
 if __name__ == "__main__":

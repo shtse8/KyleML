@@ -6,6 +6,6 @@ weights/
 .vs/
 .mypy_cache/
 env/
-auths/
-runs/
-data/
+crypto/auths/
+crypto/runs/
+crypto/data/

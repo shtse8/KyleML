@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Iterator, Sequence
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -23,7 +24,7 @@ from torch.utils.data.sampler import WeightedRandomSampler
 # from typing import Self
 from crypto.clients import Client, BinanceMarketAgent
 from crypto.converters import DataFrameSampleConverter
-from crypto.data import DataFrame, Token, Sample, Market, Samples, DataFrames
+from crypto.data import Token, Sample, Market, Samples
 from crypto.modules import LinearEx, BatchNorm1dEx
 from crypto.utils import Cache, PerformanceTimer, register_signals
 
@@ -167,10 +168,10 @@ class MarketAI:
     _best_loss = float("inf")
     _train_dataloader = None
     _eval_dataloader = None
-    _data_frames: DataFrames = None
+    _klines: pd.DataFrame = None
     _converter: DataFrameSampleConverter = None
-    _train_frames: DataFrames = None
-    _eval_frames: DataFrames = None
+    _train_frames: pd.DataFrame = None
+    _eval_frames: pd.DataFrame = None
 
     def __init__(self, crypto: Crypto, config: Config):
         self._crypto = crypto
@@ -244,17 +245,17 @@ class MarketAI:
     def run(self):
 
         market = self._crypto.markets[0]
-        self._data_frames = market.data_frames
-        split_index = math.floor(len(self._data_frames) * 0.8)
-        self._train_frames = self._data_frames[:split_index]
-        self._eval_frames = self._data_frames[split_index:]
-        self._converter = DataFrameSampleConverter(self._data_frames)
+        self._klines = market.klines
+        split_index = math.floor(len(self._klines) * 0.8)
+        self._train_frames = self._klines[:split_index]
+        self._eval_frames = self._klines[split_index:]
+        self._converter = DataFrameSampleConverter(self._klines)
         # init network
         try:
             self.load_network()
         except Exception as e:
             print("Failed to load the network.")
-            sample = self._converter.get_sample(self._data_frames[0])
+            sample = self._converter.get_sample(self._klines[0])
             self.create_network(Helper.get_in_shape(sample), 3)
 
         print("Creating Trainer")
@@ -319,7 +320,7 @@ class Runner:
 
 
 class ROIEvaluator(Runner):
-    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module,
+    def __init__(self, frames: pd.DataFrame, converter: DataFrameSampleConverter, network: nn.Module,
                  device: torch.device):
         self.frames = frames
         self.convertor = converter
@@ -353,7 +354,7 @@ class ROIEvaluator(Runner):
 
 
 class Evaluator(Runner):
-    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module,
+    def __init__(self, frames: pd.DataFrame, converter: DataFrameSampleConverter, network: nn.Module,
                  device: torch.device, steps: int = 1000):
         self.frames = frames
         self.convertor = converter
@@ -398,7 +399,7 @@ class Evaluator(Runner):
 
 
 class Trainer(Runner):
-    def __init__(self, frames: DataFrames, converter: DataFrameSampleConverter, network: nn.Module, optimizer,
+    def __init__(self, frames: pd.DataFrames, converter: DataFrameSampleConverter, network: nn.Module, optimizer,
                  device: torch.device, steps: int = 1000):
         self.frames = frames
         self.convertor = converter

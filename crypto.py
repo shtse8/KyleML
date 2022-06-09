@@ -70,7 +70,7 @@ class DataFrame:
 
 
 class DataFrames:
-    def __init__(self, interval: int = 300):
+    def __init__(self, interval: int = 15 * 60):
         self.frame_dict = {}
         self.interval = interval
         self.start_time: int = 0
@@ -206,7 +206,7 @@ class BinanceMarketAgent(MarketAgent):
         print("Fetching ", market_id, " market")
         time = math.floor(start_time_datetime.timestamp() * 1000)
         while datetime.now().timestamp() > time / 1000:
-            lines = self._client.klines(market_id, "5m", startTime=time, limit=1000)
+            lines = self._client.klines(market_id, "15m", startTime=time, limit=1000)
             for line in lines:
                 open_time = line[0] // 1000
                 open_price = float(line[1])
@@ -439,6 +439,7 @@ class DataFrameSampleConverter(Converter):
             data_open_time.day,
             data_open_time.hour,
             data_open_time.minute,
+            data_open_time.weekday(),
             frame.open_price,
             frame.high_price,
             frame.low_price,
@@ -449,6 +450,7 @@ class DataFrameSampleConverter(Converter):
             data_close_time.day,
             data_close_time.hour,
             data_close_time.minute,
+            data_close_time.weekday(),
             frame.quote_asset_volume,
             frame.number_of_trades
         ]
@@ -467,8 +469,12 @@ class DataFrameSampleConverter(Converter):
         if frame.close_price == 0:
             return 0
         next_frame = self._data_frames.get_next(frame)
-        change_rate = (next_frame.high_price - frame.close_price) / frame.close_price
-        return 1 if change_rate >= 0.01 else 0
+        change_rate = (next_frame.close_price - frame.close_price) / frame.close_price
+        if change_rate <= -0.003:
+            return 2
+        elif change_rate >= 0.003:
+            return 1
+        return 0
 
     def get_sample(self, frame: DataFrame):
         time = self._data_frames.get_adjust_time(frame.open_time)
@@ -657,11 +663,11 @@ class Network(nn.Module):
     def __init__(self, in_shape: tuple, out_size: int):
         super(Network, self).__init__()
         seq_len, input_size = in_shape
-        hidden_size = 256
+        hidden_size = 64
         # math.floor(math.pow(2, math.floor(math.log2(max(input_size, out_size)))))
         self.body_layers = nn.Sequential(
             LinearEx(input_size, hidden_size),
-            nn.ELU(),
+            nn.ReLU(),
             BatchNorm1dEx(hidden_size)
         )
         self.gru_layers = nn.GRU(hidden_size, hidden_size, batch_first=True, num_layers=1)
@@ -785,7 +791,7 @@ class MarketAI:
         except Exception as e:
             print("Failed to load the network.")
             sample = self._converter.get_sample(self._data_frames[0])
-            self.create_network(Helper.get_in_shape(sample), 2)
+            self.create_network(Helper.get_in_shape(sample), 3)
 
         print("Creating Trainer")
         trainer = Trainer(self._train_frames, self._converter, self._network, self._optimizer, self._device)
@@ -800,7 +806,8 @@ class MarketAI:
             epoch_perf = PerformanceTimer().start()
             train_loss, train_accuracy = trainer.run()
             eval_loss, eval_accuracy = evaluator.run()
-            roi = roi_evaluator.run()
+            roi = 1
+            # roi = roi_evaluator.run()
             epoch_perf.stop()
 
             if eval_loss < self._best_loss:
@@ -860,14 +867,14 @@ class ROIEvaluator(Runner):
         with torch.no_grad():
             hidden = None
             for frame in self.frames:
-                feature = self.convertor.get_frame_feature(frame)
-                features = torch.as_tensor(np.array([[feature]]), dtype=torch.float, device=self.device)
                 if frame.close_price == 0:
                     continue
                 next_frame = self.frames.get_next(frame)
                 if next_frame.close_price == 0:
                     continue
 
+                feature = self.convertor.get_frame_feature(frame)
+                features = torch.as_tensor(np.array([[feature]]), dtype=torch.float, device=self.device)
                 values, hidden = self.network(features, hidden)
                 predicts = F.softmax(values, dim=1).argmax(dim=1)
                 result = predicts[0].item()

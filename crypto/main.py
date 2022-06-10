@@ -255,7 +255,7 @@ class MarketAI:
             self.load_network()
         except Exception as e:
             print("Failed to load the network.")
-            sample = self._converter.get_sample(self._klines[0])
+            sample = next(iter(self._converter.sample_cache.values()))
             self.create_network(Helper.get_in_shape(sample), 3)
 
         print("Creating Trainer")

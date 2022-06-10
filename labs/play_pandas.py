@@ -92,3 +92,31 @@ result = data_frame.sort_index().resample(interval).agg(
     })[lambda x: (x.open_time >= x.index) & (x.close_time < x.index + interval)].assign(
     duration=lambda x: x.close_time - x.open_time)[lambda x: x.duration < pd.Timedelta(minutes=14)].filter(
     ['open_time', 'close_time'])
+
+samples = pd.DataFrame({"features": list(data_frame.assign(open_time_year=lambda x: x.open_time.dt.year,
+                            open_time_month=lambda x: x.open_time.dt.month,
+                            open_time_day=lambda x: x.open_time.dt.month,
+                            open_time_minute=lambda x: x.open_time.dt.month,
+                            open_time_weekday=lambda x: x.open_time.dt.weekday,
+                            close_time_year=lambda x: x.close_time.dt.year,
+                            close_time_month=lambda x: x.close_time.dt.month,
+                            close_time_day=lambda x: x.close_time.dt.month,
+                            close_time_minute=lambda x: x.close_time.dt.month,
+                            close_time_weekday=lambda x: x.close_time.dt.weekday).filter([
+    'open_time_year',
+    'open_time_month',
+    'open_time_day',
+    'open_time_minute',
+    'open_time_weekday',
+    'close_time_year',
+    'close_time_month',
+    'close_time_day',
+    'close_time_minute',
+    'close_time_weekday'
+    'open_price',
+    'high_price',
+    'low_price',
+    'close_price',
+    'volume'
+]).rolling(window=100))})
+

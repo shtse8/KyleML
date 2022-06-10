@@ -136,10 +136,11 @@ class Network(nn.Module):
         # hidden_size = math.floor(math.pow(2, math.floor(math.log2(max(input_size, out_size)))))
         self.body_layers = nn.Sequential(
             LinearEx(input_size, hidden_size),
+            BatchNorm1dEx(hidden_size),
             nn.ReLU(),
-            BatchNorm1dEx(hidden_size)
+            nn.Dropout()
         )
-        self.gru_layers = nn.GRU(hidden_size, hidden_size, batch_first=True, num_layers=1)
+        self.gru_layers = nn.GRU(hidden_size, hidden_size, batch_first=True, num_layers=3, dropout=0.5)
 
         self.head = nn.Linear(hidden_size, out_size)
         # self.bn1 = nn.BatchNorm1d(hidden_size)

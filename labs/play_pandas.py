@@ -19,6 +19,8 @@ class KLine:
     volume: float
     quote_asset_volume: float
     number_of_trades: int
+
+
 #
 # KLine = make_dataclass("KLine", [
 #     ("open_time", datetime64),
@@ -39,6 +41,7 @@ market_id = "BTCUSDT"
 print("Fetching ", market_id, " market")
 time = int(start_time_datetime.timestamp() * 1000)
 
+c = 0
 klines = []
 while datetime.now().timestamp() > time / 1000:
     lines = client.klines(market_id, "15m", startTime=time, limit=1000)
@@ -64,14 +67,18 @@ while datetime.now().timestamp() > time / 1000:
         klines.append(kline)
     # last close time + 1s
     time = lines[-1][6] + 1
-    break
+
+    c += 1
+    if c > 30:
+        break
 
 data_frame: DataFrame = DataFrame(klines).set_index('open_time', drop=False)
 print(time, len(data_frame))
 
 print(data_frame.dtypes)
-interval = '15min'
-result = data_frame.sort_index().groupby(pd.Grouper(freq=interval), as_index=False).agg(
+interval = pd.Timedelta(minutes=15)
+# .groupby(pd.Grouper(freq=interval), as_index=False)
+result = data_frame.sort_index().resample(interval).agg(
     {
         'open_time': 'first',
         'close_time': 'last',
@@ -82,4 +89,6 @@ result = data_frame.sort_index().groupby(pd.Grouper(freq=interval), as_index=Fal
         'volume': 'sum',
         'quote_asset_volume': 'sum',
         'number_of_trades': 'sum'
-    }).set_index('open_time', drop=False)[lambda x: (x.close_time - x.open_time) < pd.to_timedelta(interval)]
+    })[lambda x: (x.open_time >= x.index) & (x.close_time < x.index + interval)].assign(
+    duration=lambda x: x.close_time - x.open_time)[lambda x: x.duration < pd.Timedelta(minutes=14)].filter(
+    ['open_time', 'close_time'])

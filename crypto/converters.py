@@ -16,7 +16,33 @@ class Converter:
 
 class DataFrameSampleConverter(Converter):
     def __init__(self, data_frames: pd.DataFrame):
-        self._data_frames = data_frames
+        self._data_frames = data_frames.assign(open_time_year=lambda x: x.open_time.dt.year,
+                   open_time_month=lambda x: x.open_time.dt.month,
+                   open_time_day=lambda x: x.open_time.dt.month,
+                   open_time_minute=lambda x: x.open_time.dt.month,
+                   open_time_weekday=lambda x: x.open_time.dt.weekday,
+                   close_time_year=lambda x: x.close_time.dt.year,
+                   close_time_month=lambda x: x.close_time.dt.month,
+                   close_time_day=lambda x: x.close_time.dt.month,
+                   close_time_minute=lambda x: x.close_time.dt.month,
+                   close_time_weekday=lambda x: x.close_time.dt.weekday).filter([
+            'open_time_year',
+            'open_time_month',
+            'open_time_day',
+            'open_time_minute',
+            'open_time_weekday',
+            'close_time_year',
+            'close_time_month',
+            'close_time_day',
+            'close_time_minute',
+            'close_time_weekday'
+            'open_price',
+            'high_price',
+            'low_price',
+            'close_price',
+            'volume'
+        ])
+
         self._frame_features = {}
         sample_cache = Cache(f"data/converter_cache.dat")
         self.sample_cache = sample_cache.load_or_update(self._process)
@@ -24,18 +50,20 @@ class DataFrameSampleConverter(Converter):
     def _process(self):
         print("Processing samples...")
         frame_dict = {}
-        i = 0
-        timer = PerformanceTimer()
-        timer.start()
-        for index, frame in self._data_frames.iterrows():
+        # i = 0
+        # timer = PerformanceTimer()
+        # timer.start()
+        for frames in filter(lambda x: len(x) == 100, self._data_frames.rolling(window=100)):
             try:
-                frame_dict[index] = Sample(self._get_seq_feature(frame, 100), self._get_label(frame))
-                i += 1
-                if i % 100 == 0:
-                    timer.stop()
-                    print(timer.elapsed())
-                    timer = PerformanceTimer()
-                    timer.start()
+                frame = frames.iloc[-1]
+                feature = frames.to_numpy(dtype=float)
+                frame_dict[frame.name] = Sample(feature, self._get_label(frame))
+                # i += 1
+                # if i % 100 == 0:
+                #     timer.stop()
+                #     print(timer.elapsed())
+                #     timer = PerformanceTimer()
+                #     timer.start()
             except IndexError:
                 pass
         return frame_dict
@@ -76,7 +104,34 @@ class DataFrameSampleConverter(Converter):
         seq = self._data_frames.loc[:frame.name].tail(seq_len)
         if len(seq) != seq_len:
             raise IndexError
+
         return [self._get_cached_feature(x) for i, x in seq.iterrows()]
+        # return seq.assign(open_time_year=lambda x: x.open_time.dt.year,
+        #            open_time_month=lambda x: x.open_time.dt.month,
+        #            open_time_day=lambda x: x.open_time.dt.month,
+        #            open_time_minute=lambda x: x.open_time.dt.month,
+        #            open_time_weekday=lambda x: x.open_time.dt.weekday,
+        #            close_time_year=lambda x: x.close_time.dt.year,
+        #            close_time_month=lambda x: x.close_time.dt.month,
+        #            close_time_day=lambda x: x.close_time.dt.month,
+        #            close_time_minute=lambda x: x.close_time.dt.month,
+        #            close_time_weekday=lambda x: x.close_time.dt.weekday).filter([
+        #     'open_time_year',
+        #     'open_time_month',
+        #     'open_time_day',
+        #     'open_time_minute',
+        #     'open_time_weekday',
+        #     'close_time_year',
+        #     'close_time_month',
+        #     'close_time_day',
+        #     'close_time_minute',
+        #     'close_time_weekday'
+        #     'open_price',
+        #     'high_price',
+        #     'low_price',
+        #     'close_price',
+        #     'volume'
+        # ]).to_numpy(dtype=float)
 
     def _get_label(self, frame: pd.Series) -> int:
         if frame.close_price == 0:

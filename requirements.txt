@@ -11,7 +11,7 @@ torchvision~=0.12.0
 torchaudio
 binance-connector
 tensorboardX~=2.5
-dill~=0.3.5.1
+dill~=0.4.1.0
 tensorboard~=2.9.0
 pandas~=1.4.2
 runstats~=2.0.0

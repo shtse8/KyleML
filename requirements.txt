@@ -1,6 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cu113
 protobuf==3.20.1
-asyncio~=3.4.3
+asyncio~=4.0.0
 numpy~=1.22.3
 matplotlib~=3.5.2
 gym~=0.23.1

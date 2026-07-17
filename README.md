@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.png" alt="KyleML banner" width="100%" />
+  <img src="https://mark.sylphx.com/api/v1/banner?type=wave&theme=tokyonight&text=KyleML&desc=Open+source+%C2%B7+Sylphx+ecosystem&height=200&animation=rise&credit=0" alt="KyleML — Sylphx Mark banner" width="100%" />
 </p>
 
 Just for learning
